@@ -179,6 +179,14 @@ export class ClaudeService {
     return this.http.post<{ output: string }>(`${this.api}/cli`, { args }).pipe(map(r => r.output));
   }
 
+  getConfig(): Observable<{ projectDir: string; slug?: string }> {
+    return this.http.get<{ projectDir: string; slug?: string }>(`${this.api}/config`);
+  }
+
+  setConfig(cfg: { projectDir: string }): Observable<{ ok: boolean; slug: string }> {
+    return this.http.put<{ ok: boolean; slug: string }>(`${this.api}/config`, cfg);
+  }
+
   async pickDirectory(): Promise<string | null> {
     const api = (window as any).electronAPI;
     if (api?.openDirectory) return api.openDirectory();

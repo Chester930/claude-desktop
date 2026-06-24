@@ -22,11 +22,52 @@ except ImportError:
 CLAUDE_HOME = Path.home() / ".claude"
 AGENTS_DIR  = CLAUDE_HOME / "agents"
 SKILLS_DIR  = CLAUDE_HOME / "skills"
-MEMORY_DIR  = CLAUDE_HOME / "projects" / "C--Users-mycena" / "memory"
 SESSIONS_DIR = CLAUDE_HOME / "sessions"
+CONFIG_FILE  = CLAUDE_HOME / "claude-desktop-config.json"
+
+# Project-specific paths — updated by _apply_project_base()
+MEMORY_DIR: Path
+SCHEDULES_FILE: Path
+SESSION_NAMES_FILE: Path
+SOUL_FILE: Path
+SOULS_DIR: Path
+
+def _encode_slug(dir_path: str) -> str:
+    """Convert a filesystem path to the Claude Code project slug format."""
+    return dir_path.replace(":", "-").replace("\\", "-").replace("/", "-")
+
+def _load_config() -> dict:
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _save_config(cfg: dict) -> None:
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def _apply_project_base() -> None:
+    global MEMORY_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR
+    import getpass
+    cfg = _load_config()
+    project_dir = cfg.get("projectDir", "").strip()
+    if project_dir:
+        slug = _encode_slug(project_dir)
+    else:
+        slug = f"C--Users-{getpass.getuser()}"
+    base = CLAUDE_HOME / "projects" / slug
+    MEMORY_DIR         = base / "memory"
+    SCHEDULES_FILE     = base / "schedules.json"
+    SESSION_NAMES_FILE = base / "session_names.json"
+    SOUL_FILE          = base / "soul.md"
+    SOULS_DIR          = base / "souls"
+
+_apply_project_base()   # run once at import time
 
 active_sessions: dict[str, str] = {}   # client_id -> claude session_id
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
+_mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
 _log_buffer: list[str] = []
 
 def _log(msg: str) -> None:
@@ -35,9 +76,6 @@ def _log(msg: str) -> None:
     if len(_log_buffer) > 200:
         _log_buffer.pop(0)
     print(entry)
-
-SCHEDULES_FILE  = CLAUDE_HOME / "projects" / "C--Users-mycena" / "schedules.json"
-SESSION_NAMES_FILE = CLAUDE_HOME / "projects" / "C--Users-mycena" / "session_names.json"
 
 def load_session_names() -> dict:
     if SESSION_NAMES_FILE.exists():
@@ -48,8 +86,6 @@ def load_session_names() -> dict:
 def save_session_names(names: dict) -> None:
     SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
     SESSION_NAMES_FILE.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
-SOUL_FILE      = CLAUDE_HOME / "projects" / "C--Users-mycena" / "soul.md"
-SOULS_DIR      = CLAUDE_HOME / "projects" / "C--Users-mycena" / "souls"
 
 def migrate_soul():
     if not SOULS_DIR.exists():
@@ -132,7 +168,19 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
         if Path(att).exists():
             cmd += ["--input-file", att]
     if agent:
-        cmd += ["--agent", agent]
+        agent_file = AGENTS_DIR / f"{agent}.md"
+        if agent_file.exists():
+            try:
+                text = agent_file.read_text(encoding="utf-8")
+                body = text
+                if text.startswith("---"):
+                    parts = text.split("---", 2)
+                    if len(parts) >= 3:
+                        body = parts[2].strip()
+                if body:
+                    full_message = f"[代理人：{agent}]\n{body}\n\n---\n\n{full_message}"
+            except Exception:
+                pass
     if client_id in active_sessions:
         cmd += ["--resume", active_sessions[client_id]]
 
@@ -338,63 +386,76 @@ async def handle_agents(request: web.Request) -> web.Response:
     return web.json_response(agents)
 
 
-def get_skill_description(skill_dir: Path) -> str:
-    skill_file = skill_dir / "SKILL.md"
-    readme_file = skill_dir / "README.md"
-    
-    if skill_file.exists():
-        try:
-            content = skill_file.read_text(encoding="utf-8")
-            import re
-            lines = content.splitlines()
-            if lines and lines[0].strip() == "---":
-                fm_lines = []
-                for line in lines[1:]:
-                    if line.strip() == "---":
-                        break
-                    fm_lines.append(line)
-                
-                desc_started = False
-                desc_lines = []
-                for line in fm_lines:
-                    if desc_started:
-                        if line.startswith("  ") or line.strip() == "":
-                            desc_lines.append(line.strip())
-                        else:
-                            break
-                    else:
-                        match = re.match(r'^description:\s*(.*)$', line)
-                        if match:
-                            val = match.group(1).strip()
-                            if val in (">", "|"):
-                                desc_started = True
-                            else:
-                                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                                    val = val[1:-1]
-                                return val
-                if desc_lines:
-                    return " ".join([x for x in desc_lines if x])
-        except Exception:
-            pass
+import re as _re
 
-    if readme_file.exists():
-        try:
-            content = readme_file.read_text(encoding="utf-8").splitlines()
-            if content:
-                return content[0].lstrip("# ").strip()
-        except Exception:
-            pass
-            
-    return f"Google Agents CLI skill suite: {skill_dir.name}."
+def _parse_frontmatter_desc(text: str) -> str:
+    """Return the description: value from YAML frontmatter, or '' if absent."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return ""
+    fm, in_fm = [], False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            in_fm = True
+            break
+        fm.append(line)
+    if not in_fm:
+        return ""
+    collecting, buf = False, []
+    for line in fm:
+        if collecting:
+            if line.startswith("  ") or line.strip() == "":
+                buf.append(line.strip())
+            else:
+                break
+        else:
+            m = _re.match(r'^description:\s*(.*)$', line)
+            if m:
+                val = m.group(1).strip()
+                if val in (">", "|"):
+                    collecting = True
+                else:
+                    return val.strip('"\'')
+    return " ".join(x for x in buf if x)
+
+
+def _desc_from_md_file(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+        desc = _parse_frontmatter_desc(text)
+        if desc:
+            return desc
+        # fallback: first non-empty non-heading line
+        for line in text.splitlines():
+            stripped = line.lstrip("# ").strip()
+            if stripped:
+                return stripped
+    except Exception:
+        pass
+    return ""
+
+
+def _desc_from_skill_dir(skill_dir: Path) -> str:
+    for candidate in (skill_dir / "SKILL.md", skill_dir / "README.md"):
+        if candidate.exists():
+            desc = _desc_from_md_file(candidate)
+            if desc:
+                return desc
+    return ""
 
 
 async def handle_skills(request: web.Request) -> web.Response:
     skills = []
-    if SKILLS_DIR.exists():
-        for d in SKILLS_DIR.iterdir():
-            if d.is_dir():
-                desc = get_skill_description(d)
-                skills.append({"id": d.name, "name": d.name, "description": desc})
+    if not SKILLS_DIR.exists():
+        return web.json_response(skills)
+    for entry in sorted(SKILLS_DIR.iterdir(), key=lambda p: p.name.lower()):
+        if entry.is_dir():
+            desc = _desc_from_skill_dir(entry)
+            skills.append({"id": entry.name, "name": entry.name, "description": desc})
+        elif entry.suffix == ".md":
+            name = entry.stem
+            desc = _desc_from_md_file(entry)
+            skills.append({"id": name, "name": name, "description": desc})
     return web.json_response(skills)
 
 
@@ -650,8 +711,71 @@ async def handle_cli(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"output": str(e), "code": -1})
 
+async def handle_mcp_action(request: web.Request) -> web.Response:
+    name   = request.match_info["name"]
+    action = request.match_info["action"]   # start | stop | restart
+
+    # Read MCP command from Claude settings if available
+    mcp_cmd = _get_mcp_command(name)
+
+    if action in ("stop", "restart"):
+        proc = _mcp_procs.pop(name, None)
+        if proc:
+            try: proc.kill()
+            except Exception: pass
+
+    if action in ("start", "restart") and mcp_cmd:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *mcp_cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            _mcp_procs[name] = proc
+        except Exception as e:
+            return web.json_response({"ok": False, "error": str(e)})
+
+    running = name in _mcp_procs and _mcp_procs[name].returncode is None
+    return web.json_response({"ok": True, "name": name, "action": action, "running": running})
+
+
+def _get_mcp_command(name: str) -> list[str] | None:
+    """Parse ~/.claude/claude.json to find the stdio command for an MCP server."""
+    config_path = CLAUDE_HOME / "claude.json"
+    if not config_path.exists():
+        return None
+    try:
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        servers = cfg.get("mcpServers", {})
+        entry = servers.get(name, {})
+        cmd = entry.get("command")
+        args = entry.get("args", [])
+        if cmd:
+            return [cmd] + args
+    except Exception:
+        pass
+    return None
+
+
 async def handle_status(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "active_sessions": len(active_sessions), "claude_bin": CLAUDE_BIN})
+
+
+async def handle_config_get(request: web.Request) -> web.Response:
+    cfg = _load_config()
+    cfg.setdefault("projectDir", "")
+    return web.json_response(cfg)
+
+
+async def handle_config_put(request: web.Request) -> web.Response:
+    data = await request.json()
+    cfg = _load_config()
+    if "projectDir" in data:
+        cfg["projectDir"] = data["projectDir"].strip()
+    _save_config(cfg)
+    _apply_project_base()   # hot-reload paths immediately
+    _log(f"Config updated: projectDir={cfg.get('projectDir','')!r}  →  {MEMORY_DIR.parent}")
+    return web.json_response({"ok": True, "slug": MEMORY_DIR.parent.name})
 
 
 def build_app() -> web.Application:
@@ -700,6 +824,9 @@ def build_app() -> web.Application:
         ("GET",    "/api/status",          handle_status),
         ("GET",    "/api/files",            handle_files),
         ("POST",   "/api/cli",             handle_cli),
+        ("GET",    "/api/config",          handle_config_get),
+        ("PUT",    "/api/config",          handle_config_put),
+        ("POST",   "/api/mcp/{name}/{action}", handle_mcp_action),
     ]:
         route_groups.setdefault(path, []).append((method, handler))
 

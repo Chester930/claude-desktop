@@ -34,3 +34,16 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Personal / local overrides — 個人設定、連結、私有腳本，不進版控
+*.local
+*.local.*
+local.*
+local/
+personal/
+private/
+links/
+my-*/
+backend/local_*.py
+frontend/src/app/links.ts
+frontend/src/environments/environment.local.ts

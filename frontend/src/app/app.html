@@ -57,6 +57,20 @@
             <input [(ngModel)]="settingsForm.claudeBin" placeholder="claude">
             <small>留空則自動偵測（建議留空）</small>
           </label>
+          <label>Claude Code 專案目錄
+            <div style="display:flex;gap:6px;align-items:center;">
+              <input style="flex:1" [(ngModel)]="settingsForm.projectDir"
+                placeholder="例：C:\Users\666\Desktop\claude-desktop（留空則自動偵測）">
+              <button class="btn-secondary" style="flex-shrink:0;font-size:11px;padding:4px 8px"
+                (click)="pickProjectDir()">選擇…</button>
+            </div>
+            <small>
+              決定 memory、排程、靈魂等資料存放的 ~/.claude/projects/ 子目錄。
+              @if (projectSlug()) {
+                目前生效：<code style="color:#d4a853">{{ projectSlug() }}</code>
+              }
+            </small>
+          </label>
           <label>工作目錄
             <input [(ngModel)]="settingsForm.workDir" placeholder="C:\Users\mycena">
             <small>Claude 執行時的起始目錄</small>
@@ -539,8 +553,8 @@
                       </button>
                       <span class="card-name">@{{ a.name }}</span>
                     </div>
-                    <button class="detail-btn" (click)="toggleAgentExpand(a.id, $event)">
-                      {{ expandedAgentId() === a.id ? '收合' : '詳情' }}
+                    <button class="detail-btn" (click)="$event.stopPropagation(); openDetail({id: a.id, label: '代理人', name: '@'+a.name, description: a.description, type: 'agent'})">
+                      詳情
                     </button>
                   </div>
                   @if (expandedAgentId() === a.id) {
@@ -621,8 +635,8 @@
                         {{ isSkillInTab(s.id) ? '◉' : '○' }}
                       </button>
                     </div>
-                    <button class="detail-btn">
-                      {{ expandedSkillId() === s.id ? '收合' : '詳情' }}
+                    <button class="detail-btn" (click)="$event.stopPropagation(); openDetail({id: s.id, label: '技能', name: '/'+s.name, description: s.description, type: 'skill'})">
+                      詳情
                     </button>
                   </div>
                   @if (expandedSkillId() === s.id) {
@@ -849,8 +863,8 @@
                           {{ isMcpInTab(m.name) ? '◉' : '○' }}
                         </button>
                       </div>
-                      <button class="detail-btn">
-                        {{ expandedMcpId() === m.id ? '收合' : '詳情' }}
+                      <button class="detail-btn" (click)="$event.stopPropagation(); openDetail({id: m.id, label: 'MCP', name: m.name, description: m.description || '', type: 'mcp'})">
+                        詳情
                       </button>
                     </div>
                     <div class="card-desc" style="font-size: 10px; color: #888; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;" [title]="m.url">URL: {{ m.url }}</div>
@@ -980,8 +994,8 @@
                           <button class="mcp-ctrl-btn start"   (click)="startMcp(m.name)"   title="啟動">▶</button>
                         }
                       </div>
-                      <button class="detail-btn">
-                        {{ expandedMcpId() === m.id ? '收合' : '詳情' }}
+                      <button class="detail-btn" (click)="$event.stopPropagation(); openDetail({id: m.id, label: 'MCP', name: m.name, description: m.description || '', type: 'mcp'})">
+                        詳情
                       </button>
                     </div>
                     <div class="card-desc" style="font-size:10px;color:#888;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;" [title]="m.url">URL: {{ m.url }}</div>
@@ -1173,6 +1187,42 @@
         </div>
         <div class="modal-footer">
           <button class="btn-primary" (click)="showSettingsHelp.set(false)">關閉</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- ── 詳情 Modal ──────────────────────────────────── -->
+  @if (detailItem()) {
+    <div class="modal-backdrop" (click)="closeDetail()">
+      <div class="modal" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <span>{{ detailItem()!.label }}詳情</span>
+          <button class="icon-btn" (click)="closeDetail()">✕</button>
+        </div>
+        <div class="modal-body" style="flex-direction: column; gap: 12px;">
+          <div style="font-size: 16px; font-weight: 600; color: #d4a853;">
+            {{ detailItem()!.name }}
+          </div>
+          <div style="background: #1f1f1f; padding: 12px; border-radius: 6px; border: 1px solid #2a2a2a;">
+            <div style="white-space: pre-wrap; line-height: 1.6; font-size: 13px; color: #ccc;">
+              @if (detailTranslation() === '') {
+                <span class="translating">翻譯中…</span>
+              } @else {
+                {{ detailTranslation() !== null ? detailTranslation() : (detailItem()!.description || '（無說明）') }}
+              }
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          @if (detailItem()!.description) {
+            <button class="btn-secondary"
+              [disabled]="detailTranslation() === ''"
+              (click)="detailTranslation() !== null ? clearDetailTranslation() : translateDetail()">
+              {{ detailTranslation() === '' ? '…' : detailTranslation() !== null ? '還原原文' : '翻譯成繁體中文' }}
+            </button>
+          }
+          <button class="btn-primary" (click)="closeDetail()">關閉</button>
         </div>
       </div>
     </div>

@@ -738,6 +738,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (dir) { this.settings.save({ workDir: dir }); this.settingsForm.workDir = dir; }
   }
 
+  async pickProjectDir() {
+    const dir = await this.claude.pickDirectory();
+    if (dir) this.settingsForm.projectDir = dir;
+  }
+
   // T07 — Dashboard stats
   stats = signal<{
     sessions: number; messages: number; total_tokens: number;
@@ -1081,6 +1086,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   settingsForm!: AppSettings;
   backendLogs  = signal<string[]>([]);
   statusInfo   = signal('確認中…');
+  projectSlug  = signal('');
 
   memoryKeys       = computed(() => Object.keys(this.memory()));
   memoryTotalChars = computed(() =>
@@ -1135,6 +1141,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.getStatus().subscribe(s => {
       this.statusInfo.set(s.claude_bin ?? '未知');
     });
+    this.claude.getConfig().subscribe(c => {
+      this.projectSlug.set(c.slug ?? '');
+      if (!this.settingsForm.projectDir && c.projectDir) {
+        this.settingsForm.projectDir = c.projectDir;
+      }
+    });
   }
 
   loadLogs() {
@@ -1143,6 +1155,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   saveSettings() {
     this.settings.save(this.settingsForm);
+    this.claude.setConfig({ projectDir: this.settingsForm.projectDir }).subscribe();
     this.settingsOpen.set(false);
   }
 

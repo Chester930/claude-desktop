@@ -14,6 +14,7 @@ export interface AppSettings {
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   permissionMode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto';
+  projectDir: string;
 }
 
 const DEFAULTS: AppSettings = {
@@ -33,6 +34,7 @@ const DEFAULTS: AppSettings = {
   model: 'sonnet',
   effort: 'medium',
   permissionMode: 'acceptEdits',
+  projectDir: '',
 };
 
 const KEY = 'claude_desktop_settings';
