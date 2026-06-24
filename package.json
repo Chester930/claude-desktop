@@ -1,0 +1,47 @@
+{
+  "name": "claude-desktop",
+  "version": "1.0.0",
+  "description": "Claude Desktop - 由 Claude Code 驅動",
+  "main": "electron/main.js",
+  "scripts": {
+    "start":           "electron . --dev",
+    "frontend:build":  "cd frontend && npx ng build --base-href ./",
+    "backend:compile": "cd backend && pyinstaller --onefile --name claude-backend --hidden-import aiohttp --hidden-import aiohttp_cors --hidden-import aiohttp.web_protocol --hidden-import multipart main.py && copy dist\\claude-backend.exe claude-backend.exe",
+    "dist":            "npm run frontend:build && npm run backend:compile && electron-builder --win",
+    "build":           "npm run frontend:build && electron-builder --win --dir"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron":         "^42.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId":       "com.claudedesktop.app",
+    "productName": "Claude 桌面版",
+    "directories": { "output": "dist-electron" },
+    "asar": false,
+    "files": [
+      "electron/**/*",
+      "frontend/dist/**/*",
+      "backend/claude-backend.exe",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": {
+      "oneClick":                          false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut":             true,
+      "createStartMenuShortcut":           true,
+      "shortcutName":                      "Claude 桌面版"
+    },
+    "publish": {
+      "provider": "github",
+      "owner":    "YOUR_GITHUB_USERNAME",
+      "repo":     "claude-desktop"
+    }
+  }
+}

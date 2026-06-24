@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build outputs
+dist-electron/
+frontend/dist/
+backend/__pycache__/
+backend/*.pyc
+backend/.venv/
+*.egg-info/
+
+# Electron build artifacts
+out/
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

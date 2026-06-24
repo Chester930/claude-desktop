@@ -1,0 +1,3 @@
+aiohttp>=3.9
+aiohttp-cors>=0.7
+croniter>=2.0

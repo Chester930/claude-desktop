@@ -1,0 +1,1180 @@
+<div class="app-shell">
+
+  <!-- ── Backend 掉線提示 ──────────────────────────── -->
+  @if (backendDown()) {
+    <div class="backend-down-banner">⚠ 後端連線中斷，嘗試重連中…</div>
+  }
+
+  <!-- ── 頂部導覽列 ────────────────────────────────── -->
+  <header class="topbar">
+    <button class="icon-btn" (click)="sidebarOpen.set(!sidebarOpen())" title="切換側欄">☰</button>
+    <span class="logo">⚡ Claude 桌面版</span>
+
+
+
+    <div class="topbar-right">
+      <button class="icon-btn" (click)="exportChat()" title="匯出對話（.md）" [disabled]="!messages().length">⬇</button>
+      <button class="icon-btn" (click)="reload()" title="重新整理">↻</button>
+      <button class="icon-btn" (click)="openSettings()" title="設定">⚙</button>
+      <button class="icon-btn" (click)="rightOpen.set(!rightOpen())" title="切換右側面板">⊞</button>
+    </div>
+  </header>
+
+  <!-- ── T14 ⌘K 全局搜尋 Palette ─────────────────────── -->
+  @if (cmdOpen()) {
+    <div class="cmd-backdrop" (click)="closeCmd()">
+      <div class="cmd-palette" (click)="$event.stopPropagation()">
+        <div class="cmd-search-row">
+          <span class="cmd-icon">⌘K</span>
+          <input class="cmd-input" [(ngModel)]="cmdInputText" (ngModelChange)="onCmdInput()"
+            (keydown)="onCmdKey($event)" placeholder="搜尋指令、對話、代理人…" autofocus>
+        </div>
+        <div class="cmd-results">
+          @for (item of cmdItems(); track item.id; let i = $index) {
+            <button class="cmd-item" [class.active]="cmdIdx() === i"
+              (mouseenter)="cmdIdx.set(i)" (click)="selectCmdItem(item)">
+              <span class="cmd-type {{ item.type }}">{{ item.type === 'cmd' ? '指令' : item.type === 'session' ? '對話' : item.type === 'agent' ? '代理' : '技能' }}</span>
+              <span class="cmd-label">{{ item.label }}</span>
+              <span class="cmd-desc">{{ item.desc }}</span>
+            </button>
+          }
+          @empty { <div class="cmd-empty">無符合結果</div> }
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- ── 設定 Modal ──────────────────────────────────── -->
+  @if (settingsOpen()) {
+    <div class="modal-backdrop" (click)="settingsOpen.set(false)">
+      <div class="modal" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <span>⚙ 設定</span>
+          <button class="icon-btn" (click)="settingsOpen.set(false)">✕</button>
+        </div>
+        <div class="modal-body">
+          <label>Claude 執行路徑
+            <input [(ngModel)]="settingsForm.claudeBin" placeholder="claude">
+            <small>留空則自動偵測（建議留空）</small>
+          </label>
+          <label>工作目錄
+            <input [(ngModel)]="settingsForm.workDir" placeholder="C:\Users\mycena">
+            <small>Claude 執行時的起始目錄</small>
+            @if (recentWorkDirs().length) {
+              <div class="recent-dirs">
+                @for (d of recentWorkDirs(); track d) {
+                  <button class="dir-chip" (click)="settingsForm.workDir = d">{{ d }}</button>
+                }
+              </div>
+            }
+          </label>
+          <label>後端連接埠
+            <input type="number" [(ngModel)]="settingsForm.backendPort" min="1024" max="65535">
+          </label>
+          <label>預設代理人
+            <select [(ngModel)]="settingsForm.defaultAgent">
+              <option value="">（無）</option>
+              @for (a of agents(); track a.id) {
+                <option [value]="a.id">{{ a.name }}</option>
+              }
+            </select>
+          </label>
+          <label>介面主題
+            <select [(ngModel)]="settingsForm.theme">
+              <option value="dark">深色（預設）</option>
+              <option value="light">淺色</option>
+            </select>
+          </label>
+          <label class="toggle-label">
+            <input type="checkbox" [(ngModel)]="settingsForm.enterToSend">
+            Enter 鍵直接傳送（Shift+Enter 換行）
+          </label>
+        </div>
+
+        <!-- 快速提示 -->
+        <div class="modal-section">
+          <div class="modal-section-header">
+            快速提示
+            <button class="btn-secondary btn-xs" (click)="openQuickPromptsEdit()">✏ 編輯</button>
+          </div>
+          @if (showQuickPromptsEdit) {
+            <div class="quick-prompts-edit">
+              @for (p of quickPromptsForm; track $index; let i = $index) {
+                <div class="qp-row">
+                  <input class="qp-label-input" [(ngModel)]="quickPromptsForm[i].label" placeholder="標籤">
+                  <input class="qp-text-input"  [(ngModel)]="quickPromptsForm[i].text"  placeholder="提示文字">
+                  <button class="btn-danger btn-xs" (click)="removeQuickPrompt(i)">✕</button>
+                </div>
+              }
+              <div class="qp-actions">
+                <button class="btn-secondary btn-xs" (click)="addQuickPrompt()">+ 新增</button>
+                <button class="btn-primary  btn-xs" (click)="saveQuickPrompts()">儲存</button>
+              </div>
+            </div>
+          }
+        </div>
+
+        <!-- T09 Doctor 診斷 -->
+        <div class="modal-logs">
+          <div class="modal-logs-header">
+            Claude Code 診斷（doctor）
+            <div style="display:flex;gap:6px">
+              <button class="btn-secondary" style="font-size:11px;padding:3px 8px"
+                (click)="runDoctor()" [disabled]="doctorRunning()">
+                {{ doctorRunning() ? '執行中…' : '執行診斷' }}
+              </button>
+              <button class="btn-secondary" style="font-size:11px;padding:3px 8px"
+                (click)="runClaudeUpdate()">檢查更新</button>
+            </div>
+          </div>
+          @if (doctorOutput()) {
+            <pre class="modal-logs-body">{{ doctorOutput() }}</pre>
+          }
+        </div>
+
+        <!-- 日誌分頁 -->
+        <div class="modal-logs">
+          <div class="modal-logs-header">
+            後端日誌
+            <button class="btn-secondary" style="font-size:11px;padding:3px 8px" (click)="loadLogs()">重新整理</button>
+          </div>
+          <pre class="modal-logs-body">{{ backendLogs().join('\n') || '（尚無日誌）' }}</pre>
+        </div>
+
+        <div class="modal-footer">
+          <span class="settings-status">Claude：{{ statusInfo() }}</span>
+          <label class="btn-secondary" title="從備份 zip 還原">
+            ⬆ 還原
+            <input type="file" accept=".zip" (change)="restoreBackup($event)" style="display:none">
+          </label>
+          <button class="btn-secondary" (click)="downloadBackup()" title="備份設定與記憶">⬇ 備份</button>
+          <button class="btn-secondary" (click)="settingsOpen.set(false)">取消</button>
+          <button class="btn-primary" (click)="saveSettings()">儲存</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <div class="main-area">
+
+    <!-- ── 對話歷史側欄 ──────────────────────────────── -->
+    @if (sidebarOpen()) {
+      <aside class="sidebar" [style.width.px]="sidebarWidth()">
+        <div class="sidebar-header">
+          <span>對話紀錄</span>
+          <div style="display:flex;gap:4px">
+            <button class="new-chat-btn" (click)="continueLastSession()" title="繼續上次對話">⏎</button>
+            <button class="new-chat-btn" (click)="newChat()">＋ 新對話</button>
+          </div>
+        </div>
+        <div class="session-search">
+          <input [(ngModel)]="sessionSearch" (input)="searchSessions()"
+            placeholder="搜尋對話…" class="session-search-input">
+        </div>
+        <div class="session-list">
+          @for (group of groupedSessions(); track group.label) {
+            <div class="session-group-label">{{ group.label }}</div>
+            @for (s of group.items; track s.id) {
+              <div class="session-item-wrap">
+                @if (renamingId() === s.id) {
+                  <input class="session-rename-input" [(ngModel)]="renameTitle"
+                    (keydown.enter)="confirmRename(s)"
+                    (keydown.escape)="renamingId.set(null)"
+                    (blur)="confirmRename(s)"
+                    autofocus>
+                } @else {
+                  <button class="session-item"
+                    draggable="true"
+                    (dragstart)="onSessionDragStart(s, $event)"
+                    (click)="loadSession(s)"
+                    (dblclick)="startRename(s, $event)"
+                    [title]="'點擊載入 / 拖曳到畫布新增面板'">
+                    <span class="session-title">{{ s.title }}</span>
+                    <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
+                  </button>
+                }
+                <button class="session-del-btn" (click)="deleteSession(s, $event)" title="刪除">✕</button>
+              </div>
+            }
+          } @empty {
+            <p class="empty-hint">尚無對話紀錄</p>
+          }
+          @if (hasMoreSessions()) {
+            <button class="session-load-more" (click)="loadMoreSessions()">載入更多…</button>
+          }
+        </div>
+        <div class="sidebar-resize" (mousedown)="onResizeStart($event)" title="拖曳調整寬度"></div>
+      </aside>
+    }
+
+    <!-- ── 聊天主區域 ────────────────────────────────── -->
+    <main class="chat-area">
+
+      <!-- Context Gauge -->
+      @if (tokenUsage()) {
+        <div class="context-gauge" [title]="'輸入：' + tokenUsage()!.input + ' tokens　輸出：' + tokenUsage()!.output + ' tokens'">
+          <span class="gauge-label">Context</span>
+          <div class="gauge-bar">
+            <div class="gauge-fill"
+              [style.width.%]="Math.min(((tokenUsage()!.input + tokenUsage()!.output) / 200000) * 100, 100)"
+              [class.warn]="(tokenUsage()!.input + tokenUsage()!.output) > 120000"
+              [class.danger]="(tokenUsage()!.input + tokenUsage()!.output) > 180000">
+            </div>
+          </div>
+          <span class="gauge-num">{{ tokenUsage()!.input + tokenUsage()!.output | number }}</span>
+          <span class="gauge-remaining">/ {{ remainingTokens()! | number }} 剩</span>
+          @if (tokenUsage()!.cost > 0) {
+            <span class="gauge-cost">${{ tokenUsage()!.cost.toFixed(4) }}</span>
+          }
+          <button class="debug-toggle" [class.active]="debugMode()" (click)="debugMode.update(v=>!v)" title="Debug 模式">🐛</button>
+        </div>
+      }
+
+      <!-- ── 對話畫布（最多 4 個面板）───────────────────── -->
+      <div class="canvas-container"
+           (dragover)="onCanvasDragOver($event)"
+           (dragleave)="onCanvasDragLeave($event)"
+           (drop)="onCanvasDrop($event)">
+
+        <div class="canvas" [ngStyle]="canvasGridStyle()" #canvasGrid>
+
+          @for (tab of chatTabs(); track tab.id; let i = $index) {
+            <div class="panel" [class.active]="activeChatId() === tab.id">
+
+              <!-- 面板標題列：點擊切換輸入目標 -->
+              <div class="panel-header" (click)="switchChatTab(tab.id)">
+                <span class="panel-indicator"></span>
+                <span class="panel-title" style="margin-right: 8px;">{{ tab.label }}</span>
+                
+                <!-- 對話框專屬代理人選擇器 -->
+                <div class="panel-agent-selector" (click)="$event.stopPropagation()" style="display: inline-flex; align-items: center; margin-right: 6px; margin-left: 2px;">
+                  <select [value]="tab.selectedAgent || ''" (change)="changeTabAgent(tab.id, $any($event.target).value)" style="background: #111; border: 1px solid #333; color: #d4a853; font-size: 11px; padding: 2px 6px; border-radius: 4px; outline: none; cursor: pointer; font-family: inherit;">
+                    <option value="">🤖 無代理人</option>
+                    @for (a of agents(); track a.id) {
+                      <option [value]="a.id">🤖 {{ a.name }}</option>
+                    }
+                  </select>
+                </div>
+
+                @if (activeChatId() === tab.id) {
+                  <span class="panel-active-badge">✏ 輸入中</span>
+                }
+                <span class="panel-msg-count">{{ getPanelMessages(tab.id).length }} 則</span>
+                @if (chatTabs().length > 1) {
+                  <button class="panel-close" (click)="closeChatTab(tab.id, $event)" title="關閉面板">✕</button>
+                }
+              </div>
+
+              @if (activeChatId() === tab.id) {
+                <!-- 活躍面板：live 串流 + 完整渲染 -->
+                <div class="panel-messages" #scrollArea (scroll)="onMessagesScroll()">
+                  @if (showScrollBtn()) {
+                    <button class="scroll-bottom-btn" (click)="scrollToBottom()">↓</button>
+                  }
+                  @for (msg of messages(); track $index) {
+                    <div class="msg" [class]="'msg-' + msg.role">
+                      @if (msg.role === 'system') {
+                        <div class="bubble system-bubble">{{ msg.text }}</div>
+                      }
+                      @if (msg.role === 'user') {
+                        <div class="bubble user-bubble">
+                          {{ msg.text }}
+                          @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
+                        </div>
+                      }
+                      @if (msg.role === 'assistant') {
+                        <div class="bubble assistant-bubble">
+                          <span class="role-tag">Claude</span>
+                          @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
+                          <button class="copy-btn" (click)="copyMessage(msg.text)" title="複製">⎘</button>
+                          @if (msg.isStreaming && !msg.text) {
+                            <span class="cursor"></span>
+                          } @else {
+                            <div class="md-body" [class.cursor]="msg.isStreaming"
+                                 [innerHTML]="msg.text | markdown"></div>
+                          }
+                        </div>
+                      }
+                      @if (msg.role === 'tool') {
+                        <details class="tool-call" [class.running]="msg.isRunning" [open]="debugMode()">
+                          <summary>
+                            @if (msg.isRunning) { <span class="tool-spinner">⟳</span> }
+                            @else { 🔧 }
+                            工具：{{ msg.toolName }}
+                            @if (msg.isRunning) {
+                              <span class="tool-running-label">執行中…</span>
+                              @if (getToolElapsed(msg) > 0) {
+                                <span class="tool-elapsed">{{ getToolElapsed(msg) }}s</span>
+                              }
+                            }
+                            @else if (msg.result) { <span class="tool-ok">✓ 完成</span> }
+                          </summary>
+                          <pre class="tool-input">{{ msg.text }}</pre>
+                          @if (msg.result) { <pre class="tool-result">{{ msg.result }}</pre> }
+                        </details>
+                      }
+                      @if (msg.role === 'error') {
+                        <div class="bubble error-bubble">
+                          ⚠ {{ msg.text }}
+                          <button class="retry-btn" (click)="retryLast()">↺ 重試</button>
+                        </div>
+                      }
+                    </div>
+                  } @empty {}
+                  <div #chatEnd></div>
+                </div>
+              } @else {
+                <!-- 非活躍面板：完整訊息直接顯示，點擊內容區可切換輸入目標 -->
+                <div class="panel-messages" (click)="switchChatTab(tab.id)" style="cursor: pointer;">
+                  @for (msg of getPanelMessages(tab.id); track $index) {
+                    <div class="msg" [class]="'msg-' + msg.role">
+                      @if (msg.role === 'user') {
+                        <div class="bubble user-bubble">
+                          {{ msg.text }}
+                          @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
+                        </div>
+                      }
+                      @if (msg.role === 'assistant') {
+                        <div class="bubble assistant-bubble">
+                          <span class="role-tag">Claude</span>
+                          @if (msg.isStreaming && !msg.text) {
+                            <span class="cursor"></span>
+                          } @else {
+                            <div class="md-body" [class.cursor]="msg.isStreaming"
+                                 [innerHTML]="msg.text | markdown"></div>
+                          }
+                        </div>
+                      }
+                      @if (msg.role === 'tool') {
+                        <div class="tool-badge">
+                          {{ msg.isRunning ? '⟳' : '🔧' }} {{ msg.toolName }}
+                          @if (msg.isRunning) { <span class="tool-running-label">執行中…</span> }
+                          @else if (msg.result) { <span class="tool-ok">✓</span> }
+                        </div>
+                      }
+                      @if (msg.role === 'system') {
+                        <div class="bubble system-bubble">{{ msg.text }}</div>
+                      }
+                    </div>
+                  } @empty {
+                    <div class="panel-empty-hint">
+                      空的對話<br>
+                      <small>點擊標題列切換後開始輸入</small>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          }
+
+          <!-- 拖曳中的提示 overlay -->
+          @if (canvasDropping()) {
+            <div class="canvas-drop-overlay">
+              <div class="canvas-drop-hint">＋ 放開以新增對話面板</div>
+            </div>
+          }
+        </div>
+
+        <!-- 拖曳把手：2 面板（左右）、3 面板（三欄）或 4 面板（左右 + 上下） -->
+        @if (chatTabs().length === 2 || chatTabs().length === 4) {
+          <div class="resize-col-handle" [style.left.%]="canvasColRatio() * 100"
+               (mousedown)="onResizeCol($event, canvasGrid)"></div>
+        }
+        @if (chatTabs().length === 3) {
+          <div class="resize-col-handle" [style.left.%]="canvasCol3Divider1() * 100"
+               (mousedown)="onResizeCol3($event, 1, canvasGrid)"></div>
+          <div class="resize-col-handle" [style.left.%]="canvasCol3Divider2() * 100"
+               (mousedown)="onResizeCol3($event, 2, canvasGrid)"></div>
+        }
+        @if (chatTabs().length === 4) {
+          <div class="resize-row-handle" [style.top.%]="canvasRowRatio() * 100"
+               (mousedown)="onResizeRow($event, canvasGrid)"></div>
+        }
+      </div>
+
+      <!-- 輸入框 -->
+      <div class="input-area"
+        [style.height.px]="inputHeight()"
+        (dragover)="onDragOver($event)" (dragleave)="onDragLeave()" (drop)="onDrop($event)"
+        [class.drag-over]="isDragOver()">
+        <div class="input-resize" (mousedown)="onInputResizeStart($event)" title="拖曳調整高度"></div>
+        @if (isDragOver()) {
+          <div class="drag-overlay">拖曳檔案到這裡上傳</div>
+        }
+
+        <!-- 頂部專案路徑藥丸按鈕 -->
+        <div class="input-top-bar">
+          <span class="pill-btn pill-static">💻 Local</span>
+          <button class="pill-btn pill-action" (click)="pickFolder()" [title]="'工作目錄：' + (workDir() || '（未設定）')">
+            📁 {{ workDirLabel() }}
+          </button>
+        </div>
+
+        <!-- 頂部模型不可用警告橫幅 -->
+        @if (bannerMessage()) {
+          <div class="input-banner">
+            <span>{{ bannerMessage() }}</span>
+            <div class="banner-actions">
+              <a href="https://support.anthropic.com" target="_blank" class="banner-link">Learn more</a>
+              <button class="banner-close" (click)="bannerDismissed.set(true)">✕</button>
+            </div>
+          </div>
+        }
+
+        <!-- 斜線指令選單 -->
+        @if (slashMenuOpen()) {
+          <div class="slash-menu">
+            @for (item of slashMenuItems(); track item.id; let i = $index) {
+              <button
+                class="slash-item"
+                [class.active]="slashMenuIndex() === i"
+                [class.builtin]="item.id.startsWith('__')"
+                (mouseenter)="slashMenuIndex.set(i)"
+                (click)="insertSlashCommand(item)">
+                <span class="slash-name">/{{ item.name }}</span>
+                <span class="slash-desc">{{ item.description || '（無說明）' }}</span>
+              </button>
+            }
+            @empty {
+              <div class="slash-item">找不到符合的技能</div>
+            }
+          </div>
+        }
+
+        <!-- 附件列表 -->
+        @if (attachedFiles().length) {
+          <div class="attachment-row">
+            @for (f of attachedFiles(); track f.path) {
+              <span class="attachment-chip">
+                @if (f.preview) {
+                  <img class="img-thumb" [src]="f.preview" [alt]="f.name">
+                } @else {
+                  📎
+                }
+                {{ f.name }}
+                <button (click)="removeAttachment(f.path)">✕</button>
+              </span>
+            }
+          </div>
+        }
+
+        <div class="input-row">
+          @if (selectedAgent()) {
+            <span class="active-agent-badge">&#64;{{ selectedAgent() }}</span>
+          }
+          <textarea
+            #inputRef
+            class="chat-input"
+            [(ngModel)]="inputText"
+            (keydown)="onKeyDown($event)"
+            (input)="onInput(); autoResize($event)"
+            [disabled]="isStreaming()"
+            [placeholder]="isStreaming() ? 'Claude 思考中…' : chatTabs().length > 1 ? '傳送給「' + (activeChat?.label || '對話') + '」— / 技能  Ctrl+V 截圖' : '輸入訊息（/ 技能  Ctrl+V 截圖  拖曳檔案）'"
+          ></textarea>
+          @if (isStreaming()) {
+            <button class="stop-btn" (click)="stopStreaming()" title="停止">■</button>
+          } @else {
+            <button class="send-btn" (click)="send()" [disabled]="!inputText.trim()">↑</button>
+          }
+        </div>
+
+        <!-- T01 + T02 底部狀態列 -->
+        <div class="input-statusbar">
+          <div class="statusbar-left">
+            <button class="sb-btn" (click)="cyclePermission()" [title]="'權限模式：' + permissionMode()">
+              {{ PERM_LABELS[permissionMode()] || permissionMode() }}
+            </button>
+            <label class="sb-btn attach-icon-btn" [class.uploading]="isUploading()" title="上傳附件" style="margin-left: 4px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0;">
+              ➕
+              <input type="file" accept="image/*,.txt,.md,.py,.ts,.js,.json" multiple
+                (change)="pickFile($event)" style="display:none">
+            </label>
+            <button class="sb-btn mic-btn" (click)="toggleMic()" title="語音輸入（未啟用）" style="margin-left: 4px; padding: 2px 4px; opacity: 0.8;">
+              🎤
+            </button>
+          </div>
+          <div class="statusbar-right">
+            <button class="sb-btn" (click)="cycleModel()" [title]="'模型：' + model()">
+              {{ MODEL_LABELS[model()] || model() }}
+            </button>
+            <button class="sb-btn" (click)="cycleEffort()" [title]="'思考深度：' + effort()">
+              {{ effort() }}
+            </button>
+            <span class="status-dot" [class.online]="!backendDown() && !outOfQuota()" [title]="backendDown() ? '已斷開後端連線' : outOfQuota() ? '已達用量限制' : '後端連線正常，可用量充足'"></span>
+            <button class="sb-btn" (click)="showSettingsHelp.set(true)" title="說明狀態列設定" style="margin-left: -2px; padding: 2px 4px; opacity: 0.7;">❓</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ── 右側面板 ──────────────────────────────────── -->
+    @if (rightOpen()) {
+      <aside class="right-panel" [style.width.px]="rightWidth()">
+        <div class="right-resize" (mousedown)="onRightResizeStart($event)" title="拖曳調整寬度"></div>
+        <div class="tab-bar">
+          <button [class.active]="activeTab()==='agents'"    (click)="activeTab.set('agents')">Agent</button>
+          <button [class.active]="activeTab()==='skills'"    (click)="activeTab.set('skills')">Skills</button>
+          <button [class.active]="activeTab()==='mcp'"       (click)="activeTab.set('mcp');loadMcp()">MCP</button>
+          <button [class.active]="activeTab()==='memory'"    (click)="activeTab.set('memory')">Memory</button>
+          <button [class.active]="activeTab()==='schedules'" (click)="activeTab.set('schedules')">Schedule</button>
+          <button [class.active]="activeTab()==='soul'"      (click)="activeTab.set('soul')">Soul</button>
+        </div>
+
+        <div class="tab-content">
+
+          @if (activeTab() === 'agents') {
+            <div class="panel-list">
+              @for (a of sortedAgents(); track a.id) {
+                <div class="panel-card"
+                  [class.active-in-chat]="selectedAgent() === a.id"
+                  [class.expanded]="expandedAgentId() === a.id"
+                  (click)="toggleAgentExpand(a.id, $event)">
+                  <div class="card-header-row">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <button class="agent-use-btn"
+                        [class.active]="selectedAgent() === a.id"
+                        (click)="$event.stopPropagation(); selectAgent(a.id)"
+                        [title]="selectedAgent() === a.id ? '取消使用此代理人' : '設為目前對話使用中'">
+                        {{ selectedAgent() === a.id ? '● 使用中' : '○ 啟用' }}
+                      </button>
+                      <span class="card-name">@{{ a.name }}</span>
+                    </div>
+                    <button class="detail-btn" (click)="toggleAgentExpand(a.id, $event)">
+                      {{ expandedAgentId() === a.id ? '收合' : '詳情' }}
+                    </button>
+                  </div>
+                  @if (expandedAgentId() === a.id) {
+                    <div class="card-detail-content" (click)="$event.stopPropagation()">
+                      <div class="detail-desc">
+                        {{ expandedTranslation() !== null && expandedTranslation() !== ''
+                            ? expandedTranslation()
+                            : (a.description || '（無說明）') }}
+                        @if (expandedTranslation() === '') {
+                          <span class="translating">翻譯中…</span>
+                        }
+                      </div>
+                      @if (a.description) {
+                        <div class="detail-actions">
+                          <button class="translate-btn" (click)="translateExpanded(a.description)">
+                            {{ expandedTranslation() !== null ? '還原原文' : '翻譯成繁體中文' }}
+                          </button>
+                        </div>
+                      }
+                      <div class="linked-section">
+                        <!-- 永久技能 -->
+                        <div class="linked-title">永久技能：</div>
+                        <div style="display:flex;flex-direction:column;gap:4px;">
+                          @for (skillId of getPermSkills(a.id); track skillId) {
+                            <div style="display:flex;align-items:center;gap:4px;">
+                              <button class="link-item" style="flex:1" (click)="jumpToSkillDetail(skillId)">
+                                <span>/{{ skillId }}</span><span>➔</span>
+                              </button>
+                              <button class="del-btn" (click)="$event.stopPropagation(); toggleSkillPermForAgent(a.id, skillId)" title="移除">✕</button>
+                            </div>
+                          } @empty {
+                            <div style="font-size:10px;color:#555;font-style:italic;">無永久技能</div>
+                          }
+                        </div>
+
+                        <!-- 永久直連 MCP -->
+                        <div class="linked-title" style="margin-top:8px;">直連 MCP（永久）：</div>
+                        <div style="display:flex;flex-direction:column;gap:4px;">
+                          @for (mcpName of getPermMcps(a.id); track mcpName) {
+                            <div style="display:flex;align-items:center;gap:4px;">
+                              <button class="link-item" style="flex:1" (click)="jumpToMcpDetail(mcpName)">
+                                <span>{{ mcpName }}</span><span>➔</span>
+                              </button>
+                              <button class="del-btn" (click)="$event.stopPropagation(); toggleMcpPermForAgent(a.id, mcpName)" title="移除">✕</button>
+                            </div>
+                          } @empty {
+                            <div style="font-size:10px;color:#555;font-style:italic;">無直連 MCP</div>
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  }
+                </div>
+              } @empty {
+                <p class="empty-hint">找不到代理人<br><small>~/.claude/agents/</small></p>
+              }
+            </div>
+          }
+          
+@if (activeTab() === 'skills') {
+            <div class="panel-list">
+              @for (s of sortedSkills(); track s.id) {
+                <div class="panel-card"
+                  [class.active-in-chat]="isSkillLinkedToActiveAgent(s.id)"
+                  [class.expanded]="expandedSkillId() === s.id"
+                  (click)="toggleSkillExpand(s.id)">
+                  <div class="card-header-row">
+                    <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
+                      @if (isSkillLinkedToActiveAgent(s.id)) {
+                        <span class="auth-dot active" title="目前代理人已啟用此技能"></span>
+                      }
+                      <span class="card-name">/{{ s.name }}</span>
+                    </div>
+                    <div class="binding-btns" (click)="$event.stopPropagation()">
+                      <button class="bind-btn" [class.active]="isSkillInTab(s.id)"
+                        (click)="toggleSkillInTab(s.id)"
+                        [title]="isSkillInTab(s.id) ? '從此對話移除' : '加入此對話'">
+                        {{ isSkillInTab(s.id) ? '◉' : '○' }}
+                      </button>
+                    </div>
+                    <button class="detail-btn">
+                      {{ expandedSkillId() === s.id ? '收合' : '詳情' }}
+                    </button>
+                  </div>
+                  @if (expandedSkillId() === s.id) {
+                    <div class="card-detail-content" (click)="$event.stopPropagation()">
+                      <div class="detail-desc">
+                        {{ expandedTranslation() !== null && expandedTranslation() !== ''
+                            ? expandedTranslation()
+                            : (s.description || '（無說明）') }}
+                        @if (expandedTranslation() === '') {
+                          <span class="translating">翻譯中…</span>
+                        }
+                      </div>
+                      @if (s.description) {
+                        <div class="detail-actions">
+                          <button class="translate-btn" (click)="translateExpanded(s.description)">
+                            {{ expandedTranslation() !== null ? '還原原文' : '翻譯成繁體中文' }}
+                          </button>
+                        </div>
+                      }
+                      <div class="linked-section">
+                        <div class="linked-title">使用的 MCP 伺服器：</div>
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                          @for (mcpName of getUsedMcps(s.id); track mcpName) {
+                            <button class="link-item" (click)="jumpToMcpDetail(mcpName)">
+                              <span>{{ mcpName }}</span>
+                              <span>➔</span>
+                            </button>
+                          } @empty {
+                            <div style="font-size: 10px; color: #555; font-style: italic;">無連結的 MCP</div>
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  }
+                </div>
+              } @empty {
+                <p class="empty-hint">找不到技能<br><small>~/.claude/skills/</small></p>
+              }
+            </div>
+          }
+
+          @if (activeTab() === 'memory') {
+            <div class="memory-panel">
+              <!-- 狀態列：用量 + 已選上下文數 -->
+              <div class="memory-status-bar">
+                <div style="display:flex;align-items:center;gap:8px;flex:1;">
+                  <span style="font-size:10px;color:#888;">記憶</span>
+                  <div class="gauge-bar" style="flex:1;height:3px;background:#222;border-radius:2px;overflow:hidden;">
+                    <div class="gauge-fill" [style.width.%]="memoryUsagePct()" style="height:100%;background:#d4a853;border-radius:2px;"></div>
+                  </div>
+                  <span style="font-size:10px;color:#888;">{{ memoryTotalChars() | number }} 字</span>
+                </div>
+                @if (contextMemoryKeys().length) {
+                  <span class="memory-ctx-badge">◉ {{ contextMemoryKeys().length }} 已選為上下文</span>
+                }
+              </div>
+
+              <!-- 上半：記憶列表 -->
+              <div class="memory-upper">
+                @for (k of memoryKeys(); track k) {
+                  <div class="panel-card" [class.selected]="selectedMemoryKey() === k" (click)="selectMemoryKey(k)">
+                    <div class="card-header-row">
+                      <div style="display:flex;align-items:center;gap:6px;">
+                        <button class="memory-ctx-btn"
+                          [class.active]="isMemoryInContext(k)"
+                          (click)="$event.stopPropagation(); toggleMemoryContext(k)"
+                          [title]="isMemoryInContext(k) ? '從上下文移除' : '加入上下文'">
+                          {{ isMemoryInContext(k) ? '◉' : '○' }}
+                        </button>
+                        <div class="card-name">{{ k }}.md</div>
+                      </div>
+                      <button class="del-btn" (click)="$event.stopPropagation(); deleteMemory(k)" title="刪除">✕</button>
+                    </div>
+                    <div class="card-desc" style="font-size:11px;color:#888;padding-left:22px;">
+                      {{ memory()[k] | slice:0:80 }}{{ (memory()[k]?.length || 0) > 80 ? '…' : '' }}
+                    </div>
+                  </div>
+                } @empty {
+                  <p class="empty-hint">尚無記憶檔案</p>
+                }
+              </div>
+
+              <!-- 分隔線 -->
+              <div class="panel-divider"></div>
+
+              <!-- 下半：編輯區（明確儲存，不自動存） -->
+              @if (selectedMemoryKey()) {
+                <div class="memory-lower">
+                  <div class="edit-lower-header">
+                    <span>{{ selectedMemoryKey() }}.md</span>
+                    @if (!memoryDraftSaved()) { <span class="unsaved-dot">● 未儲存</span> }
+                  </div>
+                  <textarea class="memory-editor" [(ngModel)]="memoryDraft" (input)="onMemoryEdit()"
+                    style="flex:1;width:100%;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:6px;padding:8px;font-size:12px;outline:none;resize:none;font-family:inherit;line-height:1.5;"></textarea>
+                  <div class="edit-lower-actions">
+                    <button class="btn-secondary btn-xs" (click)="discardMemoryEdit()" [disabled]="memoryDraftSaved()">放棄</button>
+                    <button class="btn-primary btn-xs" (click)="saveMemoryEdit()" [disabled]="memoryDraftSaved()">確認儲存</button>
+                  </div>
+                </div>
+              } @else {
+                <div class="lower-empty-hint">點選記憶項目以查看或編輯</div>
+              }
+            </div>
+          }
+
+          @if (activeTab() === 'schedules') {
+            <div class="schedule-view">
+              <div class="schedule-form">
+                <input [(ngModel)]="newSchedulePrompt" placeholder="要排程執行的指令…" class="schedule-input">
+                <input [(ngModel)]="newScheduleCron" placeholder="Cron（例：0 9 * * *）" class="schedule-input">
+                <button class="btn-primary schedule-add-btn" (click)="addSchedule()"
+                  [disabled]="!newSchedulePrompt.trim() || !newScheduleCron.trim()">新增排程</button>
+              </div>
+              <div class="panel-list" style="margin-top:10px">
+                @for (sc of schedules(); track sc.id) {
+                  <div class="panel-card">
+                    <div class="card-name schedule-header">
+                      <span>{{ sc.cron }}</span>
+                      <div class="schedule-actions">
+                        <button class="icon-btn-sm" (click)="runScheduleNow(sc.id)" title="立即執行">▶</button>
+                        <button class="icon-btn-sm" (click)="toggleSchedule(sc.id, sc.enabled)"
+                          [title]="sc.enabled ? '停用' : '啟用'">{{ sc.enabled ? '⏸' : '▷' }}</button>
+                        <button class="del-btn" (click)="deleteSchedule(sc.id)">✕</button>
+                      </div>
+                    </div>
+                    <div class="card-desc">{{ sc.prompt }}</div>
+                    <div class="schedule-status" [class.active]="sc.enabled">
+                      {{ sc.enabled ? '✓ 啟用中' : '✗ 已停用' }}
+                      @if (sc.last_run) { · 上次：{{ sc.last_run | date:'MM/dd HH:mm' }} }
+                    </div>
+                  </div>
+                } @empty {
+                  <p class="empty-hint">尚無排程任務</p>
+                }
+              </div>
+            </div>
+          }
+
+          @if (activeTab() === 'soul') {
+            <div class="soul-panel" #soulPanel>
+
+              <!-- Upper: soul list, mouse-wheel to cycle selection -->
+              <div class="soul-upper" (wheel)="onSoulListWheel($event)"
+                   [style.height.%]="soulSplitRatio() * 100">
+                <p class="soul-hint">
+                  You can set multiple personas. All will be merged and injected into Claude on every turn. Scroll wheel to cycle.
+                </p>
+                <div class="soul-create-form">
+                  <input [(ngModel)]="newSoulName" placeholder="New soul name…" class="schedule-input"
+                    style="flex:1;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:11px;outline:none;"
+                    (keydown.enter)="addSoulProfile()">
+                  <button class="btn-primary" (click)="addSoulProfile()" [disabled]="!newSoulName.trim()"
+                    style="font-size:11px;padding:4px 8px;flex-shrink:0;">+ Add</button>
+                </div>
+                @for (s of souls(); track s.id) {
+                  <div class="panel-card" [class.selected]="selectedSoulId() === s.id" (click)="selectSoulProfile(s.id)">
+                    <div class="card-header-row">
+                      <div class="card-name">{{ s.name }}.md</div>
+                      <button class="del-btn" (click)="$event.stopPropagation(); deleteSoulProfile(s.id)" title="Delete">✕</button>
+                    </div>
+                    <div class="card-desc" style="font-size:11px;color:#888;">
+                      {{ s.content | slice:0:80 }}{{ (s.content?.length || 0) > 80 ? '…' : '' }}
+                    </div>
+                  </div>
+                } @empty {
+                  <p class="empty-hint">No soul profiles yet</p>
+                }
+              </div>
+
+              <!-- Draggable divider -->
+              <div class="soul-divider" (mousedown)="onSoulDividerMousedown($event, soulPanel)"
+                   title="Drag to resize"></div>
+
+              <!-- Lower: editor, confirm to save -->
+              <div class="soul-lower" [style.height.%]="(1 - soulSplitRatio()) * 100">
+                @if (selectedSoulId()) {
+                  <div class="edit-lower-header">
+                    <span>{{ selectedSoulId() }}.md</span>
+                    @if (!soulDraftSaved()) { <span class="unsaved-dot">● Unsaved</span> }
+                  </div>
+                  <textarea class="memory-editor" [(ngModel)]="soulDraft" (input)="onSoulEdit()"
+                    style="flex:1;width:100%;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:6px;padding:8px;font-size:12px;outline:none;resize:none;font-family:inherit;line-height:1.5;"></textarea>
+                  <div class="edit-lower-actions">
+                    <button class="btn-secondary btn-xs" (click)="discardSoulProfileEdits()" [disabled]="soulDraftSaved()">Discard</button>
+                    <button class="btn-primary btn-xs" (click)="saveSoulProfileEdits()" [disabled]="soulDraftSaved()">Save</button>
+                  </div>
+                } @else {
+                  <div class="lower-empty-hint">Select or create a soul profile to start editing</div>
+                }
+              </div>
+
+            </div>
+          }
+
+
+          @if (activeTab() === 'mcp') {
+            <div class="mcp-view">
+              <div class="mcp-header">
+                <span style="font-size:12px;color:#888">MCP 伺服器（Model Context Protocol）</span>
+                <button class="btn-secondary btn-xs" (click)="loadMcp()" [disabled]="mcpLoading()">
+                  {{ mcpLoading() ? '…' : '重新整理' }}
+                </button>
+              </div>
+              <div class="panel-list" style="margin-top: 8px;">
+
+                <!-- ── 外部服務 ── -->
+                <div class="mcp-group-label">外部服務</div>
+                @for (m of externalMcpServers(); track m.id) {
+                  <div class="panel-card"
+                    [class.active-in-chat]="isMcpLinkedToActiveAgent(m.name)"
+                    [class.expanded]="expandedMcpId() === m.id"
+                    (click)="toggleMcpExpand(m.id)">
+                    <div class="card-header-row">
+                      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;overflow:hidden;">
+                        @if (isMcpLinkedToActiveAgent(m.name)) {
+                          <span class="auth-dot active" title="目前代理人已啟用此 MCP"></span>
+                        }
+                        <span class="card-name" style="word-break:break-all;">{{ m.name }}</span>
+                      </div>
+                      <div class="binding-btns" (click)="$event.stopPropagation()">
+                        <button class="bind-btn" [class.active]="isMcpInTab(m.name)"
+                          (click)="toggleMcpInTab(m.name)"
+                          [title]="isMcpInTab(m.name) ? '從此對話移除' : '加入此對話'">
+                          {{ isMcpInTab(m.name) ? '◉' : '○' }}
+                        </button>
+                      </div>
+                      <button class="detail-btn">
+                        {{ expandedMcpId() === m.id ? '收合' : '詳情' }}
+                      </button>
+                    </div>
+                    <div class="card-desc" style="font-size: 10px; color: #888; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;" [title]="m.url">URL: {{ m.url }}</div>
+                    <div class="card-desc" style="font-size:10px;margin-top:2px;" [style.color]="getMcpColor(m.name, m.status) || '#555'">
+                      狀態: {{ m.status }}
+                    </div>
+                    @if (expandedMcpId() === m.id) {
+                      <div class="card-detail-content" (click)="$event.stopPropagation()">
+                        <div class="detail-desc">
+                          {{ expandedTranslation() !== null && expandedTranslation() !== ''
+                              ? expandedTranslation()
+                              : (m.description || '（無說明）') }}
+                          @if (expandedTranslation() === '') {
+                            <span class="translating">翻譯中…</span>
+                          }
+                        </div>
+                        @if (m.description) {
+                          <div class="detail-actions">
+                            <button class="translate-btn" (click)="translateExpanded(m.description)">
+                              {{ expandedTranslation() !== null ? '還原原文' : '翻譯成繁體中文' }}
+                            </button>
+                          </div>
+                        }
+
+                        <!-- Dockerized tag -->
+                        @if (m.dockerized) {
+                          <div style="display: flex; align-items: center; gap: 6px; margin: 4px 0; background: rgba(26, 84, 150, 0.15); border: 1px solid rgba(26, 84, 150, 0.3); border-radius: 4px; padding: 4px 8px;">
+                            <span style="font-size: 14px;">🐳</span>
+                            <div style="font-size: 10px; color: #7cb8ff;">
+                              Docker 映像檔: <code style="background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 2px; font-family: monospace;">{{ m.dockerImage }}</code>
+                            </div>
+                          </div>
+                        }
+
+                        <!-- MCP Tools List -->
+                        <div style="margin-top: 8px; border-top: 1px dashed rgba(255,255,255,0.08); padding-top: 8px;">
+                          <div style="font-size: 10px; font-weight: 600; color: #888; margin-bottom: 6px; display: flex; justify-content: space-between;">
+                            <span>可用工具 (MCP Tools)：</span>
+                            <span style="color: #666; font-size: 9px;">共 {{ (m.tools || []).length }} 個</span>
+                          </div>
+                          <div style="display: flex; flex-direction: column; gap: 6px;">
+                            @for (tool of m.tools || []; track tool.name) {
+                              <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05); border-radius: 6px; padding: 6px 8px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px;">
+                                  <span style="font-family: monospace; font-size: 11px; color: #d4a853; font-weight: 600;">🛠 {{ tool.name }}</span>
+                                  @if (tool.workflow) {
+                                    <span style="font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: 500;"
+                                          [style.background]="tool.workflow.type === 'code' ? 'rgba(124, 111, 255, 0.2)' : 'rgba(212, 168, 83, 0.2)'"
+                                          [style.color]="tool.workflow.type === 'code' ? '#9d94ff' : '#ffe18e'">
+                                      {{ tool.workflow.type === 'code' ? '💻 程式碼工作流' : '🌿 節點工作流' }}
+                                    </span>
+                                  }
+                                </div>
+                                <div style="font-size: 10px; color: #aaa; margin-top: 3px; line-height: 1.4;">{{ tool.description }}</div>
+                                
+                                <!-- Workflow detail -->
+                                @if (tool.workflow) {
+                                  <div style="margin-top: 6px; background: #0c0c0c; border: 1px solid rgba(255,255,255,0.05); border-radius: 4px; padding: 6px; overflow-x: auto;">
+                                    <div style="font-size: 9px; color: #555; font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">
+                                      <span>⚙ 執行內容/對應工作流</span>
+                                      @if (tool.workflow.dockerized) {
+                                        <span style="font-size: 9px; color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 0px 3px; border-radius: 2px; font-weight: normal;">🐳 Container</span>
+                                      }
+                                    </div>
+                                    @if (tool.workflow.type === 'code') {
+                                      <pre style="margin: 0; font-family: monospace; font-size: 10px; color: #a9ffb7; line-height: 1.4; white-space: pre-wrap; word-break: break-all;">{{ tool.workflow.content }}</pre>
+                                    } @else if (tool.workflow.type === 'node') {
+                                      <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 2px;">
+                                        @for (node of tool.workflow.content.split(' ➔ '); track $index; let last = $last) {
+                                          <div style="background: #1f1f1f; border: 1px solid #333; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #fff; font-family: monospace; white-space: nowrap;">
+                                            {{ node }}
+                                          </div>
+                                          @if (!last) {
+                                            <span style="color: #666; font-size: 10px;">➔</span>
+                                          }
+                                        }
+                                      </div>
+                                    }
+                                  </div>
+                                }
+                              </div>
+                            } @empty {
+                              <div style="font-size: 10px; color: #555; font-style: italic; padding: 2px 0;">無登錄的工具</div>
+                            }
+                          </div>
+                        </div>
+                        <!-- 標記為自建 -->
+                        <div style="margin-top:8px;border-top:1px dashed rgba(255,255,255,0.06);padding-top:8px;">
+                          <button class="btn-secondary btn-xs" (click)="toggleManagedMcp(m.name)">
+                            移至自建伺服器 ↓
+                          </button>
+                        </div>
+                      </div>
+                    }
+                  </div>
+                } @empty {
+                  <div style="font-size:10px;color:#555;font-style:italic;padding:4px 0;">無外部 MCP</div>
+                }
+
+                <!-- ── 自建伺服器 ── -->
+                <div class="mcp-group-label" style="margin-top:14px;">自建伺服器</div>
+                @for (m of selfMcpServers(); track m.id) {
+                  <div class="panel-card"
+                    [class.active-in-chat]="isMcpLinkedToActiveAgent(m.name)"
+                    [class.expanded]="expandedMcpId() === m.id"
+                    (click)="toggleMcpExpand(m.id)">
+                    <div class="card-header-row">
+                      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;overflow:hidden;">
+                        @if (isMcpLinkedToActiveAgent(m.name)) {
+                          <span class="auth-dot active"></span>
+                        }
+                        <span class="card-name" style="word-break:break-all;">{{ m.name }}</span>
+                      </div>
+                      <div class="binding-btns" (click)="$event.stopPropagation()">
+                        <button class="bind-btn" [class.active]="isMcpInTab(m.name)"
+                          (click)="toggleMcpInTab(m.name)"
+                          [title]="isMcpInTab(m.name) ? '從此對話移除' : '加入此對話'">
+                          {{ isMcpInTab(m.name) ? '◉' : '○' }}
+                        </button>
+                      </div>
+                      <!-- 管理按鈕（inline，不展開） -->
+                      <div class="mcp-ctrl-btns" (click)="$event.stopPropagation()">
+                        @if (isMcpRunning(m.status)) {
+                          <button class="mcp-ctrl-btn stop"    (click)="stopMcp(m.name)"    title="關閉">■</button>
+                          <button class="mcp-ctrl-btn restart" (click)="restartMcp(m.name)" title="重啟">↺</button>
+                        } @else {
+                          <button class="mcp-ctrl-btn start"   (click)="startMcp(m.name)"   title="啟動">▶</button>
+                        }
+                      </div>
+                      <button class="detail-btn">
+                        {{ expandedMcpId() === m.id ? '收合' : '詳情' }}
+                      </button>
+                    </div>
+                    <div class="card-desc" style="font-size:10px;color:#888;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;" [title]="m.url">URL: {{ m.url }}</div>
+                    <div class="card-desc" style="font-size:10px;margin-top:2px;display:flex;align-items:center;gap:5px;">
+                      @if (getMcpColor(m.name, m.status)) {
+                        <span class="mcp-status-dot" [style.background]="getMcpColor(m.name, m.status)"></span>
+                      }
+                      <span [style.color]="getMcpColor(m.name, m.status) || '#555'">{{ m.status }}</span>
+                    </div>
+                    @if (expandedMcpId() === m.id) {
+                      <div class="card-detail-content" (click)="$event.stopPropagation()">
+                        <!-- 工具清單 -->
+                        <div style="margin-top:4px;border-top:1px dashed rgba(255,255,255,0.08);padding-top:8px;">
+                          <div style="font-size:10px;font-weight:600;color:#888;margin-bottom:6px;display:flex;justify-content:space-between;">
+                            <span>已載入工具：</span>
+                            <span style="color:#666;font-size:9px;">共 {{ (m.tools || []).length }} 個</span>
+                          </div>
+                          @for (tool of m.tools || []; track tool.name) {
+                            <div style="font-family:monospace;font-size:11px;color:#d4a853;padding:2px 0;">🛠 {{ tool.name }}</div>
+                          } @empty {
+                            <div style="font-size:10px;color:#555;font-style:italic;">無工具（server 可能未啟動）</div>
+                          }
+                        </div>
+                        <!-- 移出自建 -->
+                        <div style="margin-top:8px;border-top:1px dashed rgba(255,255,255,0.06);padding-top:8px;">
+                          <button class="btn-secondary btn-xs" (click)="toggleManagedMcp(m.name)">
+                            移回外部服務 ↑
+                          </button>
+                        </div>
+                      </div>
+                    }
+                  </div>
+                } @empty {
+                  <div style="font-size:10px;color:#555;font-style:italic;padding:4px 0;">尚無自建伺服器（在外部服務卡片展開後可移入）</div>
+                }
+
+              </div>
+              <div style="margin-top:8px;font-size:11px;color:#555">
+                如需新增 MCP，請在終端機執行：<code>claude mcp add &lt;name&gt; &lt;command&gt;</code>
+              </div>
+            </div>
+          }
+
+        </div>
+      </aside>
+    }
+
+  </div>
+
+  <!-- Detail Modal Removed -->
+
+  <!-- ── Tab 關閉：永久儲存確認 ───────────────────────── -->
+  @if (tabCloseConfirmId()) {
+    <div class="modal-backdrop">
+      <div class="modal" (click)="$event.stopPropagation()" style="width:360px;">
+        <div class="modal-header" style="font-size:13px;font-weight:600;">儲存代理人修改？</div>
+        <div class="modal-body" style="font-size:12px;line-height:1.6;color:#ccc;">
+          <p>此對話為 <strong>{{ tabCloseConfirmAgent() }}</strong> 加入了技能或 MCP。</p>
+          <p style="color:#888;font-size:11px;">選擇「永久儲存」將寫入代理人預設設定；「放棄」則此對話結束後一切復原。</p>
+        </div>
+        <div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;">
+          <button class="btn-secondary" (click)="confirmCloseTab(false)">放棄修改</button>
+          <button class="btn-primary"   (click)="confirmCloseTab(true)">永久儲存</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- ── 狀態列設定說明 Modal ────────────────────────── -->
+  @if (showSettingsHelp()) {
+    <div class="modal-backdrop" (click)="showSettingsHelp.set(false)">
+      <div class="modal" (click)="$event.stopPropagation()" style="width: 500px; max-width: 95vw;">
+        <div class="modal-header">
+          <span>💡 狀態列設定參數說明</span>
+          <button class="icon-btn" (click)="showSettingsHelp.set(false)">✕</button>
+        </div>
+        <div class="modal-body" style="max-height: 65vh; overflow-y: auto; gap: 20px;">
+          <p style="font-size: 13px; color: #aaa; margin: 0; line-height: 1.5;">
+            這是底部狀態列（T01），三個按鈕都可以點擊循環切換，對應 Claude Code CLI 的執行參數：
+          </p>
+
+          <!-- 1. 權限模式 -->
+          <div>
+            <h4 style="color: #d4a853; margin: 0 0 8px; font-size: 14px; border-left: 3px solid #d4a853; padding-left: 8px;">🔑 Accept edits（權限模式 --permission-mode）</h4>
+            <p style="font-size: 12px; color: #aaa; margin: 0 0 8px 12px;">控制 Claude 可以主動做什麼，共 5 個等級：</p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; margin-left: 12px; width: calc(100% - 12px);">
+              <thead>
+                <tr style="border-bottom: 1px solid #333;">
+                  <th style="padding: 6px 4px; color: #888; width: 110px;">值</th>
+                  <th style="padding: 6px 4px; color: #888;">意思</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Accept edits</td>
+                  <td style="padding: 6px 4px; color: #ddd;">自動接受檔案修改，但其他操作還是問你</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Default</td>
+                  <td style="padding: 6px 4px; color: #ddd;">每個動作都問你確認</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Plan</td>
+                  <td style="padding: 6px 4px; color: #ddd;">只規劃，不執行任何動作</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Bypass</td>
+                  <td style="padding: 6px 4px; color: #ff6b6b; font-weight: 500;">完全不問，直接執行所有動作（危險）</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Auto</td>
+                  <td style="padding: 6px 4px; color: #ddd;">Claude 自動判斷何時需要詢問</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 2. 模型 -->
+          <div>
+            <h4 style="color: #d4a853; margin: 0 0 8px; font-size: 14px; border-left: 3px solid #d4a853; padding-left: 8px;">🤖 Sonnet 4.6（模型 --model）</h4>
+            <p style="font-size: 12px; color: #aaa; margin: 0 0 8px 12px;">選擇用哪個 Claude 模型，共 4 個：</p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; margin-left: 12px; width: calc(100% - 12px);">
+              <thead>
+                <tr style="border-bottom: 1px solid #333;">
+                  <th style="padding: 6px 4px; color: #888; width: 110px;">值</th>
+                  <th style="padding: 6px 4px; color: #888;">特性</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Sonnet 4.6</td>
+                  <td style="padding: 6px 4px; color: #ddd;">速度與能力平衡，預設推薦</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Opus 4.8</td>
+                  <td style="padding: 6px 4px; color: #ddd;">最強，速度較慢、費用較高</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Haiku 4.5</td>
+                  <td style="padding: 6px 4px; color: #ddd;">最快最便宜，適合簡單任務</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">Fable 5</td>
+                  <td style="padding: 6px 4px; color: #ddd;">最新旗艦</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 3. 思考深度 -->
+          <div>
+            <h4 style="color: #d4a853; margin: 0 0 8px; font-size: 14px; border-left: 3px solid #d4a853; padding-left: 8px;">🧠 medium（思考深度 --effort）</h4>
+            <p style="font-size: 12px; color: #aaa; margin: 0 0 8px 12px;">控制 Claude 在回答前花多少推理時間：</p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; margin-left: 12px; width: calc(100% - 12px);">
+              <thead>
+                <tr style="border-bottom: 1px solid #333;">
+                  <th style="padding: 6px 4px; color: #888; width: 110px;">值</th>
+                  <th style="padding: 6px 4px; color: #888;">意思</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">low</td>
+                  <td style="padding: 6px 4px; color: #ddd;">快速回應，不深思</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">medium</td>
+                  <td style="padding: 6px 4px; color: #ddd;">一般任務預設</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">high</td>
+                  <td style="padding: 6px 4px; color: #ddd;">較複雜問題</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">xhigh</td>
+                  <td style="padding: 6px 4px; color: #ddd;">深度推理</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #222;">
+                  <td style="padding: 6px 4px; font-weight: bold; color: #fff; white-space: nowrap;">max</td>
+                  <td style="padding: 6px 4px; color: #ddd;">全力推理，最慢但最準確</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p style="font-size: 12px; color: #aaa; margin: 8px 0 0; line-height: 1.5; border-top: 1px solid #333; padding-top: 12px;">
+            使用方式：點一下就循環切換到下一個值，設定會儲存到本機。每次送出訊息時這三個值會作為 CLI 參數傳給 Claude Code。
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-primary" (click)="showSettingsHelp.set(false)">關閉</button>
+        </div>
+      </div>
+    </div>
+  }
+</div>
