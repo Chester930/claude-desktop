@@ -8,6 +8,10 @@ frontend/dist/
 backend/__pycache__/
 backend/*.pyc
 backend/.venv/
+backend/build/
+backend/dist/
+backend/*.exe
+backend/*.spec
 *.egg-info/
 
 # Electron build artifacts
