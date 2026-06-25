@@ -1101,6 +1101,20 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   skillGenBusy     = signal(false);
   skillGenResult   = signal<string | null>(null);
 
+  // ── Onboarding wizard ────────────────────────────────
+  showOnboarding   = signal(false);
+  onboardingStep   = signal(1);   // 1=歡迎 2=確認連線 3=專案目錄 4=完成
+  onboardingDir    = signal('');
+  onboardingStatus = signal<any>(null);
+  onboardingSlug   = computed(() => {
+    const d = this.onboardingDir();
+    return d ? d.replace(/:/g, '-').replace(/\\/g, '-').replace(/\//g, '-') : '';
+  });
+
+  // ── Help modal ───────────────────────────────────────
+  helpOpen      = signal(false);
+  helpSection   = signal<'start'|'features'|'faq'>('start');
+
   memoryKeys       = computed(() => Object.keys(this.memory()));
   memoryTotalChars = computed(() =>
     Object.values(this.memory()).reduce((sum, v) => sum + v.length, 0)
@@ -1145,6 +1159,51 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     } catch {}
 
     this.loadMcp();
+
+    // 首次啟動精靈
+    if (!localStorage.getItem('claude_onboarding_done')) {
+      setTimeout(() => {
+        this.showOnboarding.set(true);
+        this.claude.getStatus().subscribe(s => this.onboardingStatus.set(s));
+      }, 600);
+    }
+  }
+
+  // ── Onboarding methods ──────────────────────────────
+  nextOnboardingStep() {
+    const s = this.onboardingStep();
+    if (s < 4) { this.onboardingStep.set(s + 1); }
+    else        { this.completeOnboarding(); }
+  }
+  prevOnboardingStep() {
+    const s = this.onboardingStep();
+    if (s > 1) this.onboardingStep.set(s - 1);
+  }
+  completeOnboarding() {
+    const dir = this.onboardingDir().trim();
+    if (dir) {
+      this.claude.setConfig({ projectDir: dir }).subscribe();
+      this.settingsForm.projectDir = dir;
+      this.settings.save(this.settingsForm);
+    }
+    localStorage.setItem('claude_onboarding_done', '1');
+    this.showOnboarding.set(false);
+    this.reload();
+  }
+  skipOnboarding() {
+    localStorage.setItem('claude_onboarding_done', '1');
+    this.showOnboarding.set(false);
+  }
+  resetOnboarding() {   // 可從設定手動重開精靈
+    localStorage.removeItem('claude_onboarding_done');
+    this.onboardingStep.set(1);
+    this.onboardingDir.set('');
+    this.showOnboarding.set(true);
+    this.claude.getStatus().subscribe(s => this.onboardingStatus.set(s));
+  }
+  async pickOnboardingDir() {
+    const dir = await this.claude.pickDirectory();
+    if (dir) this.onboardingDir.set(dir);
   }
 
   openSettings() {
