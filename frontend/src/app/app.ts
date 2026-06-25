@@ -1704,6 +1704,46 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (dir) this.onboardingDir.set(dir);
   }
 
+  // ── 左下角使用者選單 ──────────────────────────────────────────────────────
+  userMenuOpen = signal(false);
+
+  openExternalUrl(url: string) {
+    const api = (window as any).electronAPI;
+    if (api?.openExternal) api.openExternal(url);
+    else window.open(url, '_blank');
+  }
+
+  openHelp() {
+    this.openExternalUrl('https://docs.anthropic.com/zh-TW/docs/claude-code/overview');
+    this.userMenuOpen.set(false);
+  }
+
+  openFeedback() {
+    this.openExternalUrl('https://github.com/anthropics/claude-code/issues');
+    this.userMenuOpen.set(false);
+  }
+
+  toggleLang() {
+    const next = this.settings.get().lang === 'zh' ? 'en' : 'zh';
+    this.settings.save({ lang: next });
+    this.settingsForm.lang = next;
+  }
+
+  checkForUpdates() {
+    this.userMenuOpen.set(false);
+    const api = (window as any).electronAPI;
+    if (api?.checkForUpdates) { api.checkForUpdates(); return; }
+    this.showToast('請使用發行版（非 dev 模式）才能自動更新');
+  }
+
+  logoutClaude() {
+    this.userMenuOpen.set(false);
+    this.claude.runCliCommand(['logout']).subscribe({
+      next: out => this.showToast(out || '已登出 Claude Code'),
+      error: ()  => this.showToast('登出指令執行失敗'),
+    });
+  }
+
   openSettings() {
     this.settingsForm = this.settings.get();
     this.settingsOpen.set(true);

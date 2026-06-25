@@ -488,6 +488,55 @@
           }
         </div>
         <div class="sidebar-resize" (mousedown)="onResizeStart($event)" title="拖曳調整寬度"></div>
+
+        <!-- ── 左下角使用者選單 ── -->
+        <div class="sidebar-footer">
+          <!-- 浮動選單 overlay -->
+          @if (userMenuOpen()) {
+            <div class="umenu-overlay" (click)="userMenuOpen.set(false)"></div>
+            <div class="umenu-popup">
+              <div class="umenu-header">tyjh22417&#64;gmail.com</div>
+              <div class="umenu-sep"></div>
+
+              <button class="umenu-item" (click)="openSettings(); userMenuOpen.set(false)">
+                <span class="umenu-icon">⚙</span><span>設定</span>
+                <span class="umenu-kbd">Ctrl+,</span>
+              </button>
+              <button class="umenu-item" (click)="toggleLang(); userMenuOpen.set(false)">
+                <span class="umenu-icon">🌐</span><span>語言 / Language</span>
+                <span class="umenu-arrow">›</span>
+              </button>
+              <button class="umenu-item" (click)="openHelp()">
+                <span class="umenu-icon">❓</span><span>說明文件</span>
+              </button>
+              <button class="umenu-item" (click)="openFeedback()">
+                <span class="umenu-icon">✦</span><span>回饋意見</span>
+              </button>
+
+              <div class="umenu-sep"></div>
+
+              <button class="umenu-item" (click)="runDoctor(); userMenuOpen.set(false)">
+                <span class="umenu-icon">🩺</span><span>Claude 診斷</span>
+              </button>
+              <button class="umenu-item" (click)="checkForUpdates(); userMenuOpen.set(false)">
+                <span class="umenu-icon">⬇</span><span>檢查更新</span>
+              </button>
+
+              <div class="umenu-sep"></div>
+
+              <button class="umenu-item umenu-danger" (click)="logoutClaude()">
+                <span class="umenu-icon">⏻</span><span>登出 Claude Code</span>
+              </button>
+            </div>
+          }
+
+          <!-- 底部按鈕列 -->
+          <button class="umenu-trigger" (click)="userMenuOpen.set(!userMenuOpen())">
+            <span class="umenu-avatar">你</span>
+            <span class="umenu-label">Claude Code 使用者</span>
+            <span class="umenu-caret">⌄</span>
+          </button>
+        </div>
       </aside>
     }
 

@@ -132,6 +132,10 @@ ipcMain.handle('dialog:openDirectory', async () => {
   return result.filePaths[0] ?? null;
 });
 
+ipcMain.handle('shell:openExternal', (_, url) => {
+  shell.openExternal(url);
+});
+
 ipcMain.handle('notify', (_, { title, body }) => {
   if (Notification.isSupported()) new Notification({ title, body }).show();
 });
