@@ -231,9 +231,79 @@ GET  /api/agents/registry  — 取得所有 agent 能力摘要
 - [ ] P1-F5：Memory 頁籤：agent 關聯的 key 自動勾入上下文
 - [ ] P1-F6：MCP 頁籤：agent 需要的 MCP 顯示「此 Agent 需要」提示
 
-**Skill frontmatter 擴充**
-- [ ] P1-S1：後端解析 skill 的 `mcp / memory / output_memory`
-- [ ] P1-S2：Skill 詳細面板顯示依賴（MCP、讀取 Memory、輸出 Memory）
+**Agent Mapping 管理 UI**
+- [ ] P1-M1：後端 `POST /api/agents`（建立新 agent，寫空白 `.md` 模板）
+- [ ] P1-M2：後端 `DELETE /api/agents/:id`（刪除 agent `.md` 檔）
+- [ ] P1-M3：Agent 編輯器 Modal — 基本資訊（name / description / soul 下拉選單）
+- [ ] P1-M4：Agent 編輯器 — Skills 多選區（checkbox 列表 + 搜尋，來自現有 skills）
+- [ ] P1-M5：Agent 編輯器 — MCPs 多選區（來自現有 MCP 設定）
+- [ ] P1-M6：Agent 編輯器 — Memory 讀取鍵多選（來自現有 memory keys）
+- [ ] P1-M7：Agent 編輯器 — output_memory 鍵設定（自由輸入 key 名稱）
+- [ ] P1-M8：Agent 編輯器 — 儲存 → 寫回 `.md` frontmatter（呼叫 P1-B3）
+- [ ] P1-M9：Agent 頁籤加「＋ 建立 Agent」按鈕 + 刪除確認對話框
+
+```
+Agent 編輯器 UI 草圖：
+┌──────────────────────────────────────┐
+│ 編輯 Agent：code-reviewer            │
+├──────────────────────────────────────┤
+│ 名稱       [code-reviewer          ] │
+│ 說明       [程式碼審查專家          ] │
+│ Soul       [自我介紹 ▼             ] │
+├──────────────────────────────────────┤
+│ Skills（多選）                        │
+│ ☑ typescript-reviewer               │
+│ ☑ security-review                   │
+│ ☐ tdd-guide                         │
+├──────────────────────────────────────┤
+│ MCPs（多選）                          │
+│ ☑ github   ☐ linear   ☐ slack      │
+├──────────────────────────────────────┤
+│ Memory 讀取                          │
+│ ☑ project-conventions               │
+│ ☑ known-bugs                        │
+├──────────────────────────────────────┤
+│ Memory 輸出（寫入）                   │
+│ [review-result              ] [＋]   │
+├──────────────────────────────────────┤
+│              [取消]  [儲存]           │
+└──────────────────────────────────────┘
+```
+
+---
+
+**Skill Mapping 管理 UI**
+- [ ] P1-S1：後端解析 skill frontmatter 的 `mcp / memory / output_memory`
+- [ ] P1-S2：後端 `GET /api/skills/:id`（回傳單一 skill 完整 frontmatter + 內容）
+- [ ] P1-S3：後端 `PUT /api/skills/:id`（更新 skill frontmatter，保留 body 內容）
+- [ ] P1-S4：Skill 卡片顯示依賴摘要（MCP N｜讀 Mem N｜輸出 Mem N）
+- [ ] P1-S5：Skill 編輯器 Modal — MCPs 多選區
+- [ ] P1-S6：Skill 編輯器 — Memory 讀取鍵多選
+- [ ] P1-S7：Skill 編輯器 — output_memory 鍵設定（給下游 Agent 讀取）
+- [ ] P1-S8：Skill 編輯器 — 儲存 → 寫回 `.md` frontmatter（呼叫 P1-S3）
+- [ ] P1-S9：Skills 頁籤加「編輯」按鈕（每張 skill 卡片右上角）
+
+```
+Skill 編輯器 UI 草圖：
+┌──────────────────────────────────────┐
+│ 編輯 Skill：typescript-reviewer      │
+├──────────────────────────────────────┤
+│ 說明（唯讀）：TypeScript 程式碼審查  │
+├──────────────────────────────────────┤
+│ 依賴 MCPs                            │
+│ ☑ github   ☐ linear                 │
+├──────────────────────────────────────┤
+│ 讀取 Memory                          │
+│ ☑ project-conventions               │
+│ ☐ known-bugs                        │
+├──────────────────────────────────────┤
+│ 輸出 Memory（寫入）                  │
+│ [review-result              ] [＋]   │
+│ [ts-issues                  ] [✕]   │
+├──────────────────────────────────────┤
+│              [取消]  [儲存]           │
+└──────────────────────────────────────┘
+```
 
 ---
 
