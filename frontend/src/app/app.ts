@@ -392,8 +392,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   newSoulName = '';
 
   // Resizing signals & state
-  sidebarWidth   = signal(200);
-  rightWidth     = signal(260);
+  sidebarWidth   = signal(300);
+  rightWidth     = signal(390);
   inputHeight    = signal(140);
   soulSplitRatio = signal(0.5);   // 0 = all upper, 1 = all lower
 
@@ -440,9 +440,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   @HostListener('document:mousemove', ['$event'])
   onMouseMove(e: MouseEvent) {
     if (this._resizing) {
-      this.sidebarWidth.set(Math.max(140, Math.min(420, this._startW + (e.clientX - this._startX))));
+      this.sidebarWidth.set(Math.max(200, Math.min(560, this._startW + (e.clientX - this._startX))));
     } else if (this._rightResizing) {
-      this.rightWidth.set(Math.max(200, Math.min(500, this._startWRight - (e.clientX - this._startXRight))));
+      this.rightWidth.set(Math.max(280, Math.min(700, this._startWRight - (e.clientX - this._startXRight))));
     } else if (this._inputResizing) {
       this.inputHeight.set(Math.max(100, Math.min(400, this._startHInput - (e.clientY - this._startYInput))));
     } else if (this._soulResizing && this._soulPanelHeight > 0) {
