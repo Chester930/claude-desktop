@@ -699,7 +699,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   toggleMic() {
-    alert('🎤 語音輸入功能即將推出，敬請期待！');
+    this.showToast('語音輸入即將推出，敬請期待！', 'info');
   }
   cycleEffort() {
     const idx = (this.EFFORT_OPTIONS.indexOf(this.effort() as any) + 1) % this.EFFORT_OPTIONS.length;
@@ -1006,9 +1006,36 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     );
   }
 
+  // ── Toast notification system ────────────────────────────────────────────
+  toasts = signal<{ id: string; text: string; type: 'success' | 'error' | 'info' | 'warn' }[]>([]);
+
+  showToast(text: string, type: 'success' | 'error' | 'info' | 'warn' = 'info', duration = 3000) {
+    const id = `t-${Date.now()}-${Math.random()}`;
+    this.toasts.update(t => [...t, { id, text, type }]);
+    setTimeout(() => this.toasts.update(t => t.filter(x => x.id !== id)), duration);
+  }
+
+  dismissToast(id: string) {
+    this.toasts.update(t => t.filter(x => x.id !== id));
+  }
+
   // Copy message
   copyMessage(text: string) {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(text).then(() => this.showToast('已複製到剪貼簿', 'success', 1500));
+  }
+
+  // Code block copy (event delegation from chat container)
+  onChatClick(e: MouseEvent) {
+    const btn = (e.target as HTMLElement).closest('[data-copy-code]') as HTMLElement | null;
+    if (!btn) return;
+    const code = btn.closest('.code-block-wrap')?.querySelector('code') as HTMLElement | null;
+    if (!code) return;
+    navigator.clipboard.writeText(code.innerText).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = '✓ 已複製';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+    });
   }
 
   // Message edit + regenerate (#11)
@@ -1239,11 +1266,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!file) return;
     const res = await this.claude.restoreBackup(file);
     if (res.ok) {
-      alert('還原成功！重新整理中…');
+      this.showToast('還原成功！重新整理中…', 'success');
       this.reload();
       this.claude.getSoul().subscribe(s => { this.soulContent = s; });
     } else {
-      alert('還原失敗：' + res.error);
+      this.showToast('還原失敗：' + res.error, 'error', 5000);
     }
     input.value = '';
   }
@@ -1617,7 +1644,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       },
       error: (err) => {
         console.error(err);
-        alert('Failed to create soul profile. Name must only contain letters, numbers, hyphens (-) or underscores (_).');
+        this.showToast('名稱只能包含字母、數字、連字號（-）或底線（_）', 'error', 4000);
       }
     });
   }

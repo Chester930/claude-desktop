@@ -1,5 +1,15 @@
 <div class="app-shell">
 
+  <!-- ── Toast notifications ───────────────────────── -->
+  <div class="toast-container" aria-live="polite">
+    @for (t of toasts(); track t.id) {
+      <div class="toast toast-{{ t.type }}" (click)="dismissToast(t.id)" role="alert">
+        <span class="toast-icon">{{ t.type === 'success' ? '✓' : t.type === 'error' ? '✕' : t.type === 'warn' ? '⚠' : 'ℹ' }}</span>
+        <span class="toast-text">{{ t.text }}</span>
+      </div>
+    }
+  </div>
+
   <!-- ── 首次啟動精靈 ──────────────────────────────── -->
   @if (showOnboarding()) {
     <div class="onboarding-backdrop">
@@ -134,7 +144,7 @@
 
   <!-- ── 頂部導覽列 ────────────────────────────────── -->
   <header class="topbar">
-    <button class="icon-btn" (click)="sidebarOpen.set(!sidebarOpen())" title="切換側欄">☰</button>
+    <button class="icon-btn" (click)="sidebarOpen.set(!sidebarOpen())" title="切換側欄" aria-label="切換側欄">☰</button>
     <span class="logo">⚡ Claude 桌面版</span>
 
 
@@ -166,11 +176,11 @@
         <option value="json">.json</option>
         <option value="txt">.txt</option>
       </select>
-      <button class="icon-btn" (click)="exportChat()" title="匯出對話" [disabled]="!messages().length">⬇</button>
-      <button class="icon-btn" (click)="reload()" title="重新整理">↻</button>
-      <button class="icon-btn" (click)="helpOpen.set(true)" title="說明中心">❓</button>
-      <button class="icon-btn" (click)="openSettings()" title="設定">⚙</button>
-      <button class="icon-btn" (click)="rightOpen.set(!rightOpen())" title="切換右側面板">⊞</button>
+      <button class="icon-btn" (click)="exportChat()" title="匯出對話" aria-label="匯出對話" [disabled]="!messages().length">⬇</button>
+      <button class="icon-btn" (click)="reload()" title="重新整理" aria-label="重新整理">↻</button>
+      <button class="icon-btn" (click)="helpOpen.set(true)" title="說明中心" aria-label="說明中心">❓</button>
+      <button class="icon-btn" (click)="openSettings()" title="設定" aria-label="開啟設定">⚙</button>
+      <button class="icon-btn" (click)="rightOpen.set(!rightOpen())" title="切換右側面板" aria-label="切換右側面板">⊞</button>
     </div>
   </header>
 
@@ -444,7 +454,7 @@
                     (dragstart)="onSessionDragStart(s, $event)"
                     (click)="loadSession(s)"
                     (dblclick)="startRename(s, $event)"
-                    [title]="'點擊載入 / 拖曳到畫布新增面板'">
+                    [title]="s.title + '\n雙擊重新命名'">
                     <span class="session-title">{{ s.title }}</span>
                     <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
                     @if (s.snippet && sessionSearch) {
@@ -536,7 +546,7 @@
 
               @if (activeChatId() === tab.id) {
                 <!-- 活躍面板：live 串流 + 完整渲染 -->
-                <div class="panel-messages" #scrollArea (scroll)="onMessagesScroll()">
+                <div class="panel-messages" #scrollArea (scroll)="onMessagesScroll()" (click)="onChatClick($event)">
                   @if (showScrollBtn()) {
                     <button class="scroll-bottom-btn" (click)="scrollToBottom()">↓</button>
                   }
@@ -546,6 +556,7 @@
                         <div class="bubble system-bubble">{{ msg.text }}</div>
                       }
                       @if (msg.role === 'user') {
+                        <span class="msg-avatar user-avatar" aria-hidden="true">你</span>
                         @if (editingMsgIdx() === $index) {
                           <div class="msg-edit-wrap">
                             <textarea class="msg-edit-input"
@@ -574,11 +585,18 @@
                           @if (msg.cost && msg.cost > 0) {
                             <span class="msg-cost" title="本則訊息費用">${{ msg.cost.toFixed(4) }}</span>
                           }
-                          <button class="copy-btn" (click)="copyMessage(msg.text)" title="複製">⎘</button>
+                          @if (!msg.isStreaming || msg.text) {
+                            <button class="copy-btn" (click)="copyMessage(msg.text)" title="複製訊息" aria-label="複製訊息">⎘</button>
+                          }
                           @if (msg.isStreaming && !msg.text) {
-                            <span class="cursor"></span>
+                            <!-- Loading skeleton while waiting for first token -->
+                            <div class="msg-skeleton" aria-label="Claude 思考中">
+                              <div class="skeleton-line" style="width:78%"></div>
+                              <div class="skeleton-line" style="width:55%"></div>
+                              <div class="skeleton-line" style="width:35%"></div>
+                            </div>
                           } @else {
-                            <div class="md-body" [class.cursor]="msg.isStreaming"
+                            <div class="md-body" [class.streaming]="msg.isStreaming"
                                  [innerHTML]="msg.text | markdown"></div>
                           }
                         </div>
@@ -789,6 +807,11 @@
             </button>
           </div>
           <div class="statusbar-right">
+            @if (inputText.length > 500) {
+              <span class="char-count" [class.warn]="inputText.length > 3000">
+                {{ inputText.length }}/4000
+              </span>
+            }
             <button class="sb-btn" (click)="cycleModel()" [title]="'模型：' + model()">
               {{ MODEL_LABELS[model()] || model() }}
             </button>

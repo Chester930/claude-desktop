@@ -192,12 +192,12 @@ body {
   gap: 12px;
 }
 
-.msg { display: flex; }
+.msg { display: flex; align-items: flex-start; }
 
 .msg-user       { justify-content: flex-end; }
 .msg-assistant  { justify-content: flex-start; }
 .msg-tool       { justify-content: flex-start; }
-.msg-error      { justify-content: flex-start; }
+.msg-error      { justify-content: flex-start; align-items: center; }
 
 .bubble {
   max-width: 75%;
@@ -2744,4 +2744,178 @@ body {
   padding: 5px 12px;
   border-radius: 6px;
   margin-top: 6px;
+}
+
+// ── UX Polish Styles ──────────────────────────────────────────────────────
+
+// Toast notifications
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 200px;
+  max-width: 360px;
+  pointer-events: all;
+  cursor: pointer;
+  animation: toast-slide-in 0.25s ease;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  &-success { background: #14532d; border: 1px solid #16a34a; color: #bbf7d0; }
+  &-error   { background: #450a0a; border: 1px solid #dc2626; color: #fca5a5; }
+  &-warn    { background: #451a03; border: 1px solid #d97706; color: #fcd34d; }
+  &-info    { background: #1e1b4b; border: 1px solid #6366f1; color: #c7d2fe; }
+  .toast-icon { font-size: 14px; flex-shrink: 0; }
+  .toast-text { flex: 1; }
+}
+@keyframes toast-slide-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+// Sidebar open/close animation
+.sidebar {
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+
+// Code block header + copy button
+.code-block-wrap {
+  position: relative;
+  margin: 8px 0;
+  .code-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    padding: 4px 10px;
+  }
+  .code-lang {
+    font-size: 10px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .copy-code-btn {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid #30363d;
+    background: #21262d;
+    color: #8b949e;
+    cursor: pointer;
+    transition: all 0.15s;
+    &:hover { background: #30363d; color: #e6edf3; }
+    &.copied { background: #14532d; color: #86efac; border-color: #16a34a; }
+  }
+  pre {
+    margin: 0;
+    border-radius: 0 0 6px 6px;
+    border-top: none;
+  }
+}
+
+// Loading skeleton (waiting for first streaming token)
+.msg-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 4px 0 2px;
+  min-width: 160px;
+}
+.skeleton-line {
+  height: 11px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #2a2a3a 25%, #3a3a4e 50%, #2a2a3a 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite ease-in-out;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+// Streaming cursor (shown at end of streaming text)
+.md-body.streaming::after {
+  content: '▋';
+  display: inline-block;
+  animation: cursor-blink 1s step-end infinite;
+  margin-left: 2px;
+  color: var(--accent, #a3e635);
+  vertical-align: baseline;
+}
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+// User message avatar badge
+.msg-avatar {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  margin-top: 10px;
+  align-self: flex-start;
+}
+.user-avatar {
+  background: #3d4f2a;
+  color: #a3e635;
+  border: 1px solid #4a5e30;
+  order: 1; // appears after bubble (user messages are flex-end)
+  margin-left: 6px;
+}
+
+// Character count indicator
+.char-count {
+  font-size: 10px;
+  color: #6b7280;
+  padding: 2px 6px;
+  border-radius: 4px;
+  &.warn { color: #f59e0b; background: rgba(245,158,11,0.1); }
+}
+
+// Improved error bubble
+.error-bubble {
+  background: #1a0505;
+  border: 1px solid #7f1d1d;
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: #fca5a5;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  .retry-btn {
+    margin-left: auto;
+    background: #7f1d1d;
+    color: #fca5a5;
+    border: 1px solid #991b1b;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    flex-shrink: 0;
+    &:hover { background: #991b1b; }
+  }
 }

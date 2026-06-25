@@ -10,7 +10,14 @@ marked.use({
     code({ text, lang }: { text: string; lang?: string }) {
       const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext';
       const highlighted = hljs.highlight(text, { language }).value;
-      return `<pre><code class="hljs language-${language}">${highlighted}</code></pre>`;
+      const langLabel = lang ? lang : 'code';
+      return `<div class="code-block-wrap">
+  <div class="code-block-header">
+    <span class="code-lang">${langLabel}</span>
+    <button class="copy-code-btn" data-copy-code="1">複製</button>
+  </div>
+  <pre><code class="hljs language-${language}">${highlighted}</code></pre>
+</div>`;
     }
   }
 });
@@ -22,7 +29,10 @@ export class MarkdownPipe implements PipeTransform {
   transform(value: string): SafeHtml {
     if (!value) return '';
     const html = marked.parse(value) as string;
-    const clean = DOMPurify.sanitize(html, { ADD_ATTR: ['class'] });
+    const clean = DOMPurify.sanitize(html, {
+      ADD_ATTR: ['class', 'data-copy-code'],
+      ADD_TAGS: ['button'],
+    });
     return this.sanitizer.bypassSecurityTrustHtml(clean);
   }
 }
