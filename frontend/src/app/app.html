@@ -954,9 +954,6 @@
                       </button>
                       <span class="card-name">@{{ a.name }}</span>
                     </div>
-                    <button class="detail-btn" (click)="$event.stopPropagation(); openDetail({id: a.id, label: '代理人', name: '@'+a.name, description: a.description, type: 'agent'})">
-                      詳情
-                    </button>
                   </div>
                   @if (expandedAgentId() === a.id) {
                     <div class="card-detail-content" (click)="$event.stopPropagation()">
@@ -1045,9 +1042,6 @@
                         {{ isSkillInTab(s.id) ? '◉' : '○' }}
                       </button>
                     </div>
-                    <button class="detail-btn" (click)="$event.stopPropagation(); openDetail({id: s.id, label: '技能', name: '/'+s.name, description: s.description, type: 'skill'})">
-                      詳情
-                    </button>
                   </div>
                   @if (expandedSkillId() === s.id) {
                     <div class="card-detail-content" (click)="$event.stopPropagation()">
