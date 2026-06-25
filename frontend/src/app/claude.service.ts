@@ -100,6 +100,12 @@ export class ClaudeService {
     return this.http.delete(`${this.api}/souls/${id}`);
   }
 
+  renameSoulProfile(oldId: string, newName: string): Observable<{ ok: boolean; id: string }> {
+    return this.http.patch<{ ok: boolean; id: string }>(
+      `${this.api}/souls/${encodeURIComponent(oldId)}`, { new_name: newName }
+    );
+  }
+
   translate(text: string): Observable<string> {
     return this.http.post<{ result: string }>(`${this.api}/translate`, { text }).pipe(
       map(r => r.result)

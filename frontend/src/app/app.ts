@@ -390,6 +390,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   soulDraft = '';
   soulDraftSaved = signal(true);
   newSoulName = '';
+  renamingSoulId = signal<string | null>(null);
+  renameSoulInput = '';
 
   // Resizing signals & state
   sidebarWidth   = signal(300);
@@ -1961,12 +1963,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   addSoulProfile() {
-    let name = this.newSoulName.trim();
-    if (!name) return;
-    if (name.toLowerCase().endsWith('.md')) {
-      name = name.slice(0, -3).trim();
+    // Auto-generate default name if none given
+    let name = this.newSoulName.trim().replace(/\.md$/i, '').trim();
+    if (!name) {
+      const existing = this.souls().map(s => s.id);
+      let n = 1;
+      while (existing.includes(`靈魂-${n}`)) n++;
+      name = `靈魂-${n}`;
     }
-    if (!name) return;
     const id = name.replace(/\s+/g, '-');
     const defaultContent = `# ${name}
 
@@ -1998,6 +2002,28 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         console.error(err);
         this.showToast('名稱只能包含字母、數字、連字號（-）或底線（_）', 'error', 4000);
       }
+    });
+  }
+
+  startRenameSoul(id: string, e: Event) {
+    e.stopPropagation();
+    this.renamingSoulId.set(id);
+    this.renameSoulInput = id;
+  }
+
+  confirmRenameSoul(oldId: string) {
+    const newName = this.renameSoulInput.trim().replace(/\.md$/i, '').trim();
+    this.renamingSoulId.set(null);
+    if (!newName || newName === oldId) return;
+    this.claude.renameSoulProfile(oldId, newName).subscribe({
+      next: (res) => {
+        const newId = res.id || newName;
+        this.claude.getSouls().subscribe(list => {
+          this.souls.set(list);
+          if (this.selectedSoulId() === oldId) this.selectedSoulId.set(newId);
+        });
+      },
+      error: () => this.showToast('改名失敗，名稱可能已存在', 'error', 3000),
     });
   }
 

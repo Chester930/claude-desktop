@@ -1266,17 +1266,23 @@
                 <p class="soul-hint">
                   You can set multiple personas. All will be merged and injected into Claude on every turn. Scroll wheel to cycle.
                 </p>
-                <div class="soul-create-form">
-                  <input [(ngModel)]="newSoulName" placeholder="New soul name…" class="schedule-input"
-                    style="flex:1;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:11px;outline:none;"
-                    (keydown.enter)="addSoulProfile()">
-                  <button class="btn-primary" (click)="addSoulProfile()" [disabled]="!newSoulName.trim()"
-                    style="font-size:11px;padding:4px 8px;flex-shrink:0;">+ Add</button>
-                </div>
+                <button class="btn-primary soul-add-btn" (click)="addSoulProfile()">＋ 新增靈魂</button>
+
                 @for (s of souls(); track s.id) {
                   <div class="panel-card" [class.selected]="selectedSoulId() === s.id" (click)="selectSoulProfile(s.id)">
                     <div class="card-header-row">
-                      <div class="card-name">{{ s.name }}.md</div>
+                      @if (renamingSoulId() === s.id) {
+                        <input class="soul-rename-input"
+                          [(ngModel)]="renameSoulInput"
+                          (keydown.enter)="confirmRenameSoul(s.id)"
+                          (keydown.escape)="renamingSoulId.set(null)"
+                          (blur)="confirmRenameSoul(s.id)"
+                          (click)="$event.stopPropagation()"
+                          autofocus>
+                      } @else {
+                        <div class="card-name">{{ s.name }}.md</div>
+                        <button class="soul-rename-btn" (click)="startRenameSoul(s.id, $event)" title="重新命名">✏</button>
+                      }
                       <button class="del-btn" (click)="$event.stopPropagation(); deleteSoulProfile(s.id)" title="Delete">✕</button>
                     </div>
                     <div class="card-desc" style="font-size:11px;color:#888;">
@@ -1284,7 +1290,7 @@
                     </div>
                   </div>
                 } @empty {
-                  <p class="empty-hint">No soul profiles yet</p>
+                  <p class="empty-hint">尚無靈魂設定檔，點「＋ 新增靈魂」建立</p>
                 }
               </div>
 
@@ -1296,7 +1302,8 @@
               <div class="soul-lower" [style.height.%]="(1 - soulSplitRatio()) * 100">
                 @if (selectedSoulId()) {
                   <div class="edit-lower-header">
-                    <span>{{ selectedSoulId() }}.md</span>
+                    <span class="soul-filename">{{ selectedSoulId() }}.md</span>
+                    <button class="soul-rename-btn" (click)="startRenameSoul(selectedSoulId(), $event)" title="重新命名">✏</button>
                     @if (!soulDraftSaved()) { <span class="unsaved-dot">● Unsaved</span> }
                   </div>
                   <textarea class="memory-editor" [(ngModel)]="soulDraft" (input)="onSoulEdit()"

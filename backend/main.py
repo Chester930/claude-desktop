@@ -845,6 +845,26 @@ async def handle_soul_save(request: web.Request) -> web.Response:
     (SOULS_DIR / f"{sid}.md").write_text(content, encoding="utf-8")
     return web.json_response({"ok": True})
 
+async def handle_soul_rename(request: web.Request) -> web.Response:
+    old_id = request.match_info["id"]
+    if old_id.lower().endswith(".md"):
+        old_id = old_id[:-3]
+    data = await request.json()
+    new_id = data.get("new_name", "").strip()
+    if new_id.lower().endswith(".md"):
+        new_id = new_id[:-3]
+    new_id = new_id.strip()
+    if not new_id:
+        return web.json_response({"error": "empty name"}, status=400)
+    old_file = SOULS_DIR / f"{old_id}.md"
+    new_file = SOULS_DIR / f"{new_id}.md"
+    if not old_file.exists():
+        return web.json_response({"error": "not found"}, status=404)
+    if new_file.exists() and old_id != new_id:
+        return web.json_response({"error": "already exists"}, status=409)
+    old_file.rename(new_file)
+    return web.json_response({"ok": True, "id": new_id})
+
 async def handle_soul_delete(request: web.Request) -> web.Response:
     sid = request.match_info["id"]
     if sid.lower().endswith(".md"):
@@ -1555,6 +1575,7 @@ def build_app() -> web.Application:
         ("PUT",    "/api/soul",           handle_soul_put),
         ("GET",    "/api/souls",          handle_souls_list),
         ("PUT",    "/api/souls/{id}",     handle_soul_save),
+        ("PATCH",  "/api/souls/{id}",     handle_soul_rename),
         ("DELETE", "/api/souls/{id}",  handle_soul_delete),
         ("GET",    "/api/sessions",                      handle_sessions),
         ("POST",   "/api/sessions/resume",              handle_resume_session),

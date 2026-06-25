@@ -2466,6 +2466,47 @@ body {
   }
 }
 
+.soul-add-btn {
+  width: 100%;
+  margin-bottom: 8px;
+  font-size: 12px;
+  padding: 6px 0;
+}
+
+.soul-rename-btn {
+  background: transparent;
+  border: none;
+  color: #555;
+  font-size: 11px;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 3px;
+  flex-shrink: 0;
+  &:hover { color: #ccc; background: rgba(255,255,255,0.07); }
+}
+
+.soul-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(212,168,83,0.4);
+  border-radius: 4px;
+  color: #e8e8e8;
+  font-size: 12px;
+  padding: 2px 6px;
+  outline: none;
+  &:focus { border-color: #d4a853; }
+}
+
+.soul-filename {
+  flex: 1;
+  font-size: 12px;
+  color: $text-dim;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 // Draggable divider between upper and lower
 .soul-divider {
   flex-shrink: 0;
