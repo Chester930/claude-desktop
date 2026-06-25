@@ -409,10 +409,7 @@
       <aside class="sidebar" [style.width.px]="sidebarWidth()">
         <div class="sidebar-header">
           <span class="sidebar-title-label">對話紀錄</span>
-          <div style="display:flex;gap:4px">
-            <button class="new-chat-btn" (click)="continueLastSession()" title="繼續上次對話">⏎</button>
-            <button class="new-chat-btn" (click)="newChat()">＋ 新對話</button>
-          </div>
+          <button class="new-chat-btn" (click)="newChat()">＋ 新對話</button>
         </div>
 
         <!-- 搜尋 + 分組切換 -->
@@ -427,7 +424,12 @@
 
         <div class="session-list">
           @for (group of activeGroupedSessions(); track group.label) {
-            <div class="session-group-label" [class.pinned-label]="group['pinned']">{{ group.label }}</div>
+            <div class="session-group-label" [class.pinned-label]="group['pinned']">
+              <span class="sgl-name">{{ group.label }}</span>
+              @if (group['subLabel']) {
+                <span class="sgl-path" [title]="group['subLabel']">{{ group['subLabel'] }}</span>
+              }
+            </div>
             @for (s of group.items; track s.id) {
               <div class="session-item-wrap" [class.pinned]="isPinned(s.id)"
                    [attr.data-color]="getSessionMeta(s.id).color || null">

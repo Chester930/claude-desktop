@@ -8,7 +8,7 @@ export interface Agent   { id: string; name: string; description: string; }
 export interface Skill   { id: string; name: string; description: string; }
 export interface Session {
   id: string; title: string; mtime: number; snippet?: string;
-  projectDir?: string; messageCount?: number;
+  projectDir?: string; projectPath?: string; messageCount?: number;
 }
 export interface Profile { slug: string; mtime: number; memoryCount: number; hasSoul: boolean; hasSchedules: boolean; }
 export interface SoulProfile { id: string; name: string; content: string; }

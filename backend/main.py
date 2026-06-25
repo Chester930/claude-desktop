@@ -131,9 +131,29 @@ def _migrate_db() -> None:
             c.execute("ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0")
         if "file_path" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN file_path TEXT NOT NULL DEFAULT ''")
+        if "project_path" not in cols:
+            c.execute("ALTER TABLE sessions ADD COLUMN project_path TEXT NOT NULL DEFAULT ''")
 
 _init_db()
 _migrate_db()
+
+def _read_session_cwd(f: Path) -> str:
+    """Read the first cwd value found in a session JSONL (scans at most 20 lines)."""
+    try:
+        with f.open(encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i >= 20:
+                    break
+                try:
+                    ev = json.loads(line)
+                    cwd = ev.get("cwd", "")
+                    if cwd:
+                        return cwd
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return ""
 
 def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int, int]:
     """Parse a JSONL session file — returns (title, search_text, inp_tok, out_tok, msg_count)."""
@@ -188,17 +208,19 @@ def _sync_index() -> None:
                 if indexed.get(sid) == mtime:
                     continue
                 title, search_text, inp, out, msg_count = _parse_jsonl_session(f)
+                project_path = _read_session_cwd(f)
                 c.execute("""
-                    INSERT INTO sessions(id, title, mtime, search_text, input_tokens, output_tokens, message_count, file_path)
-                    VALUES(?,?,?,?,?,?,?,?)
+                    INSERT INTO sessions(id, title, mtime, search_text, input_tokens, output_tokens, message_count, file_path, project_path)
+                    VALUES(?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET
                         title=excluded.title, mtime=excluded.mtime,
                         search_text=excluded.search_text,
                         input_tokens=excluded.input_tokens,
                         output_tokens=excluded.output_tokens,
                         message_count=excluded.message_count,
-                        file_path=excluded.file_path
-                """, (sid, title, mtime, search_text, inp, out, msg_count, str(f)))
+                        file_path=excluded.file_path,
+                        project_path=excluded.project_path
+                """, (sid, title, mtime, search_text, inp, out, msg_count, str(f), project_path))
                 c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
                 c.execute("INSERT INTO sessions_fts(id, title, search_text) VALUES(?,?,?)",
                           (sid, title, search_text))
@@ -473,7 +495,7 @@ async def handle_sessions(request: web.Request) -> web.Response:
     _sync_index()
     custom_names = load_session_names()
 
-    def _proj(file_path: str) -> str:
+    def _proj_dir(file_path: str) -> str:
         if not file_path:
             return ""
         parts = Path(file_path).parent.name.split('--')
@@ -483,7 +505,7 @@ async def handle_sessions(request: web.Request) -> web.Response:
         with _db() as c:
             if q:
                 rows = c.execute("""
-                    SELECT s.id, s.title, s.mtime, s.message_count, s.file_path,
+                    SELECT s.id, s.title, s.mtime, s.message_count, s.file_path, s.project_path,
                            snippet(sessions_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet
                     FROM sessions_fts f
                     JOIN sessions s ON s.id = f.id
@@ -492,7 +514,7 @@ async def handle_sessions(request: web.Request) -> web.Response:
                 """, (q,)).fetchall()
             else:
                 rows = c.execute("""
-                    SELECT id, title, mtime, message_count, file_path,
+                    SELECT id, title, mtime, message_count, file_path, project_path,
                            substr(search_text, 1, 120) AS snippet
                     FROM sessions ORDER BY mtime DESC
                 """).fetchall()
@@ -504,7 +526,8 @@ async def handle_sessions(request: web.Request) -> web.Response:
                 "mtime":        r["mtime"],
                 "snippet":      r["snippet"] or "",
                 "messageCount": r["message_count"],
-                "projectDir":   _proj(r["file_path"]),
+                "projectDir":   _proj_dir(r["file_path"]),
+                "projectPath":  r["project_path"] or "",
             }
             for r in rows[offset: offset + PAGE]
         ]

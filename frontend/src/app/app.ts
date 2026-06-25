@@ -1021,7 +1021,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const pinned = this.pinnedIds();
     const now = Date.now() / 1000;
     const day = 86400;
-    const groups: { label: string; items: any[]; pinned?: boolean }[] = [];
+    const groups: { label: string; subLabel?: string; items: any[]; pinned?: boolean }[] = [];
     const pinItems = this.sessions().filter(s => pinned.includes(s.id));
     if (pinItems.length) groups.push({ label: '📌 置頂', items: pinItems, pinned: true });
     const unpinned = this.sessions().filter(s => !pinned.includes(s.id));
@@ -1061,18 +1061,31 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   groupedByProject = computed(() => {
     const pinned = this.pinnedIds();
     const all    = this.sessions();
-    const map    = new Map<string, Session[]>();
+    // key = projectPath (full) OR projectDir (short) OR '未知專案'
+    const map = new Map<string, { sessions: Session[]; latestMtime: number; folderName: string; fullPath: string }>();
     for (const s of all) {
-      const key = s.projectDir || '未知專案';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(s);
+      const fullPath   = s.projectPath || '';
+      const folderName = s.projectDir  || (fullPath ? fullPath.split(/[/\\]/).filter(Boolean).pop()! : '');
+      const key        = fullPath || folderName || '未知專案';
+      if (!map.has(key)) map.set(key, { sessions: [], latestMtime: 0, folderName: folderName || '未知專案', fullPath });
+      const entry = map.get(key)!;
+      entry.sessions.push(s);
+      if (s.mtime > entry.latestMtime) entry.latestMtime = s.mtime;
     }
-    const groups: { label: string; items: Session[]; pinned?: boolean }[] = [];
+    const groups: { label: string; subLabel?: string; items: Session[]; pinned?: boolean }[] = [];
     const pinItems = all.filter(s => pinned.includes(s.id));
     if (pinItems.length) groups.push({ label: '📌 置頂', items: pinItems, pinned: true });
-    for (const [label, items] of Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
-      const unpinned = items.filter(s => !pinned.includes(s.id));
-      if (unpinned.length) groups.push({ label: '📁 ' + label, items: unpinned });
+    // Sort project groups by most-recent session mtime (newest first)
+    const sorted = Array.from(map.entries()).sort((a, b) => b[1].latestMtime - a[1].latestMtime);
+    for (const [, entry] of sorted) {
+      const unpinned = entry.sessions.filter(s => !pinned.includes(s.id));
+      if (unpinned.length) {
+        groups.push({
+          label:    entry.folderName,
+          subLabel: entry.fullPath || undefined,
+          items:    unpinned,
+        });
+      }
     }
     return groups;
   });

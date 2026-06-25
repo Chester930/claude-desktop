@@ -1157,12 +1157,31 @@ body {
 
 // ── Session grouping ──────────────────────────────────
 .session-group-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: $text-dim;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   padding: 8px 12px 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+
+  .sgl-name {
+    font-size: 10px;
+    font-weight: 600;
+    color: $text-dim;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .sgl-path {
+    font-size: 9px;
+    font-weight: 400;
+    color: $text-dim;
+    opacity: 0.55;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
 }
 
 .session-item-wrap {
