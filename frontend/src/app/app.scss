@@ -1532,6 +1532,21 @@ body {
   padding: 8px 12px;
   border-top: 1px solid $border;
 
+  // label 和 small 文字補齊深色樣式
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: $text-dim;
+    font-weight: 500;
+  }
+  small {
+    font-size: 11px;
+    color: $text-dim;
+    opacity: 0.7;
+  }
+
   // modal-form 裡的 input/select 共用 modal-body 的深色樣式
   input, select, textarea {
     background: $surface2;
