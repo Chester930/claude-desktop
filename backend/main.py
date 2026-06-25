@@ -489,11 +489,18 @@ async def handle_sessions(request: web.Request) -> web.Response:
     PAGE   = 30
     _sync_index()
     custom_names = load_session_names()
+
+    def _proj(file_path: str) -> str:
+        if not file_path:
+            return ""
+        parts = Path(file_path).parent.name.split('--')
+        return parts[-1] if parts else ""
+
     try:
         with _db() as c:
             if q:
                 rows = c.execute("""
-                    SELECT s.id, s.title, s.mtime,
+                    SELECT s.id, s.title, s.mtime, s.message_count, s.file_path,
                            snippet(sessions_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet
                     FROM sessions_fts f
                     JOIN sessions s ON s.id = f.id
@@ -501,16 +508,20 @@ async def handle_sessions(request: web.Request) -> web.Response:
                     ORDER BY s.mtime DESC
                 """, (q,)).fetchall()
             else:
-                rows = c.execute(
-                    "SELECT id, title, mtime, '' AS snippet FROM sessions ORDER BY mtime DESC"
-                ).fetchall()
+                rows = c.execute("""
+                    SELECT id, title, mtime, message_count, file_path,
+                           substr(search_text, 1, 120) AS snippet
+                    FROM sessions ORDER BY mtime DESC
+                """).fetchall()
         total = len(rows)
         items = [
             {
-                "id":      r["id"],
-                "title":   custom_names.get(r["id"]) or r["title"],
-                "mtime":   r["mtime"],
-                "snippet": r["snippet"] or "",
+                "id":           r["id"],
+                "title":        custom_names.get(r["id"]) or r["title"],
+                "mtime":        r["mtime"],
+                "snippet":      r["snippet"] or "",
+                "messageCount": r["message_count"],
+                "projectDir":   _proj(r["file_path"]),
             }
             for r in rows[offset: offset + PAGE]
         ]

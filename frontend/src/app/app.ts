@@ -1050,6 +1050,87 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   isPinned(id: string) { return this.pinnedIds().includes(id); }
 
+  // ── Session metadata: colors + tags ─────────────────────────────────────
+  sessionMeta     = signal<Record<string, { tags: string[]; color: string }>>({});
+  sessionGroupMode = signal<'date' | 'project'>('date');
+  tagInputId      = signal<string | null>(null);
+  tagInputVal     = '';
+
+  getSessionMeta(id: string) { return this.sessionMeta()[id] || { tags: [], color: '' }; }
+
+  groupedByProject = computed(() => {
+    const pinned = this.pinnedIds();
+    const all    = this.sessions();
+    const map    = new Map<string, Session[]>();
+    for (const s of all) {
+      const key = s.projectDir || '未知專案';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(s);
+    }
+    const groups: { label: string; items: Session[]; pinned?: boolean }[] = [];
+    const pinItems = all.filter(s => pinned.includes(s.id));
+    if (pinItems.length) groups.push({ label: '📌 置頂', items: pinItems, pinned: true });
+    for (const [label, items] of Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))) {
+      const unpinned = items.filter(s => !pinned.includes(s.id));
+      if (unpinned.length) groups.push({ label: '📁 ' + label, items: unpinned });
+    }
+    return groups;
+  });
+
+  activeGroupedSessions = computed(() =>
+    this.sessionGroupMode() === 'project' ? this.groupedByProject() : this.groupedSessionsWithPins()
+  );
+
+  private loadSessionMeta() {
+    try {
+      const raw = localStorage.getItem('claude_session_meta');
+      if (raw) this.sessionMeta.set(JSON.parse(raw));
+    } catch {}
+  }
+
+  private _saveSessionMeta() {
+    localStorage.setItem('claude_session_meta', JSON.stringify(this.sessionMeta()));
+  }
+
+  cycleSessionColor(id: string, e: Event) {
+    e.stopPropagation();
+    const colors = ['', 'red', 'orange', 'yellow', 'green', 'blue', 'purple'];
+    this.sessionMeta.update(m => {
+      const cur  = m[id]?.color || '';
+      const next = colors[(colors.indexOf(cur) + 1) % colors.length];
+      return { ...m, [id]: { tags: m[id]?.tags || [], color: next } };
+    });
+    this._saveSessionMeta();
+  }
+
+  showTagInput(id: string, e: Event) {
+    e.stopPropagation();
+    this.tagInputId.set(id);
+    this.tagInputVal = '';
+  }
+
+  addSessionTag(id: string, tag: string) {
+    tag = tag.trim().replace(/^#/, '');
+    if (!tag) { this.tagInputId.set(null); return; }
+    this.sessionMeta.update(m => {
+      const ex = m[id] || { tags: [], color: '' };
+      if (ex.tags.includes(tag)) return m;
+      return { ...m, [id]: { ...ex, tags: [...ex.tags, tag] } };
+    });
+    this._saveSessionMeta();
+    this.tagInputVal = '';
+    this.tagInputId.set(null);
+  }
+
+  removeSessionTag(id: string, tag: string, e: Event) {
+    e.stopPropagation();
+    this.sessionMeta.update(m => {
+      const ex = m[id] || { tags: [], color: '' };
+      return { ...m, [id]: { ...ex, tags: ex.tags.filter(t => t !== tag) } };
+    });
+    this._saveSessionMeta();
+  }
+
   // Per-message cost tracking
   private _prevCostUsd = 0;
 
@@ -1657,6 +1738,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const pinned = localStorage.getItem('claude_pinned_sessions');
       if (pinned) this.pinnedIds.set(JSON.parse(pinned));
     } catch {}
+
+    // Session metadata 恢復（顏色 + 標籤）
+    this.loadSessionMeta();
 
     // 首次啟動精靈
     if (!localStorage.getItem('claude_onboarding_done')) {

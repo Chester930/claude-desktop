@@ -414,15 +414,29 @@
             <button class="new-chat-btn" (click)="newChat()">＋ 新對話</button>
           </div>
         </div>
+
+        <!-- 搜尋 + 分組切換 -->
         <div class="session-search">
           <input [(ngModel)]="sessionSearch" (input)="searchSessions()"
             placeholder="搜尋對話…" class="session-search-input">
         </div>
+        <div class="session-group-toggle">
+          <button [class.active]="sessionGroupMode() === 'date'"    (click)="sessionGroupMode.set('date')">按日期</button>
+          <button [class.active]="sessionGroupMode() === 'project'" (click)="sessionGroupMode.set('project')">按專案</button>
+        </div>
+
         <div class="session-list">
-          @for (group of groupedSessionsWithPins(); track group.label) {
+          @for (group of activeGroupedSessions(); track group.label) {
             <div class="session-group-label" [class.pinned-label]="group['pinned']">{{ group.label }}</div>
             @for (s of group.items; track s.id) {
-              <div class="session-item-wrap" [class.pinned]="isPinned(s.id)">
+              <div class="session-item-wrap" [class.pinned]="isPinned(s.id)"
+                   [attr.data-color]="getSessionMeta(s.id).color || null">
+
+                <!-- 顏色標記點：點擊循環切換 -->
+                <button class="sess-color-dot scd-{{ getSessionMeta(s.id).color || 'none' }}"
+                  (click)="cycleSessionColor(s.id, $event)"
+                  title="顏色標記（點擊切換）"></button>
+
                 @if (renamingId() === s.id) {
                   <input class="session-rename-input" [(ngModel)]="renameTitle"
                     (keydown.enter)="confirmRename(s)"
@@ -434,22 +448,67 @@
                     draggable="true"
                     (dragstart)="onSessionDragStart(s, $event)"
                     (click)="loadSession(s)"
-                    (dblclick)="startRename(s, $event)"
                     (contextmenu)="onSessionContextMenu(s, $event)"
-                    [title]="s.title + '\n雙擊重新命名 · 右鍵選單'">
-                    <span class="session-title">{{ s.title }}</span>
-                    <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
+                    [title]="s.title + (s.snippet ? '\n\n' + s.snippet : '')">
+
+                    <!-- 第一行：標題 + 訊息數 -->
+                    <div class="sess-main-row">
+                      <span class="session-title">{{ s.title }}</span>
+                      @if (s.messageCount) {
+                        <span class="sess-msgcount">{{ s.messageCount }}</span>
+                      }
+                    </div>
+
+                    <!-- 時間 + 專案目錄 badge -->
+                    <div class="sess-sub-row">
+                      <span class="session-time">{{ s.mtime * 1000 | date:'MM/dd HH:mm' }}</span>
+                      @if (s.projectDir) {
+                        <span class="sess-project-badge">{{ s.projectDir }}</span>
+                      }
+                    </div>
+
+                    <!-- 標籤列 -->
+                    @if (getSessionMeta(s.id).tags.length) {
+                      <div class="sess-tags-row" (click)="$event.stopPropagation()">
+                        @for (t of getSessionMeta(s.id).tags; track t) {
+                          <span class="sess-tag">
+                            #{{ t }}<button class="sess-tag-rm" (click)="removeSessionTag(s.id, t, $event)">×</button>
+                          </span>
+                        }
+                      </div>
+                    }
+
+                    <!-- 標籤輸入框 -->
+                    @if (tagInputId() === s.id) {
+                      <div class="sess-tag-input-row" (click)="$event.stopPropagation()">
+                        <input class="sess-tag-input"
+                          [(ngModel)]="tagInputVal"
+                          (keydown.enter)="addSessionTag(s.id, tagInputVal)"
+                          (keydown.escape)="tagInputId.set(null)"
+                          (blur)="addSessionTag(s.id, tagInputVal)"
+                          placeholder="#標籤名稱"
+                          autofocus>
+                      </div>
+                    }
+
+                    <!-- 搜尋 snippet -->
                     @if (s.snippet && sessionSearch) {
                       <span class="session-snippet" [innerHTML]="s.snippet"></span>
                     }
                   </button>
                 }
-                <button class="session-pin-btn" (click)="togglePin(s.id, $event)"
-                  [title]="isPinned(s.id) ? '取消置頂' : '置頂'"
-                  [class.pinned]="isPinned(s.id)">📌</button>
-                <button class="session-skill-btn" (click)="generateSkillFromSession(s.id); $event.stopPropagation()"
-                  title="從此對話產生 Skill" [disabled]="skillGenBusy()">✦</button>
-                <button class="session-del-btn" (click)="deleteSession(s, $event)" title="刪除">✕</button>
+
+                <!-- Hover 操作按鈕 -->
+                <div class="sess-actions">
+                  <button class="sess-act-btn" (click)="startRename(s, $event)" title="重新命名">✏</button>
+                  <button class="sess-act-btn" (click)="showTagInput(s.id, $event)" title="新增標籤">🏷</button>
+                  <button class="session-pin-btn" (click)="togglePin(s.id, $event)"
+                    [title]="isPinned(s.id) ? '取消置頂' : '置頂'"
+                    [class.pinned]="isPinned(s.id)">📌</button>
+                  <button class="session-skill-btn" (click)="generateSkillFromSession(s.id); $event.stopPropagation()"
+                    title="從此對話產生 Skill" [disabled]="skillGenBusy()">✦</button>
+                  <button class="session-del-btn" (click)="deleteSession(s, $event)" title="刪除">✕</button>
+                </div>
               </div>
             }
           } @empty {
