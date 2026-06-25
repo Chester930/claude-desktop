@@ -11,9 +11,9 @@ test.describe('Claude Desktop — 基本流程', () => {
 
   test('新對話分頁', async ({ page }) => {
     await page.goto('/');
-    const tabsBefore = await page.locator('.chat-tab').count();
+    const tabsBefore = await page.locator('.panel').count();
     await page.keyboard.press('Control+n');
-    await expect(page.locator('.chat-tab')).toHaveCount(tabsBefore + 1);
+    await expect(page.locator('.panel')).toHaveCount(tabsBefore + 1);
   });
 
   test('輸入框 / 觸發 slash 選單', async ({ page }) => {
