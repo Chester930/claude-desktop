@@ -493,8 +493,19 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return this.chatTabs().find(t => t.id === this.activeChatId());
   }
 
-  private makeTab(label = '新對話'): ChatTab {
-    return { id: `tab-${Date.now()}`, clientId: `client-${Date.now()}`, label, messages: [], tokenUsage: null, selectedAgent: '', isStreaming: false, sessionSkills: [], sessionMcps: [] };
+  private makeTab(label = '新對話', projectDir?: string): ChatTab {
+    return {
+      id: `tab-${Date.now()}`,
+      clientId: `client-${Date.now()}`,
+      label,
+      messages: [],
+      tokenUsage: null,
+      selectedAgent: '',
+      isStreaming: false,
+      sessionSkills: [],
+      sessionMcps: [],
+      projectDir: projectDir ?? this.settings.get().workDir,
+    };
   }
 
   private saveCurrentTab() {
@@ -848,15 +859,27 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // T02 — Select folder
-  workDir      = computed(() => this.settings.get().workDir);
+  // 顯示 active tab 的 projectDir（已有訊息 = 鎖定）；fallback 至 settings.workDir
+  workDir = computed(() => this.activeChat?.projectDir || this.settings.get().workDir);
   workDirLabel = computed(() => {
-    const d = this.settings.get().workDir;
+    const d = this.workDir();
     return d ? (d.split(/[/\\]/).pop() || d) : '本機';
   });
+  // active tab 是否已鎖定目錄（有訊息就算鎖定）
+  isDirLocked = computed(() => (this.activeChat?.messages.length ?? 0) > 0);
 
   async pickFolder() {
+    if (this.isDirLocked()) return; // 有訊息時禁止更換目錄
     const dir = await this.claude.pickDirectory();
-    if (dir) { this.settings.save({ workDir: dir }); this.settingsForm.workDir = dir; }
+    if (dir) {
+      // 同步更新 active tab 的 projectDir
+      const id = this.activeChatId();
+      this.chatTabs.update(tabs => tabs.map(t =>
+        t.id === id ? { ...t, projectDir: dir } : t
+      ));
+      this.settings.save({ workDir: dir });
+      this.settingsForm.workDir = dir;
+    }
   }
 
   async pickProjectDir() {
@@ -2090,7 +2113,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.stopFn = this.claude.streamProviderChat(history, onEvent, onDone, onError);
     } else {
       this.stopFn = this.claude.streamChat(
-        text, this.selectedAgent(), onEvent, onDone, onError, attachments
+        text, this.selectedAgent(), onEvent, onDone, onError, attachments,
+        this.activeChat?.projectDir  // 對話欄鎖定的目錄
       );
     }
   }

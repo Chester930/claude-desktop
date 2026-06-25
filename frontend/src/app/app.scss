@@ -3535,3 +3535,12 @@ body[style*="ns-resize"] .mcp-divider-grip {
 
   &:hover { color: #ef4444; background: rgba(239,68,68,0.1); }
 }
+
+// pill-locked: 目錄已綁定，不可點
+.pill-locked {
+  opacity: 0.7;
+  cursor: not-allowed !important;
+  border-color: rgba(245,158,11,0.4) !important;
+  color: #f59e0b !important;
+  &:hover { background: rgba(245,158,11,0.08) !important; }
+}

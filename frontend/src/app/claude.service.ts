@@ -47,6 +47,7 @@ export interface ChatTab {
   isStreaming: boolean;
   sessionSkills: string[];  // 一次性：本對話框有效
   sessionMcps: string[];    // 一次性：本對話框有效
+  projectDir: string;       // 建立時繼承 workDir，送出第一則訊息後視為鎖定
 }
 
 @Injectable({ providedIn: 'root' })
@@ -287,7 +288,8 @@ export class ClaudeService {
     onEvent: (ev: any) => void,
     onDone: () => void,
     onError: (e: any) => void,
-    attachments: string[] = []
+    attachments: string[] = [],
+    cwdOverride?: string        // 對話欄鎖定的目錄，優先於 settings.workDir
   ): () => void {
     const controller = new AbortController();
     const s = this.settings.get();
@@ -299,7 +301,7 @@ export class ClaudeService {
         message,
         agent,
         client_id: this.clientId,
-        cwd: s.workDir || undefined,
+        cwd: cwdOverride || s.workDir || undefined,
         claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
         attachments,
         model: s.model,
