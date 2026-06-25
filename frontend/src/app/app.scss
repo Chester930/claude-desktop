@@ -3072,8 +3072,9 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  &.mcp-section-external { flex: 0 0 auto; max-height: 45%; overflow-y: auto; }
-  &.mcp-section-local    { flex: 1 1 0;    overflow-y: auto; margin-top: 2px; }
+  // 高度現在由 .mcp-pane-top / .mcp-pane-bottom 控制，不再限制 section 本身
+  &.mcp-section-external { flex: 1 1 0; overflow-y: auto; }
+  &.mcp-section-local    { flex: 1 1 0; overflow-y: auto; }
 }
 
 .mcp-section-title {
