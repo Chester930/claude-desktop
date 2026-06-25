@@ -8,11 +8,11 @@ let backendProcess;
 let tray;
 let isQuitting = false;
 
-// ── 路徑決策：開發者機器優先從原始碼載入，其他使用者用打包版 ──
-const SRC_DIR      = path.join(process.env.USERPROFILE || '', 'claude-desktop');
-const srcFrontend  = path.join(SRC_DIR, 'frontend', 'dist', 'frontend', 'browser', 'index.html');
-const srcBackendPy = path.join(SRC_DIR, 'backend', 'main.py');
-const useSrc       = fs.existsSync(srcFrontend) && fs.existsSync(srcBackendPy);
+// ── 路徑決策：打包版用 app.isPackaged 判斷，開發版相對 __dirname ──
+const ROOT_DIR     = path.join(__dirname, '..');          // electron/../  = project root
+const srcFrontend  = path.join(ROOT_DIR, 'frontend', 'dist', 'frontend', 'browser', 'index.html');
+const srcBackendPy = path.join(ROOT_DIR, 'backend', 'main.py');
+const useSrc       = !app.isPackaged && fs.existsSync(srcFrontend) && fs.existsSync(srcBackendPy);
 
 // 打包後的路徑
 const bundledExe      = path.join(__dirname, '..', 'backend', 'claude-backend.exe');
