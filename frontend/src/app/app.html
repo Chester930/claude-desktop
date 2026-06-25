@@ -1255,9 +1255,10 @@
               </div>
 
               <!-- ══════════════════════════════════════════════════
-                   上半：外部 API
+                   上半：外部 API（高度由分隔線拖曳控制）
               ════════════════════════════════════════════════════ -->
-              <div class="mcp-section mcp-section-external">
+              <div class="mcp-pane mcp-pane-top" [style.height.%]="mcpSplitPct()">
+              <div class="mcp-section mcp-section-external" style="height:100%;overflow-y:auto;">
                 <div class="mcp-section-title">
                   <span class="mcp-section-icon">🌐</span>
                   <span>外部 API</span>
@@ -1382,11 +1383,20 @@
                 }
                 </div><!-- /.panel-list -->
               </div><!-- /.mcp-section-external -->
+              </div><!-- /.mcp-pane-top -->
+
+              <!-- ══ 可拖曳分隔線 ══════════════════════════════════ -->
+              <div class="mcp-divider" (mousedown)="onMcpDividerDown($event)" title="拖曳調整上下比例">
+                <div class="mcp-divider-track">
+                  <div class="mcp-divider-grip"></div>
+                </div>
+              </div>
 
               <!-- ══════════════════════════════════════════════════
                    下半：本地 API（Docker / stdio / local-http）
               ════════════════════════════════════════════════════ -->
-              <div class="mcp-section mcp-section-local">
+              <div class="mcp-pane mcp-pane-bottom">
+              <div class="mcp-section mcp-section-local" style="height:100%;overflow-y:auto;">
                 <div class="mcp-section-title">
                   <span class="mcp-section-icon">🖥</span>
                   <span>本地 API</span>
@@ -1553,10 +1563,10 @@
                 }
                 </div><!-- /.panel-list -->
               </div><!-- /.mcp-section-local -->
-
               <div class="mcp-footer-hint">
                 新增 MCP：<code>claude mcp add &lt;name&gt; &lt;command&gt;</code>
               </div>
+              </div><!-- /.mcp-pane-bottom -->
             </div><!-- /.mcp-view -->
           }
 

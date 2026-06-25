@@ -130,6 +130,43 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   agentSkillsMap = signal<Record<string, string[]>>({});
   agentMcpsMap   = signal<Record<string, string[]>>({}); // agent 直連 MCP，不透過 skill
 
+  // MCP panel split (top section height %, clamped 15–80)
+  mcpSplitPct = signal<number>(
+    Number(localStorage.getItem('claude_mcp_split_pct') || '45')
+  );
+  private _mcpDragActive = false;
+  private _mcpDragStartY = 0;
+  private _mcpDragStartPct = 45;
+
+  onMcpDividerDown(e: MouseEvent) {
+    e.preventDefault();
+    this._mcpDragActive  = true;
+    this._mcpDragStartY  = e.clientY;
+    this._mcpDragStartPct = this.mcpSplitPct();
+
+    const onMove = (mv: MouseEvent) => {
+      if (!this._mcpDragActive) return;
+      const container = document.querySelector('.mcp-view') as HTMLElement;
+      if (!container) return;
+      const totalH  = container.clientHeight;
+      const delta   = mv.clientY - this._mcpDragStartY;
+      const newPct  = Math.max(15, Math.min(80, this._mcpDragStartPct + (delta / totalH) * 100));
+      this.mcpSplitPct.set(Math.round(newPct));
+    };
+
+    const onUp = () => {
+      this._mcpDragActive = false;
+      localStorage.setItem('claude_mcp_split_pct', String(this.mcpSplitPct()));
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+      document.body.style.cursor = '';
+    };
+
+    document.body.style.cursor = 'ns-resize';
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  }
+
   // Local MCP Docker/compose metadata loaded from backend
   localMcpConfigs = signal<Record<string, any>>({});
 

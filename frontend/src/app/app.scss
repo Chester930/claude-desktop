@@ -3304,3 +3304,64 @@ body {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.45; }
 }
+
+// ── MCP Split Panes ────────────────────────────────────────────────────────────
+.mcp-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.mcp-pane {
+  overflow: hidden;       // inner scroll handled by .mcp-section
+  display: flex;
+  flex-direction: column;
+  min-height: 60px;
+}
+.mcp-pane-bottom {
+  flex: 1 1 0;            // takes remaining space below divider
+}
+
+// ── Draggable Divider ──────────────────────────────────────────────────────────
+.mcp-divider {
+  flex-shrink: 0;
+  height: 10px;
+  cursor: ns-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 3;
+  user-select: none;
+}
+.mcp-divider-track {
+  width: 100%;
+  height: 3px;
+  background: #1e1e2e;
+  border-top:    1px solid #2a2a3e;
+  border-bottom: 1px solid #2a2a3e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.mcp-divider:hover .mcp-divider-track {
+  background: #252540;
+  border-color: #4a4a6e;
+}
+.mcp-divider-grip {
+  width: 36px;
+  height: 3px;
+  background: #3a3a5a;
+  border-radius: 2px;
+  transition: background 0.15s, width 0.15s;
+}
+.mcp-divider:hover .mcp-divider-grip {
+  background: #7c6fff;
+  width: 48px;
+}
+// While dragging anywhere on document
+body[style*="ns-resize"] .mcp-divider-grip {
+  background: #7c6fff;
+}
