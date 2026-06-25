@@ -38,7 +38,35 @@ def _resolve_claude_home() -> Path:
 CLAUDE_HOME  = _resolve_claude_home()
 AGENTS_DIR   = CLAUDE_HOME / "agents"
 SKILLS_DIR   = CLAUDE_HOME / "skills"
-SESSIONS_DIR = CLAUDE_HOME / "sessions"
+SESSIONS_DIR = CLAUDE_HOME / "sessions"   # legacy fallback (unused for real sessions)
+
+def _all_session_files() -> list[Path]:
+    """Yield all *.jsonl session files across every project slug directory."""
+    projects = CLAUDE_HOME / "projects"
+    files: list[Path] = []
+    if not projects.exists():
+        return files
+    for slug_dir in projects.iterdir():
+        if slug_dir.is_dir():
+            files.extend(slug_dir.glob("*.jsonl"))
+    return files
+
+def _find_session_file(sid: str) -> Path | None:
+    """Find a session .jsonl file by ID; check DB path first, then scan."""
+    try:
+        with _db() as c:
+            row = c.execute("SELECT file_path FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row and row["file_path"]:
+                p = Path(row["file_path"])
+                if p.exists():
+                    return p
+    except Exception:
+        pass
+    # fallback: scan all project dirs
+    for f in _all_session_files():
+        if f.stem == sid:
+            return f
+    return None
 
 # Project-specific paths — updated by _apply_project_base()
 MEMORY_DIR: Path
@@ -100,7 +128,8 @@ def _init_db() -> None:
             search_text   TEXT NOT NULL DEFAULT '',
             input_tokens  INTEGER NOT NULL DEFAULT 0,
             output_tokens INTEGER NOT NULL DEFAULT 0,
-            message_count INTEGER NOT NULL DEFAULT 0
+            message_count INTEGER NOT NULL DEFAULT 0,
+            file_path     TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_sess_mtime ON sessions(mtime DESC);
         CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
@@ -117,6 +146,8 @@ def _migrate_db() -> None:
         cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)")}
         if "message_count" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0")
+        if "file_path" not in cols:
+            c.execute("ALTER TABLE sessions ADD COLUMN file_path TEXT NOT NULL DEFAULT ''")
 
 _init_db()
 _migrate_db()
@@ -159,14 +190,15 @@ def _parse_jsonl_session(f: Path) -> tuple[str, str, int, int, int]:
     return title, " ".join(parts)[:2000], inp, out, msg_count
 
 def _sync_index() -> None:
-    """Incrementally sync JSONL files into SQLite; remove orphaned rows."""
-    if not SESSIONS_DIR.exists():
+    """Incrementally sync ALL project JSONL files into SQLite; remove orphaned rows."""
+    all_files = _all_session_files()
+    if not all_files:
         return
     try:
         with _db() as c:
             indexed = {r["id"]: r["mtime"] for r in c.execute("SELECT id, mtime FROM sessions")}
             existing_ids: set[str] = set()
-            for f in SESSIONS_DIR.glob("*.jsonl"):
+            for f in all_files:
                 sid = f.stem
                 existing_ids.add(sid)
                 mtime = f.stat().st_mtime
@@ -174,16 +206,16 @@ def _sync_index() -> None:
                     continue
                 title, search_text, inp, out, msg_count = _parse_jsonl_session(f)
                 c.execute("""
-                    INSERT INTO sessions(id, title, mtime, search_text, input_tokens, output_tokens, message_count)
-                    VALUES(?,?,?,?,?,?,?)
+                    INSERT INTO sessions(id, title, mtime, search_text, input_tokens, output_tokens, message_count, file_path)
+                    VALUES(?,?,?,?,?,?,?,?)
                     ON CONFLICT(id) DO UPDATE SET
                         title=excluded.title, mtime=excluded.mtime,
                         search_text=excluded.search_text,
                         input_tokens=excluded.input_tokens,
                         output_tokens=excluded.output_tokens,
-                        message_count=excluded.message_count
-                """, (sid, title, mtime, search_text, inp, out, msg_count))
-                # keep FTS in sync
+                        message_count=excluded.message_count,
+                        file_path=excluded.file_path
+                """, (sid, title, mtime, search_text, inp, out, msg_count, str(f)))
                 c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
                 c.execute("INSERT INTO sessions_fts(id, title, search_text) VALUES(?,?,?)",
                           (sid, title, search_text))
@@ -569,8 +601,8 @@ async def handle_chat_stop(request: web.Request) -> web.Response:
 
 async def handle_session_delete(request: web.Request) -> web.Response:
     sid = request.match_info["id"]
-    f = SESSIONS_DIR / f"{sid}.jsonl"
-    if f.exists():
+    f = _find_session_file(sid)
+    if f and f.exists():
         f.unlink()
     for k in [k for k, v in active_sessions.items() if v == sid]:
         active_sessions.pop(k, None)
@@ -889,8 +921,8 @@ async def handle_skill_generate(request: web.Request) -> web.Response:
     session_id = data.get("session_id", "").strip()
     if not session_id:
         return web.json_response({"error": "session_id required"}, status=400)
-    f = SESSIONS_DIR / f"{session_id}.jsonl"
-    if not f.exists():
+    f = _find_session_file(session_id)
+    if not f or not f.exists():
         return web.json_response({"error": "session not found"}, status=404)
 
     # extract last 20 user messages as context
@@ -1047,8 +1079,8 @@ async def handle_mcp_info(request: web.Request) -> web.Response:
 async def handle_session_auto_title(request: web.Request) -> web.Response:
     """Generate a concise session title using Claude from the first few messages."""
     sid = request.match_info["id"]
-    f = SESSIONS_DIR / f"{sid}.jsonl"
-    if not f.exists():
+    f = _find_session_file(sid)
+    if not f or not f.exists():
         return web.json_response({"error": "session not found"}, status=404)
 
     # Extract first user+assistant messages
