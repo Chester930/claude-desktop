@@ -207,6 +207,25 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return '#10b981';                         // 啟動 + 使用中  → 綠
   }
 
+  /** CSS class for the status lamp — encodes the 4-state traffic-light logic. */
+  getMcpLampClass(name: string, status: string): string {
+    const running = this.isMcpRunning(status);
+    const inUse   = this.isMcpLinkedToActiveAgent(name);
+    if (!running && inUse)  return 'lamp-red';    // ⚠ 需要關注
+    if (!running)           return 'lamp-off';    // ● 停止（灰）
+    if (!inUse)             return 'lamp-yellow'; // ● 運行中但未啟用
+    return 'lamp-green';                          // ● 運行中且啟用
+  }
+
+  getMcpLampTitle(name: string, status: string): string {
+    const running = this.isMcpRunning(status);
+    const inUse   = this.isMcpLinkedToActiveAgent(name);
+    if (!running && inUse)  return '⚠ 伺服器未啟動，但已被 Agent 使用';
+    if (!running)           return '● 已停止';
+    if (!inUse)             return '● 運行中（未綁定到目前 Agent）';
+    return '● 運行中 · 已啟用';
+  }
+
   startMcp(name: string)   { this.claude.startMcp(name).subscribe();   }
   stopMcp(name: string)    { this.claude.stopMcp(name).subscribe();     }
   restartMcp(name: string) { this.claude.restartMcp(name).subscribe();  }

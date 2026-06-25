@@ -1288,8 +1288,10 @@
                       </button>
                     </div>
                     <div class="card-desc" style="font-size: 10px; color: #888; white-space: nowrap; text-overflow: ellipsis; overflow: hidden;" [title]="m.url">URL: {{ m.url }}</div>
-                    <div class="card-desc" style="font-size:10px;margin-top:2px;" [style.color]="getMcpColor(m.name, m.status) || '#555'">
-                      狀態: {{ m.status }}
+                    <div class="card-desc" style="font-size:10px;margin-top:2px;display:flex;align-items:center;gap:5px;">
+                      <span class="mcp-status-dot" [ngClass]="getMcpLampClass(m.name, m.status)"
+                        [title]="getMcpLampTitle(m.name, m.status)"></span>
+                      <span [style.color]="getMcpColor(m.name, m.status) || '#555'">{{ m.status }}</span>
                     </div>
                     @if (expandedMcpId() === m.id) {
                       <div class="card-detail-content" (click)="$event.stopPropagation()">
@@ -1413,10 +1415,10 @@
                         <span class="card-name">{{ m.name }}</span>
                       </div>
 
-                      <!-- 狀態燈 -->
+                      <!-- 狀態燈（三色：綠=運行+啟用 / 黃=運行未啟用 / 紅=停止但在用 / 灰=停止） -->
                       <span class="mcp-status-lamp"
-                        [class.lamp-on]="isMcpRunning(m.status)"
-                        [title]="m.status"></span>
+                        [ngClass]="getMcpLampClass(m.name, m.status)"
+                        [title]="getMcpLampTitle(m.name, m.status)"></span>
 
                       <!-- 啟動 / 停止 / 重啟 — 置頂顯示，不需展開 -->
                       <div class="mcp-ctrl-bar" (click)="$event.stopPropagation()">

@@ -3257,3 +3257,50 @@ body {
   span:first-child { color: #666; min-width: 40px; }
   code { background: #1a1a1a; padding: 1px 5px; border-radius: 3px; color: #7cb8ff; }
 }
+
+// ── MCP Status Lamp — 四色三燈邏輯 ──────────────────────────────────────────
+// .mcp-status-lamp  = 本地 API 大燈（8px）
+// .mcp-status-dot   = 外部 API 小點（6px，沿用舊 class）
+// 共用 4 個 modifier class:
+//   .lamp-green   ● 運行中且啟用（綠）
+//   .lamp-yellow  ● 運行中未啟用（黃）
+//   .lamp-red     ● 停止但在用   （紅，警示）
+//   .lamp-off     ● 停止未使用   （灰，無特殊意義）
+
+.mcp-status-lamp {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #333;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.mcp-status-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #333;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.lamp-green  {
+  background:  #10b981 !important;
+  box-shadow:  0 0 6px rgba(16,185,129,0.7);
+}
+.lamp-yellow {
+  background:  #f59e0b !important;
+  box-shadow:  0 0 6px rgba(245,158,11,0.6);
+}
+.lamp-red    {
+  background:  #ef4444 !important;
+  box-shadow:  0 0 6px rgba(239,68,68,0.7);
+  animation:   lamp-pulse 1.2s ease-in-out infinite;
+}
+.lamp-off    {
+  background:  #333 !important;
+  box-shadow:  none;
+}
+
+@keyframes lamp-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
