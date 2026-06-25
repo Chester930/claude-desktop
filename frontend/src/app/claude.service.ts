@@ -4,8 +4,14 @@ import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { SettingsService } from './settings.service';
 
-export interface Agent   { id: string; name: string; description: string; }
-export interface Skill   { id: string; name: string; description: string; }
+export interface Agent {
+  id: string; name: string; description: string;
+  soul: string; skills: string[]; memory: string[]; mcp: string[]; output_memory: string[]; tools: string;
+}
+export interface Skill {
+  id: string; name: string; description: string; type?: string;
+  mcp: string[]; memory: string[]; output_memory: string[];
+}
 export interface Session {
   id: string; title: string; mtime: number; snippet?: string;
   projectDir?: string; projectPath?: string; messageCount?: number;
@@ -25,6 +31,9 @@ export interface ChatMessage {
   startTime?: number;
   cost?: number;
 }
+
+export interface TeamMember { agent: string; role: string; }
+export interface Team { id: string; name: string; description: string; members: TeamMember[]; }
 
 export interface Schedule {
   id: string;
@@ -65,8 +74,23 @@ export class ClaudeService {
     return `http://localhost:${s.backendPort}/api`;
   }
 
-  getAgents(): Observable<Agent[]>     { return this.http.get<Agent[]>(`${this.api}/agents`); }
-  getSkills(): Observable<Skill[]>     { return this.http.get<Skill[]>(`${this.api}/skills`); }
+  getAgents(): Observable<Agent[]>  { return this.http.get<Agent[]>(`${this.api}/agents`); }
+  getAgent(id: string): Observable<Agent> { return this.http.get<Agent>(`${this.api}/agents/${id}`); }
+  createAgent(data: Partial<Agent>): Observable<{ ok: boolean; id: string }> {
+    return this.http.post<{ ok: boolean; id: string }>(`${this.api}/agents`, data);
+  }
+  updateAgent(id: string, data: Partial<Agent>): Observable<{ ok: boolean }> {
+    return this.http.put<{ ok: boolean }>(`${this.api}/agents/${id}`, data);
+  }
+  deleteAgent(id: string): Observable<{ ok: boolean }> {
+    return this.http.delete<{ ok: boolean }>(`${this.api}/agents/${id}`);
+  }
+
+  getSkills(): Observable<Skill[]> { return this.http.get<Skill[]>(`${this.api}/skills`); }
+  getSkill(id: string): Observable<Skill> { return this.http.get<Skill>(`${this.api}/skills/${id}`); }
+  updateSkill(id: string, data: Partial<Skill>): Observable<{ ok: boolean }> {
+    return this.http.put<{ ok: boolean }>(`${this.api}/skills/${id}`, data);
+  }
   getSessions(q = '', offset = 0): Observable<{ items: Session[]; has_more: boolean }> {
     const params = new URLSearchParams();
     if (q) params.set('q', q);
@@ -120,6 +144,18 @@ export class ClaudeService {
   }
   getLogs():   Observable<string[]> {
     return this.http.get<{ logs: string[] }>(`${this.api}/logs`).pipe(map(r => r.logs));
+  }
+
+  getTeams(): Observable<Team[]> { return this.http.get<Team[]>(`${this.api}/teams`); }
+  getTeam(id: string): Observable<Team> { return this.http.get<Team>(`${this.api}/teams/${id}`); }
+  createTeam(data: Partial<Team>): Observable<{ ok: boolean; id: string }> {
+    return this.http.post<{ ok: boolean; id: string }>(`${this.api}/teams`, data);
+  }
+  updateTeam(id: string, data: Partial<Team>): Observable<{ ok: boolean }> {
+    return this.http.put<{ ok: boolean }>(`${this.api}/teams/${id}`, data);
+  }
+  deleteTeam(id: string): Observable<{ ok: boolean }> {
+    return this.http.delete<{ ok: boolean }>(`${this.api}/teams/${id}`);
   }
 
   getSchedules(): Observable<Schedule[]> { return this.http.get<Schedule[]>(`${this.api}/schedules`); }

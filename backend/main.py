@@ -38,6 +38,7 @@ def _resolve_claude_home() -> Path:
 CLAUDE_HOME  = _resolve_claude_home()
 AGENTS_DIR   = CLAUDE_HOME / "agents"
 SKILLS_DIR   = CLAUDE_HOME / "skills"
+TEAMS_DIR    = CLAUDE_HOME / "teams"
 SESSIONS_DIR = CLAUDE_HOME / "sessions"   # legacy fallback (unused for real sessions)
 
 def _all_session_files() -> list[Path]:
@@ -731,20 +732,363 @@ def _desc_from_skill_dir(skill_dir: Path) -> str:
     return ""
 
 
+# ── Frontmatter 完整解析 / 寫回 ──────────────────────────────────────────────
+
+def _parse_yaml_list(lines: list, start: int):
+    """Parse indented YAML list starting at index. Returns (items, next_index)."""
+    items, i = [], start
+    while i < len(lines):
+        s = lines[i].lstrip()
+        if s.startswith("- "):
+            items.append(s[2:].strip().strip("\"'"))
+            i += 1
+        elif lines[i].strip() == "":
+            i += 1
+        else:
+            break
+    return items, i
+
+
+def _parse_full_frontmatter(path: Path) -> dict:
+    """Parse all key/value pairs from YAML frontmatter of a .md file."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return {}
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    end = None
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == "---":
+            end = i
+            break
+    if end is None:
+        return {}
+    fm = lines[1:end]
+    result, i = {}, 0
+    while i < len(fm):
+        line = fm[i]
+        if not line.strip():
+            i += 1
+            continue
+        m = _re.match(r'^([\w][\w-]*):\s*(.*)', line)
+        if not m:
+            i += 1
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if val == "":
+            items, i = _parse_yaml_list(fm, i + 1)
+            result[key] = items
+        elif val.startswith("["):
+            result[key] = [x.strip().strip("\"'") for x in val.strip("[]").split(",") if x.strip()]
+        else:
+            result[key] = val.strip("\"'")
+            i += 1
+    return result
+
+
+def _write_frontmatter(path: Path, fm: dict) -> None:
+    """Rewrite frontmatter of a .md file; preserve body content."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        text = ""
+    lines = text.splitlines(keepends=True)
+    body_start = None
+    if lines and lines[0].strip() == "---":
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() == "---":
+                body_start = i + 1
+                break
+    body = "".join(lines[body_start:]) if body_start is not None else ""
+    parts = ["---\n"]
+    for key, val in fm.items():
+        if isinstance(val, list):
+            if val:
+                parts.append(f"{key}:\n")
+                for item in val:
+                    parts.append(f"  - {item}\n")
+            else:
+                parts.append(f"{key}: []\n")
+        else:
+            parts.append(f"{key}: {val}\n")
+    parts.append("---\n")
+    path.write_text("".join(parts) + body, encoding="utf-8")
+
+
+def _agent_dict(f: Path) -> dict:
+    fm = _parse_full_frontmatter(f)
+    return {
+        "id":            f.stem,
+        "name":          fm.get("name", f.stem),
+        "description":   fm.get("description", _desc_from_md_file(f)),
+        "soul":          fm.get("soul", ""),
+        "skills":        fm.get("skills", []) if isinstance(fm.get("skills"), list) else [],
+        "memory":        fm.get("memory", []) if isinstance(fm.get("memory"), list) else [],
+        "mcp":           fm.get("mcp", [])    if isinstance(fm.get("mcp"), list)    else [],
+        "output_memory": fm.get("output_memory", []) if isinstance(fm.get("output_memory"), list) else [],
+        "tools":         fm.get("tools", ""),
+    }
+
+
+# ── Agent CRUD ────────────────────────────────────────────────────────────────
+
+async def handle_agents(request: web.Request) -> web.Response:
+    agents = []
+    if AGENTS_DIR.exists():
+        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
+            try:
+                agents.append(_agent_dict(f))
+            except Exception:
+                pass
+    return web.json_response(agents)
+
+
+async def handle_agent_get(request: web.Request) -> web.Response:
+    aid = request.match_info["id"]
+    f = AGENTS_DIR / f"{aid}.md"
+    if not f.exists():
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response(_agent_dict(f))
+
+
+async def handle_agent_put(request: web.Request) -> web.Response:
+    aid = request.match_info["id"]
+    f = AGENTS_DIR / f"{aid}.md"
+    if not f.exists():
+        return web.json_response({"error": "not found"}, status=404)
+    data = await request.json()
+    fm = _parse_full_frontmatter(f)
+    for field in ("name", "description", "soul", "skills", "memory", "mcp", "output_memory", "tools"):
+        if field in data:
+            fm[field] = data[field]
+    _write_frontmatter(f, fm)
+    return web.json_response({"ok": True})
+
+
+async def handle_agent_post(request: web.Request) -> web.Response:
+    data = await request.json()
+    raw = data.get("name", "").strip()
+    name = _re.sub(r"[^\w-]", "-", raw).lower().strip("-")
+    if not name:
+        return web.json_response({"error": "invalid name"}, status=400)
+    AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    f = AGENTS_DIR / f"{name}.md"
+    if f.exists():
+        return web.json_response({"error": "already exists"}, status=409)
+    desc = data.get("description", "")
+    f.write_text(
+        f"---\nname: {name}\ndescription: {desc}\ntools: Read, Grep, Glob\n"
+        f"soul: \nskills: []\nmemory: []\nmcp: []\noutput_memory: []\n---\n\n## {name}\n\n{desc}\n",
+        encoding="utf-8"
+    )
+    return web.json_response({"ok": True, "id": name})
+
+
+async def handle_agent_delete(request: web.Request) -> web.Response:
+    aid = request.match_info["id"]
+    f = AGENTS_DIR / f"{aid}.md"
+    if f.exists():
+        f.unlink()
+    return web.json_response({"ok": True})
+
+
+# ── Skill CRUD ────────────────────────────────────────────────────────────────
+
+def _skill_dict_from_file(entry: Path) -> dict:
+    fm = _parse_full_frontmatter(entry)
+    return {
+        "id":            entry.stem,
+        "name":          entry.stem,
+        "description":   fm.get("description", _desc_from_md_file(entry)),
+        "type":          "file",
+        "mcp":           fm.get("mcp", [])           if isinstance(fm.get("mcp"), list)           else [],
+        "memory":        fm.get("memory", [])         if isinstance(fm.get("memory"), list)         else [],
+        "output_memory": fm.get("output_memory", [])  if isinstance(fm.get("output_memory"), list)  else [],
+    }
+
+
+def _skill_dict_from_dir(entry: Path) -> dict:
+    fm = {}
+    for c in (entry / "SKILL.md", entry / "README.md"):
+        if c.exists():
+            fm = _parse_full_frontmatter(c)
+            break
+    return {
+        "id":            entry.name,
+        "name":          entry.name,
+        "description":   _desc_from_skill_dir(entry),
+        "type":          "directory",
+        "mcp":           fm.get("mcp", [])           if isinstance(fm.get("mcp"), list)           else [],
+        "memory":        fm.get("memory", [])         if isinstance(fm.get("memory"), list)         else [],
+        "output_memory": fm.get("output_memory", [])  if isinstance(fm.get("output_memory"), list)  else [],
+    }
+
+
 async def handle_skills(request: web.Request) -> web.Response:
     skills = []
     if not SKILLS_DIR.exists():
         return web.json_response(skills)
     for entry in sorted(SKILLS_DIR.iterdir(), key=lambda p: p.name.lower()):
-        if entry.is_dir():
-            desc = _desc_from_skill_dir(entry)
-            skills.append({"id": entry.name, "name": entry.name, "description": desc})
-        elif entry.suffix == ".md":
-            name = entry.stem
-            desc = _desc_from_md_file(entry)
-            skills.append({"id": name, "name": name, "description": desc})
+        try:
+            if entry.is_dir():
+                skills.append(_skill_dict_from_dir(entry))
+            elif entry.suffix == ".md":
+                skills.append(_skill_dict_from_file(entry))
+        except Exception:
+            pass
     return web.json_response(skills)
 
+
+async def handle_skill_get(request: web.Request) -> web.Response:
+    sid = request.match_info["id"]
+    f = SKILLS_DIR / f"{sid}.md"
+    if f.exists():
+        return web.json_response(_skill_dict_from_file(f))
+    d = SKILLS_DIR / sid
+    if d.is_dir():
+        return web.json_response(_skill_dict_from_dir(d))
+    return web.json_response({"error": "not found"}, status=404)
+
+
+async def handle_skill_put(request: web.Request) -> web.Response:
+    sid = request.match_info["id"]
+    f = SKILLS_DIR / f"{sid}.md"
+    if not f.exists():
+        d = SKILLS_DIR / sid
+        for c in (d / "SKILL.md", d / "README.md"):
+            if c.exists():
+                f = c
+                break
+        else:
+            return web.json_response({"error": "not found"}, status=404)
+    data = await request.json()
+    fm = _parse_full_frontmatter(f)
+    for field in ("mcp", "memory", "output_memory"):
+        if field in data:
+            fm[field] = data[field]
+    _write_frontmatter(f, fm)
+    return web.json_response({"ok": True})
+
+
+
+# ── Teams CRUD ────────────────────────────────────────────────────────────────
+
+def _parse_yaml_simple(text: str) -> dict:
+    """Parse team YAML using PyYAML, with fallback to regex."""
+    try:
+        import yaml as _yaml
+        return _yaml.safe_load(text) or {}
+    except Exception:
+        pass
+    return {}
+
+
+def _write_team_yaml(path: Path, data: dict) -> None:
+    try:
+        import yaml as _yaml
+        path.write_text(_yaml.dump(data, allow_unicode=True, default_flow_style=False), encoding="utf-8")
+    except Exception:
+        lines = []
+        for key, val in data.items():
+            if isinstance(val, list):
+                if val:
+                    lines.append(f"{key}:")
+                    for item in val:
+                        if isinstance(item, dict):
+                            first = True
+                            for k, v in item.items():
+                                prefix = "  - " if first else "    "
+                                lines.append(f"{prefix}{k}: {v}")
+                                first = False
+                        else:
+                            lines.append(f"  - {item}")
+                else:
+                    lines.append(f"{key}: []")
+            else:
+                lines.append(f"{key}: {val}")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _team_dict(f: Path) -> dict:
+    try:
+        raw = _parse_yaml_simple(f.read_text(encoding="utf-8"))
+    except Exception:
+        raw = {}
+    members_raw = raw.get("members", [])
+    members = []
+    for m in members_raw:
+        if isinstance(m, dict):
+            members.append({"agent": m.get("agent", ""), "role": m.get("role", "")})
+        elif isinstance(m, str):
+            members.append({"agent": m, "role": ""})
+    return {
+        "id":          f.stem,
+        "name":        raw.get("name", f.stem),
+        "description": raw.get("description", ""),
+        "members":     members,
+    }
+
+
+async def handle_teams(request: web.Request) -> web.Response:
+    teams = []
+    TEAMS_DIR.mkdir(parents=True, exist_ok=True)
+    for f in sorted(TEAMS_DIR.glob("*.yaml"), key=lambda p: p.name.lower()):
+        try:
+            teams.append(_team_dict(f))
+        except Exception:
+            pass
+    return web.json_response(teams)
+
+
+async def handle_team_get(request: web.Request) -> web.Response:
+    tid = request.match_info["id"]
+    f = TEAMS_DIR / f"{tid}.yaml"
+    if not f.exists():
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response(_team_dict(f))
+
+
+async def handle_team_post(request: web.Request) -> web.Response:
+    data = await request.json()
+    import re as _re3
+    raw = data.get("name", "").strip()
+    tid = _re3.sub(r"[^\w-]", "-", raw).lower().strip("-") or "new-team"
+    TEAMS_DIR.mkdir(parents=True, exist_ok=True)
+    f = TEAMS_DIR / f"{tid}.yaml"
+    if f.exists():
+        return web.json_response({"error": "already exists"}, status=409)
+    _write_team_yaml(f, {
+        "name": raw or tid,
+        "description": data.get("description", ""),
+        "members": data.get("members", []),
+    })
+    return web.json_response({"ok": True, "id": tid})
+
+
+async def handle_team_put(request: web.Request) -> web.Response:
+    tid = request.match_info["id"]
+    f = TEAMS_DIR / f"{tid}.yaml"
+    if not f.exists():
+        return web.json_response({"error": "not found"}, status=404)
+    data = await request.json()
+    current = _team_dict(f)
+    payload = {
+        "name":        data.get("name", current["name"]),
+        "description": data.get("description", current["description"]),
+        "members":     data.get("members", current["members"]),
+    }
+    _write_team_yaml(f, payload)
+    return web.json_response({"ok": True})
+
+
+async def handle_team_delete(request: web.Request) -> web.Response:
+    tid = request.match_info["id"]
+    f = TEAMS_DIR / f"{tid}.yaml"
+    if f.exists():
+        f.unlink()
+    return web.json_response({"ok": True})
 
 
 async def handle_memory(request: web.Request) -> web.Response:
@@ -1584,9 +1928,20 @@ def build_app() -> web.Application:
         ("DELETE", "/api/sessions/{id}",               handle_session_delete),
         ("PATCH",  "/api/sessions/{id}",               handle_session_rename),
         ("POST",   "/api/sessions/{id}/auto-title",    handle_session_auto_title),
-        ("GET",    "/api/agents",          handle_agents),
-        ("GET",    "/api/skills",          handle_skills),
-        ("POST",   "/api/skills/generate", handle_skill_generate),
+        ("GET",    "/api/agents",             handle_agents),
+        ("POST",   "/api/agents",             handle_agent_post),
+        ("GET",    "/api/agents/{id}",         handle_agent_get),
+        ("PUT",    "/api/agents/{id}",         handle_agent_put),
+        ("DELETE", "/api/agents/{id}",         handle_agent_delete),
+        ("GET",    "/api/skills",              handle_skills),
+        ("GET",    "/api/skills/{id}",         handle_skill_get),
+        ("PUT",    "/api/skills/{id}",         handle_skill_put),
+        ("POST",   "/api/skills/generate",     handle_skill_generate),
+        ("GET",    "/api/teams",               handle_teams),
+        ("POST",   "/api/teams",               handle_team_post),
+        ("GET",    "/api/teams/{id}",          handle_team_get),
+        ("PUT",    "/api/teams/{id}",          handle_team_put),
+        ("DELETE", "/api/teams/{id}",          handle_team_delete),
         ("GET",    "/api/memory",          handle_memory),
         ("GET",    "/api/schedules",       handle_schedules_get),
         ("POST",   "/api/schedules",       handle_schedules_post),

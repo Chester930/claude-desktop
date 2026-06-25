@@ -4059,6 +4059,257 @@ body[style*="ns-resize"] .mcp-divider-grip {
   line-height: 1.5;
 }
 
+// ── Agent / Skill 映射 UI ────────────────────────────────────────────────────
+.agent-action-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.agent-activate-btn {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: none;
+  color: #aaa;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+  &:hover { border-color: $accent; color: $accent; }
+  &.active { background: rgba(212,168,83,0.15); border-color: $accent; color: $accent; }
+}
+
+.agent-edit-btn {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: none;
+  color: #666;
+  cursor: pointer;
+  &:hover { background: rgba(255,255,255,0.07); color: #ccc; }
+}
+
+.agent-skill-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: rgba(212,168,83,0.15);
+  border: 1px solid rgba(212,168,83,0.3);
+  color: $accent;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcp-agent-hint {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: rgba(99,179,237,0.12);
+  border: 1px solid rgba(99,179,237,0.25);
+  color: #63b3ed;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.agent-mapping-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0 2px;
+}
+
+.mapping-chip {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  color: #888;
+  border: 1px solid rgba(255,255,255,0.08);
+  &.soul-chip { color: #a78bfa; border-color: rgba(167,139,250,0.25); }
+  &.output-chip { color: #6ee7b7; border-color: rgba(110,231,183,0.25); }
+}
+
+// ── Editor Modal ─────────────────────────────────────────────────────────────
+.editor-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0,0,0,0.5);
+  backdrop-filter: blur(2px);
+}
+
+.editor-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2001;
+  width: 420px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: #1a1a2e;
+  border: 1px solid rgba(124,111,255,0.3);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+
+.editor-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+
+.editor-modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.editor-modal-body {
+  overflow-y: auto;
+  flex: 1;
+  padding: 4px 0;
+}
+
+.editor-modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+
+.editor-section {
+  padding: 12px 16px 8px;
+  & + & { border-top: 1px solid rgba(255,255,255,0.05); }
+}
+
+.editor-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #7c6fff;
+  margin-bottom: 8px;
+}
+
+.editor-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.editor-input {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+  &:focus { border-color: #7c6fff; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.editor-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.editor-check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #ccc;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  &:hover { background: rgba(255,255,255,0.04); }
+  input[type="checkbox"] { accent-color: #7c6fff; }
+}
+
+.editor-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.editor-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  background: rgba(110,231,183,0.1);
+  border: 1px solid rgba(110,231,183,0.2);
+  border-radius: 10px;
+  color: #6ee7b7;
+}
+
+.btn-danger {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(239,68,68,0.4);
+  background: rgba(239,68,68,0.1);
+  color: #ef4444;
+  font-size: 12px;
+  cursor: pointer;
+  &:hover { background: rgba(239,68,68,0.2); }
+}
+
+// ── Teams ─────────────────────────────────────────────────────────────────────
+.team-members-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0 2px;
+}
+
+.team-member-chip {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(124,111,255,0.1);
+  border: 1px solid rgba(124,111,255,0.2);
+  color: #b0a0ff;
+  white-space: nowrap;
+
+  .member-dot { color: #7c6fff; font-size: 8px; }
+  .member-role {
+    color: #666;
+    font-style: italic;
+    &::before { content: '·'; margin: 0 2px; }
+  }
+}
+
+.team-member-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 // ── (以下原有樣式) ──────────────────────────────────────────
 .umenu-trigger {
   display: flex;

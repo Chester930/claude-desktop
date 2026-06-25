@@ -7,7 +7,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile
+  ClaudeService, Agent, Skill, Team, TeamMember, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile
 } from './claude.service';
 
 export interface McpWorkflow {
@@ -365,7 +365,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   inputText = '';
   isStreaming = signal(false);
   selectedAgent = signal('');
-  activeTab = signal<'agents' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp'>('agents');
+  activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp'>('agents');
   selectedMemoryKey = signal('');
   sessionSearch = '';
 
@@ -1383,6 +1383,174 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
+  // ── Agent 編輯器 ────────────────────────────────────────────────────────────
+  agentEditorOpen  = signal(false);
+  agentEditorIsNew = signal(false);
+  agentEditorData  = signal<Partial<Agent>>({});
+  activeAgentId    = computed(() => this.selectedAgent());
+
+  openAgentEditor(agent?: Agent) {
+    if (agent) {
+      this.agentEditorData.set({ ...agent });
+      this.agentEditorIsNew.set(false);
+    } else {
+      this.agentEditorData.set({ name: '', description: '', soul: '', skills: [], memory: [], mcp: [], output_memory: [], tools: 'Read, Grep, Glob' });
+      this.agentEditorIsNew.set(true);
+    }
+    this.agentEditorOpen.set(true);
+  }
+
+  saveAgentEditor() {
+    const d = this.agentEditorData();
+    if (!d.name?.trim()) return;
+    const obs = this.agentEditorIsNew()
+      ? this.claude.createAgent(d)
+      : this.claude.updateAgent(d.id!, d);
+    obs.subscribe({ next: () => { this.agentEditorOpen.set(false); this.claude.getAgents().subscribe(a => this.agents.set(a)); } });
+  }
+
+  deleteAgent(id: string) {
+    this.claude.deleteAgent(id).subscribe({ next: () => this.claude.getAgents().subscribe(a => this.agents.set(a)) });
+  }
+
+  activateAgent(agent: Agent) {
+    // 設定 soul
+    if (agent.soul) {
+      const s = this.souls().find(s => s.id === agent.soul || s.name === agent.soul);
+      if (s) this.selectSoulProfile(s.id);
+    }
+    // 把 agent 的 memory keys 加入上下文
+    if (agent.memory?.length) {
+      this.contextMemoryKeys.set([...new Set([...this.contextMemoryKeys(), ...agent.memory])]);
+    }
+    // 啟動對應 MCPs
+    agent.mcp?.forEach(name => {
+      const srv = this.mcpServers().find(s => s.name === name || s.id === name);
+      if (srv && srv.status !== 'running') this.startMcp(srv.name);
+    });
+    // 注入 --agent 旗標到當前對話欄
+    const tab = this.chatTabs().find(t => t.id === this.activeChatId());
+    if (tab) {
+      this.chatTabs.update(tabs => tabs.map(t =>
+        t.id === tab.id ? { ...t, selectedAgent: agent.id } : t
+      ));
+      this.selectedAgent.set(agent.id);
+    }
+  }
+
+  agentEditorToggleList(field: 'skills' | 'memory' | 'mcp' | 'output_memory', value: string) {
+    const d = this.agentEditorData();
+    const list = (d[field] as string[]) ?? [];
+    const next = list.includes(value) ? list.filter(x => x !== value) : [...list, value];
+    this.agentEditorData.set({ ...d, [field]: next });
+  }
+
+  agentEditorAddOutputMemory(key: string) {
+    if (!key.trim()) return;
+    const d = this.agentEditorData();
+    const list = d.output_memory ?? [];
+    if (!list.includes(key)) this.agentEditorData.set({ ...d, output_memory: [...list, key] });
+  }
+
+  agentEditorRemoveOutputMemory(key: string) {
+    const d = this.agentEditorData();
+    this.agentEditorData.set({ ...d, output_memory: (d.output_memory ?? []).filter(x => x !== key) });
+  }
+
+  // ── Skill 編輯器 ────────────────────────────────────────────────────────────
+  skillEditorOpen = signal(false);
+  skillEditorData = signal<Partial<Skill>>({});
+
+  openSkillEditor(skill: Skill) {
+    this.claude.getSkill(skill.id).subscribe(s => {
+      this.skillEditorData.set({ ...s });
+      this.skillEditorOpen.set(true);
+    });
+  }
+
+  saveSkillEditor() {
+    const d = this.skillEditorData();
+    if (!d.id) return;
+    this.claude.updateSkill(d.id, { mcp: d.mcp, memory: d.memory, output_memory: d.output_memory })
+      .subscribe({ next: () => { this.skillEditorOpen.set(false); this.claude.getSkills().subscribe(s => this.skills.set(s)); } });
+  }
+
+  skillEditorToggleList(field: 'memory' | 'mcp', value: string) {
+    const d = this.skillEditorData();
+    const list = (d[field] as string[]) ?? [];
+    const next = list.includes(value) ? list.filter(x => x !== value) : [...list, value];
+    this.skillEditorData.set({ ...d, [field]: next });
+  }
+
+  skillEditorAddOutputMemory(key: string) {
+    if (!key.trim()) return;
+    const d = this.skillEditorData();
+    const list = d.output_memory ?? [];
+    if (!list.includes(key)) this.skillEditorData.set({ ...d, output_memory: [...list, key] });
+  }
+
+  skillEditorRemoveOutputMemory(key: string) {
+    const d = this.skillEditorData();
+    this.skillEditorData.set({ ...d, output_memory: (d.output_memory ?? []).filter(x => x !== key) });
+  }
+
+  // ── Teams ────────────────────────────────────────────────────────────────────
+  teams = signal<Team[]>([]);
+  teamEditorOpen  = signal(false);
+  teamEditorIsNew = signal(false);
+  teamEditorData  = signal<Partial<Team>>({});
+
+  loadTeams() {
+    this.claude.getTeams().subscribe(t => this.teams.set(t));
+  }
+
+  openTeamEditor(team?: Team) {
+    if (team) {
+      this.teamEditorData.set({ ...team, members: team.members.map(m => ({ ...m })) });
+      this.teamEditorIsNew.set(false);
+    } else {
+      this.teamEditorData.set({ name: '', description: '', members: [] });
+      this.teamEditorIsNew.set(true);
+    }
+    this.teamEditorOpen.set(true);
+  }
+
+  saveTeamEditor() {
+    const d = this.teamEditorData();
+    if (!d.name?.trim()) return;
+    const obs = this.teamEditorIsNew()
+      ? this.claude.createTeam(d)
+      : this.claude.updateTeam(d.id!, d);
+    obs.subscribe({ next: () => { this.teamEditorOpen.set(false); this.loadTeams(); } });
+  }
+
+  deleteTeam(id: string) {
+    this.claude.deleteTeam(id).subscribe({ next: () => this.loadTeams() });
+  }
+
+  teamEditorAddMember() {
+    const d = this.teamEditorData();
+    this.teamEditorData.set({ ...d, members: [...(d.members ?? []), { agent: '', role: '' }] });
+  }
+
+  teamEditorRemoveMember(idx: number) {
+    const d = this.teamEditorData();
+    this.teamEditorData.set({ ...d, members: (d.members ?? []).filter((_, i) => i !== idx) });
+  }
+
+  teamEditorUpdateMember(idx: number, field: 'agent' | 'role', val: string) {
+    const d = this.teamEditorData();
+    const members = (d.members ?? []).map((m, i) => i === idx ? { ...m, [field]: val } : m);
+    this.teamEditorData.set({ ...d, members });
+  }
+
+  activateTeam(team: Team) {
+    team.members.forEach(m => {
+      const agent = this.agents().find(a => a.id === m.agent);
+      if (agent) this.activateAgent(agent);
+    });
+  }
+
   // 清空某個對話欄的訊息
   clearTab(tabId: string, e: Event) {
     e.stopPropagation();
@@ -1900,6 +2068,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.reload();
     this.claude.getSoul().subscribe(s => { this.soulContent = s; });
     this.loadProfiles();
+    this.loadTeams();
     this._healthTimer = setInterval(() => {
       this.claude.getStatus().subscribe({
         next: () => {
@@ -2531,36 +2700,42 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.parseMcpList(this.mcpList());
   }
 
-  // 永久綁定：agent → skills
+  // 永久綁定：agent → skills（源自 frontmatter，透過後端 API 讀寫）
   getPermSkills(agentId: string): string[] {
-    return this.agentSkillsMap()[agentId.replace(/^@/, '')] ?? [];
+    const id = agentId.replace(/^@/, '');
+    return this.agents().find(a => a.id === id)?.skills ?? [];
   }
   isSkillPermForAgent(agentId: string, skillId: string): boolean {
     return this.getPermSkills(agentId).includes(skillId);
   }
   toggleSkillPermForAgent(agentId: string, skillId: string) {
     const id = agentId.replace(/^@/, '');
-    this.agentSkillsMap.update(m => {
-      const cur = m[id] ?? [];
-      return { ...m, [id]: cur.includes(skillId) ? cur.filter(s => s !== skillId) : [...cur, skillId] };
-    });
-    this.saveAgentSkillsMap();
+    const agent = this.agents().find(a => a.id === id);
+    if (!agent) return;
+    const cur = agent.skills ?? [];
+    const next = cur.includes(skillId) ? cur.filter(s => s !== skillId) : [...cur, skillId];
+    this.claude.updateAgent(id, { skills: next }).subscribe(() =>
+      this.claude.getAgents().subscribe(a => this.agents.set(a))
+    );
   }
 
-  // 永久綁定：agent → MCPs（直連）
+  // 永久綁定：agent → MCPs（源自 frontmatter）
   getPermMcps(agentId: string): string[] {
-    return this.agentMcpsMap()[agentId.replace(/^@/, '')] ?? [];
+    const id = agentId.replace(/^@/, '');
+    return this.agents().find(a => a.id === id)?.mcp ?? [];
   }
   isMcpPermForAgent(agentId: string, mcpName: string): boolean {
     return this.getPermMcps(agentId).includes(mcpName);
   }
   toggleMcpPermForAgent(agentId: string, mcpName: string) {
     const id = agentId.replace(/^@/, '');
-    this.agentMcpsMap.update(m => {
-      const cur = m[id] ?? [];
-      return { ...m, [id]: cur.includes(mcpName) ? cur.filter(s => s !== mcpName) : [...cur, mcpName] };
-    });
-    this.saveAgentMcpsMap();
+    const agent = this.agents().find(a => a.id === id);
+    if (!agent) return;
+    const cur = agent.mcp ?? [];
+    const next = cur.includes(mcpName) ? cur.filter(m => m !== mcpName) : [...cur, mcpName];
+    this.claude.updateAgent(id, { mcp: next }).subscribe(() =>
+      this.claude.getAgents().subscribe(a => this.agents.set(a))
+    );
   }
 
   // 一次性：綁定到目前 tab
@@ -2782,6 +2957,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return this.getLinkedSkills(agentId).includes(skillId);
   }
 
+  // 此 Skill 是否在 activeAgent 的 frontmatter skills[] 中（P1-F4）
+  isSkillInActiveAgentFrontmatter(skillId: string): boolean {
+    const agentId = this.selectedAgent();
+    if (!agentId) return false;
+    return this.agents().find(a => a.id === agentId.replace(/^@/, ''))?.skills?.includes(skillId) ?? false;
+  }
+
   isMcpLinkedToActiveAgent(mcpName: string): boolean {
     const agentId = this.selectedAgent();
     if (!agentId) return false;
@@ -2791,6 +2973,20 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
     // 直連：永久 or 一次性
     return this.isMcpPermForAgent(agentId, mcpName) || this.isMcpInTab(mcpName);
+  }
+
+  // 此 MCP 是否在 activeAgent 的 frontmatter mcp[] 中（P1-F6）
+  isMcpRequiredByActiveAgent(mcpName: string): boolean {
+    const agentId = this.selectedAgent();
+    if (!agentId) return false;
+    return this.agents().find(a => a.id === agentId.replace(/^@/, ''))?.mcp?.includes(mcpName) ?? false;
+  }
+
+  // 此 Memory key 是否在 activeAgent 的 frontmatter memory[] 中（P1-F5）
+  isMemoryRequiredByActiveAgent(key: string): boolean {
+    const agentId = this.selectedAgent();
+    if (!agentId) return false;
+    return this.agents().find(a => a.id === agentId.replace(/^@/, ''))?.memory?.includes(key) ?? false;
   }
 
 

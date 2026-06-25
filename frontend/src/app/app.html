@@ -1083,6 +1083,7 @@
         <div class="right-resize" (mousedown)="onRightResizeStart($event)" title="拖曳調整寬度"></div>
         <div class="tab-bar">
           <button [class.active]="activeTab()==='agents'"    (click)="activeTab.set('agents')">Agent</button>
+          <button [class.active]="activeTab()==='teams'"     (click)="activeTab.set('teams');loadTeams()">Teams</button>
           <button [class.active]="activeTab()==='skills'"    (click)="activeTab.set('skills')">Skills</button>
           <button [class.active]="activeTab()==='mcp'"       (click)="activeTab.set('mcp');loadMcp()">MCP</button>
           <button [class.active]="activeTab()==='memory'"    (click)="activeTab.set('memory')">Memory</button>
@@ -1107,20 +1108,33 @@
             <div class="panel-list">
               @for (a of sortedAgents(); track a.id) {
                 <div class="panel-card"
-                  [class.active-in-chat]="selectedAgent() === a.id"
+                  [class.active-in-chat]="activeAgentId() === a.id"
                   [class.expanded]="expandedAgentId() === a.id"
                   (click)="toggleAgentExpand(a.id, $event)">
                   <div class="card-header-row">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                      <button class="agent-use-btn"
-                        [class.active]="selectedAgent() === a.id"
-                        (click)="$event.stopPropagation(); selectAgent(a.id)"
-                        [title]="selectedAgent() === a.id ? '取消使用此代理人' : '設為目前對話使用中'">
-                        {{ selectedAgent() === a.id ? '● 使用中' : '○ 啟用' }}
-                      </button>
+                    <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
                       <span class="card-name">@{{ a.name }}</span>
                     </div>
+                    <div class="agent-action-btns" (click)="$event.stopPropagation()">
+                      <button class="agent-activate-btn"
+                        [class.active]="activeAgentId() === a.id"
+                        (click)="activateAgent(a)"
+                        [title]="activeAgentId() === a.id ? '已啟動' : '啟動此 Agent（套用 Soul/Skills/MCP/Memory）'">
+                        {{ activeAgentId() === a.id ? '◉ 啟動中' : '▶ 啟動' }}
+                      </button>
+                      <button class="agent-edit-btn" (click)="openAgentEditor(a)" title="編輯 Agent 映射">✎</button>
+                    </div>
                   </div>
+                  <!-- 映射摘要列 -->
+                  @if (a.soul || a.skills?.length || a.mcp?.length || a.memory?.length) {
+                    <div class="agent-mapping-summary">
+                      @if (a.soul) { <span class="mapping-chip soul-chip" title="Soul">👤 {{ a.soul }}</span> }
+                      @if (a.skills?.length) { <span class="mapping-chip" title="Skills">⚡ {{ a.skills!.length }}</span> }
+                      @if (a.mcp?.length) { <span class="mapping-chip" title="MCPs">🔌 {{ a.mcp!.length }}</span> }
+                      @if (a.memory?.length) { <span class="mapping-chip" title="Memory">🧠 {{ a.memory!.length }}</span> }
+                    </div>
+                  }
+
                   @if (expandedAgentId() === a.id) {
                     <div class="card-detail-content" (click)="$event.stopPropagation()">
                       <div class="detail-desc">
@@ -1184,9 +1198,56 @@
                   <button class="empty-guide-btn" (click)="helpOpen.set(true); helpSection.set('features')">查看說明</button>
                 </div>
               }
+              <!-- 建立 Agent 按鈕 -->
+              <div style="padding:8px 4px;">
+                <button class="btn-secondary" style="width:100%;font-size:12px;" (click)="openAgentEditor()">＋ 建立 Agent</button>
+              </div>
             </div>
           }
           
+@if (activeTab() === 'teams') {
+            <div class="panel-list">
+              @for (t of teams(); track t.id) {
+                <div class="panel-card">
+                  <div class="card-header-row">
+                    <span class="card-name">{{ t.name }}</span>
+                    <div class="agent-action-btns">
+                      <button class="agent-activate-btn" (click)="activateTeam(t)" title="依序啟動所有成員 Agent">▶ 啟動</button>
+                      <button class="agent-edit-btn" (click)="openTeamEditor(t)" title="編輯 Team">✎</button>
+                    </div>
+                  </div>
+                  @if (t.description) {
+                    <div class="card-desc">{{ t.description }}</div>
+                  }
+                  <!-- 成員列表 -->
+                  <div class="team-members-row">
+                    @for (m of t.members; track m.agent) {
+                      <span class="team-member-chip" [title]="m.role || m.agent">
+                        <span class="member-dot">●</span> {{ m.agent }}
+                        @if (m.role) { <span class="member-role">{{ m.role }}</span> }
+                      </span>
+                    }
+                    @if (!t.members.length) {
+                      <span style="font-size:11px;color:#555;font-style:italic;">無成員</span>
+                    }
+                  </div>
+                </div>
+              } @empty {
+                <div class="empty-guide">
+                  <div class="empty-guide-icon">👥</div>
+                  <div class="empty-guide-title">尚未建立 Team</div>
+                  <div class="empty-guide-sub">
+                    Team 是多個 Agent 的組合，可以一鍵啟動。<br>
+                    建立後會儲存在：<code>~/.claude/teams/</code>
+                  </div>
+                </div>
+              }
+              <div style="padding:8px 4px;">
+                <button class="btn-secondary" style="width:100%;font-size:12px;" (click)="openTeamEditor()">＋ 建立 Team</button>
+              </div>
+            </div>
+          }
+
 @if (activeTab() === 'skills') {
             <div class="panel-list">
               @for (s of sortedSkills(); track s.id) {
@@ -1196,8 +1257,10 @@
                   (click)="toggleSkillExpand(s.id)">
                   <div class="card-header-row">
                     <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
-                      @if (isSkillLinkedToActiveAgent(s.id)) {
-                        <span class="auth-dot active" title="目前代理人已啟用此技能"></span>
+                      @if (isSkillInActiveAgentFrontmatter(s.id)) {
+                        <span class="agent-skill-badge" [title]="'● ' + selectedAgent() + ' 的 Skill'">● {{ selectedAgent() }}</span>
+                      } @else if (isSkillLinkedToActiveAgent(s.id)) {
+                        <span class="auth-dot active" title="此對話已加入此技能"></span>
                       }
                       <span class="card-name">/{{ s.name }}</span>
                     </div>
@@ -1207,8 +1270,17 @@
                         [title]="isSkillInTab(s.id) ? '從此對話移除' : '加入此對話'">
                         {{ isSkillInTab(s.id) ? '◉' : '○' }}
                       </button>
+                      <button class="agent-edit-btn" (click)="$event.stopPropagation(); openSkillEditor(s)" title="編輯 Skill 映射">✎</button>
                     </div>
                   </div>
+                  <!-- Skill 依賴摘要 -->
+                  @if (s.mcp?.length || s.memory?.length || s.output_memory?.length) {
+                    <div class="agent-mapping-summary">
+                      @if (s.mcp?.length) { <span class="mapping-chip" title="依賴 MCP">🔌 {{ s.mcp!.length }}</span> }
+                      @if (s.memory?.length) { <span class="mapping-chip" title="讀取 Memory">🧠 {{ s.memory!.length }}</span> }
+                      @if (s.output_memory?.length) { <span class="mapping-chip output-chip" title="輸出 Memory">→ {{ s.output_memory!.length }}</span> }
+                    </div>
+                  }
                   @if (expandedSkillId() === s.id) {
                     <div class="card-detail-content" (click)="$event.stopPropagation()">
                       <div class="detail-desc">
@@ -1304,14 +1376,17 @@
                 @for (k of memoryKeys(); track k) {
                   <div class="panel-card" [class.selected]="selectedMemoryKey() === k" (click)="selectMemoryKey(k)">
                     <div class="card-header-row">
-                      <div style="display:flex;align-items:center;gap:6px;">
+                      <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
                         <button class="memory-ctx-btn"
                           [class.active]="isMemoryInContext(k)"
                           (click)="$event.stopPropagation(); toggleMemoryContext(k)"
                           [title]="isMemoryInContext(k) ? '從上下文移除' : '加入上下文'">
                           {{ isMemoryInContext(k) ? '◉' : '○' }}
                         </button>
-                        <div class="card-name">{{ k }}.md</div>
+                        <div class="card-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;">{{ k }}.md</div>
+                        @if (isMemoryRequiredByActiveAgent(k)) {
+                          <span class="mcp-agent-hint" style="flex-shrink:0" [title]="'此 Agent 需要：' + selectedAgent()">🧠</span>
+                        }
                       </div>
                       <button class="del-btn" (click)="$event.stopPropagation(); deleteMemory(k)" title="刪除">✕</button>
                     </div>
@@ -1481,6 +1556,9 @@
                       <span class="mcp-status-lamp" [ngClass]="getMcpLampClass(m.name, m.status)"
                         [title]="getMcpLampTitle(m.name, m.status)"></span>
                       <span class="mcc-name">{{ m.name }}</span>
+                      @if (isMcpRequiredByActiveAgent(m.name)) {
+                        <span class="mcp-agent-hint" [title]="'此 Agent 需要：' + selectedAgent()">需要</span>
+                      }
                       <!-- hover 才顯示 -->
                       <div class="mcc-actions" (click)="$event.stopPropagation()">
                         <button class="bind-btn" [class.active]="isMcpInTab(m.name)"
@@ -1549,6 +1627,9 @@
                         [ngClass]="getMcpLampClass(m.name, m.status)"
                         [title]="getMcpLampTitle(m.name, m.status)"></span>
                       <span class="mcc-name">{{ m.name }}</span>
+                      @if (isMcpRequiredByActiveAgent(m.name)) {
+                        <span class="mcp-agent-hint" [title]="'此 Agent 需要：' + selectedAgent()">需要</span>
+                      }
                       <!-- hover 才顯示 -->
                       <div class="mcc-actions" (click)="$event.stopPropagation()">
                         @if (isMcpRunning(m.status)) {
@@ -2033,6 +2114,223 @@
           }
           <button class="btn-primary" (click)="closeDetail()">關閉</button>
         </div>
+      </div>
+    </div>
+  }
+
+  <!-- ── Agent 編輯器 Modal ─────────────────────────────────────────────── -->
+  @if (agentEditorOpen()) {
+    <div class="editor-modal-overlay" (click)="agentEditorOpen.set(false)"></div>
+    <div class="editor-modal" (click)="$event.stopPropagation()">
+      <div class="editor-modal-header">
+        <span class="editor-modal-title">{{ agentEditorIsNew() ? '建立 Agent' : '編輯 Agent：' + agentEditorData().name }}</span>
+        <button class="usage-modal-close" (click)="agentEditorOpen.set(false)">✕</button>
+      </div>
+      <div class="editor-modal-body">
+        <!-- 基本資訊 -->
+        <div class="editor-section">
+          <div class="editor-section-title">基本資訊</div>
+          <label class="editor-label">名稱
+            <input class="editor-input" [value]="agentEditorData().name || ''" (input)="agentEditorData.set({...agentEditorData(), name: $any($event.target).value})" [disabled]="!agentEditorIsNew()" placeholder="my-agent">
+          </label>
+          <label class="editor-label">說明
+            <input class="editor-input" [value]="agentEditorData().description || ''" (input)="agentEditorData.set({...agentEditorData(), description: $any($event.target).value})" placeholder="這個 Agent 的用途">
+          </label>
+          <label class="editor-label">Soul
+            <select class="memory-project-select" style="width:100%" [value]="agentEditorData().soul || ''" (change)="agentEditorData.set({...agentEditorData(), soul: $any($event.target).value})">
+              <option value="">（不指定）</option>
+              @for (s of souls(); track s.id) {
+                <option [value]="s.id">{{ s.name }}</option>
+              }
+            </select>
+          </label>
+        </div>
+        <!-- Skills -->
+        <div class="editor-section">
+          <div class="editor-section-title">Skills（多選）</div>
+          <div class="editor-checklist">
+            @for (s of skills(); track s.id) {
+              <label class="editor-check-item">
+                <input type="checkbox"
+                  [checked]="agentEditorData().skills?.includes(s.id)"
+                  (change)="agentEditorToggleList('skills', s.id)">
+                <span>/{{ s.name }}</span>
+              </label>
+            }
+          </div>
+        </div>
+        <!-- MCPs -->
+        <div class="editor-section">
+          <div class="editor-section-title">MCPs（多選）</div>
+          <div class="editor-checklist">
+            @for (m of mcpServers(); track m.id) {
+              <label class="editor-check-item">
+                <input type="checkbox"
+                  [checked]="agentEditorData().mcp?.includes(m.name)"
+                  (change)="agentEditorToggleList('mcp', m.name)">
+                <span>{{ m.name }}</span>
+              </label>
+            }
+          </div>
+        </div>
+        <!-- Memory 讀取 -->
+        <div class="editor-section">
+          <div class="editor-section-title">Memory 讀取</div>
+          <div class="editor-checklist">
+            @for (k of memoryKeys(); track k) {
+              <label class="editor-check-item">
+                <input type="checkbox"
+                  [checked]="agentEditorData().memory?.includes(k)"
+                  (change)="agentEditorToggleList('memory', k)">
+                <span>{{ k }}</span>
+              </label>
+            }
+          </div>
+        </div>
+        <!-- Memory 輸出 -->
+        <div class="editor-section">
+          <div class="editor-section-title">Memory 輸出（寫入）</div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <input #newOutMem class="editor-input" style="flex:1" placeholder="output-key 名稱">
+            <button class="btn-secondary" style="flex-shrink:0" (click)="agentEditorAddOutputMemory(newOutMem.value); newOutMem.value=''">＋</button>
+          </div>
+          @for (k of agentEditorData().output_memory; track k) {
+            <div class="editor-tag-row">
+              <span class="editor-tag">{{ k }}</span>
+              <button class="del-btn" (click)="agentEditorRemoveOutputMemory(k)">✕</button>
+            </div>
+          }
+        </div>
+      </div>
+      <div class="editor-modal-footer">
+        @if (!agentEditorIsNew()) {
+          <button class="btn-danger" (click)="deleteAgent(agentEditorData().id!); agentEditorOpen.set(false)">刪除</button>
+        }
+        <div style="flex:1"></div>
+        <button class="btn-secondary" (click)="agentEditorOpen.set(false)">取消</button>
+        <button class="btn-primary" (click)="saveAgentEditor()">儲存</button>
+      </div>
+    </div>
+  }
+
+  <!-- ── Skill 編輯器 Modal ──────────────────────────────────────────────── -->
+  @if (skillEditorOpen()) {
+    <div class="editor-modal-overlay" (click)="skillEditorOpen.set(false)"></div>
+    <div class="editor-modal" (click)="$event.stopPropagation()">
+      <div class="editor-modal-header">
+        <span class="editor-modal-title">編輯 Skill：{{ skillEditorData().name }}</span>
+        <button class="usage-modal-close" (click)="skillEditorOpen.set(false)">✕</button>
+      </div>
+      <div class="editor-modal-body">
+        <div class="editor-section">
+          <div class="editor-section-title">說明（唯讀）</div>
+          <p style="color:#888;font-size:12px;margin:0;">{{ skillEditorData().description || '（無說明）' }}</p>
+        </div>
+        <!-- MCPs -->
+        <div class="editor-section">
+          <div class="editor-section-title">依賴 MCPs</div>
+          <div class="editor-checklist">
+            @for (m of mcpServers(); track m.id) {
+              <label class="editor-check-item">
+                <input type="checkbox"
+                  [checked]="skillEditorData().mcp?.includes(m.name)"
+                  (change)="skillEditorToggleList('mcp', m.name)">
+                <span>{{ m.name }}</span>
+              </label>
+            }
+          </div>
+        </div>
+        <!-- Memory 讀取 -->
+        <div class="editor-section">
+          <div class="editor-section-title">讀取 Memory</div>
+          <div class="editor-checklist">
+            @for (k of memoryKeys(); track k) {
+              <label class="editor-check-item">
+                <input type="checkbox"
+                  [checked]="skillEditorData().memory?.includes(k)"
+                  (change)="skillEditorToggleList('memory', k)">
+                <span>{{ k }}</span>
+              </label>
+            }
+          </div>
+        </div>
+        <!-- Memory 輸出 -->
+        <div class="editor-section">
+          <div class="editor-section-title">輸出 Memory（寫入）</div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <input #newSkillOut class="editor-input" style="flex:1" placeholder="output-key 名稱">
+            <button class="btn-secondary" style="flex-shrink:0" (click)="skillEditorAddOutputMemory(newSkillOut.value); newSkillOut.value=''">＋</button>
+          </div>
+          @for (k of skillEditorData().output_memory; track k) {
+            <div class="editor-tag-row">
+              <span class="editor-tag">{{ k }}</span>
+              <button class="del-btn" (click)="skillEditorRemoveOutputMemory(k)">✕</button>
+            </div>
+          }
+        </div>
+      </div>
+      <div class="editor-modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn-secondary" (click)="skillEditorOpen.set(false)">取消</button>
+        <button class="btn-primary" (click)="saveSkillEditor()">儲存</button>
+      </div>
+    </div>
+  }
+
+  <!-- ── Team 編輯器 Modal ──────────────────────────────────────────────── -->
+  @if (teamEditorOpen()) {
+    <div class="editor-modal-overlay" (click)="teamEditorOpen.set(false)"></div>
+    <div class="editor-modal" (click)="$event.stopPropagation()">
+      <div class="editor-modal-header">
+        <span class="editor-modal-title">{{ teamEditorIsNew() ? '建立 Team' : '編輯 Team：' + teamEditorData().name }}</span>
+        <button class="usage-modal-close" (click)="teamEditorOpen.set(false)">✕</button>
+      </div>
+      <div class="editor-modal-body">
+        <!-- 基本資訊 -->
+        <div class="editor-section">
+          <div class="editor-section-title">基本資訊</div>
+          <label class="editor-label">名稱
+            <input class="editor-input"
+              [value]="teamEditorData().name || ''"
+              (input)="teamEditorData.set({...teamEditorData(), name: $any($event.target).value})"
+              placeholder="fullstack-dev">
+          </label>
+          <label class="editor-label">說明
+            <input class="editor-input"
+              [value]="teamEditorData().description || ''"
+              (input)="teamEditorData.set({...teamEditorData(), description: $any($event.target).value})"
+              placeholder="這個 Team 的用途">
+          </label>
+        </div>
+        <!-- 成員 -->
+        <div class="editor-section">
+          <div class="editor-section-title">成員</div>
+          @for (m of teamEditorData().members ?? []; track $index) {
+            <div class="team-member-editor-row">
+              <select class="memory-project-select" style="flex:1"
+                [value]="m.agent"
+                (change)="teamEditorUpdateMember($index, 'agent', $any($event.target).value)">
+                <option value="">選擇 Agent…</option>
+                @for (a of agents(); track a.id) {
+                  <option [value]="a.id">@{{ a.name }}</option>
+                }
+              </select>
+              <input class="editor-input" style="flex:1" placeholder="角色說明（前端/審查…）"
+                [value]="m.role"
+                (input)="teamEditorUpdateMember($index, 'role', $any($event.target).value)">
+              <button class="del-btn" (click)="teamEditorRemoveMember($index)">✕</button>
+            </div>
+          }
+          <button class="btn-secondary" style="width:100%;margin-top:8px;font-size:12px;" (click)="teamEditorAddMember()">＋ 新增成員</button>
+        </div>
+      </div>
+      <div class="editor-modal-footer">
+        @if (!teamEditorIsNew()) {
+          <button class="btn-danger" (click)="deleteTeam(teamEditorData().id!); teamEditorOpen.set(false)">刪除</button>
+        }
+        <div style="flex:1"></div>
+        <button class="btn-secondary" (click)="teamEditorOpen.set(false)">取消</button>
+        <button class="btn-primary" (click)="saveTeamEditor()">儲存</button>
       </div>
     </div>
   }
