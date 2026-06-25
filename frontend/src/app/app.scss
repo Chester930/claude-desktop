@@ -1315,6 +1315,12 @@ body {
   justify-content: space-between;
   gap: 4px;
   margin-top: 2px;
+
+  .session-time {
+    font-size: 10px;
+    color: $text-dim;
+    flex-shrink: 0;
+  }
 }
 
 // 常駐功能按鈕群
