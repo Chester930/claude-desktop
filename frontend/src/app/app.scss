@@ -3064,3 +3064,196 @@ body {
     color: #e5e7eb;
   }
 }
+
+// ── MCP Panel Redesign ────────────────────────────────────────────────────────
+.mcp-view { display: flex; flex-direction: column; height: 100%; }
+
+.mcp-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  &.mcp-section-external { flex: 0 0 auto; max-height: 45%; overflow-y: auto; }
+  &.mcp-section-local    { flex: 1 1 0;    overflow-y: auto; margin-top: 2px; }
+}
+
+.mcp-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #aaa;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  position: sticky;
+  top: 0;
+  background: var(--bg-main, #0d0d0d);
+  z-index: 2;
+}
+.mcp-section-icon { font-size: 13px; }
+.mcp-section-count {
+  font-size: 10px;
+  background: #2a2a2a;
+  border-radius: 8px;
+  padding: 1px 6px;
+  color: #666;
+  margin-left: 2px;
+}
+.mcp-section-hint {
+  font-size: 9px;
+  color: #444;
+  margin-left: auto;
+  font-weight: 400;
+}
+.mcp-empty {
+  font-size: 10px;
+  color: #444;
+  font-style: italic;
+  padding: 8px 4px;
+  text-align: center;
+  code { background: #1a1a1a; padding: 1px 4px; border-radius: 3px; font-size: 9px; }
+}
+.mcp-footer-hint {
+  margin-top: 8px;
+  font-size: 10px;
+  color: #444;
+  padding: 4px;
+  code { background: #1a1a1a; padding: 1px 4px; border-radius: 3px; }
+}
+
+// ── Local MCP card ─────────────────────────────────────────────────────────────
+.local-mcp-card {
+  border-left: 2px solid #2a2a2a;
+  &.docker-card { border-left-color: #1a54962a; background: rgba(26,84,150,0.04); }
+  &.docker-card:hover { background: rgba(26,84,150,0.08); }
+}
+
+.local-mcp-name-col {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  .card-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+.mcp-type-chip {
+  font-size: 13px;
+  flex-shrink: 0;
+  &.docker-chip { }
+  &.stdio-chip  { }
+  &.http-chip   { }
+}
+
+// Status lamp (larger, always visible)
+.mcp-status-lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #333;
+  box-shadow: none;
+  transition: background 0.3s, box-shadow 0.3s;
+  &.lamp-on {
+    background: #10b981;
+    box-shadow: 0 0 6px rgba(16,185,129,0.6);
+  }
+}
+
+// Control bar (always visible, top-right)
+.mcp-ctrl-bar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.ctrl-btn {
+  width: 24px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1px solid #2a2a2a;
+  background: #151515;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.12s;
+  &:hover { border-color: #444; }
+  &.ctrl-start   { color: #10b981; &:hover { background: #0a2a1e; border-color: #10b981; } }
+  &.ctrl-stop    { color: #ef4444; &:hover { background: #2a0a0a; border-color: #ef4444; } }
+  &.ctrl-restart { color: #f59e0b; &:hover { background: #2a1e0a; border-color: #f59e0b; } }
+  &.ctrl-log     { color: #888;    font-size: 12px;
+    &.active, &:hover { background: #1e1e2e; border-color: #7c6fff; color: #9d94ff; }
+  }
+}
+
+// Metadata row below card header
+.local-mcp-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  flex-wrap: wrap;
+}
+.docker-image-tag {
+  font-family: monospace;
+  font-size: 9px;
+  background: rgba(26,84,150,0.25);
+  color: #7cb8ff;
+  border: 1px solid rgba(26,84,150,0.35);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.mcp-port-tag {
+  font-family: monospace;
+  font-size: 9px;
+  background: #1a1a1a;
+  color: #888;
+  border: 1px solid #2a2a2a;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+// Docker config form
+.docker-cfg-section {
+  margin-top: 8px;
+  border-top: 1px dashed rgba(255,255,255,0.08);
+  padding-top: 8px;
+}
+.docker-cfg-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.docker-cfg-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  color: #888;
+}
+.docker-cfg-input {
+  background: #151515;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 4px 7px;
+  font-size: 11px;
+  color: #e5e7eb;
+  &:focus { outline: none; border-color: #1a5496; }
+}
+.docker-cfg-display {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.docker-cfg-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  span:first-child { color: #666; min-width: 40px; }
+  code { background: #1a1a1a; padding: 1px 5px; border-radius: 3px; color: #7cb8ff; }
+}

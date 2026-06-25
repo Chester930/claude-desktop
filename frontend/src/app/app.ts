@@ -23,6 +23,8 @@ export interface McpTool {
   workflow?: McpWorkflow;
 }
 
+export type McpType = 'external' | 'docker' | 'stdio' | 'local-http';
+
 export interface McpServer {
   id: string;
   name: string;
@@ -30,8 +32,13 @@ export interface McpServer {
   status: string;
   authorized: boolean;
   description: string;
+  mcpType: McpType;
   dockerized?: boolean;
   dockerImage?: string;
+  port?: string;
+  containerName?: string;
+  composeFile?: string;
+  composeService?: string;
   tools?: McpTool[];
 }
 
@@ -123,10 +130,33 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   agentSkillsMap = signal<Record<string, string[]>>({});
   agentMcpsMap   = signal<Record<string, string[]>>({}); // agent 直連 MCP，不透過 skill
 
-  // 自建 MCP server 清單（與外部服務分層顯示）
+  // Local MCP Docker/compose metadata loaded from backend
+  localMcpConfigs = signal<Record<string, any>>({});
+
+  // Manual override: names force-promoted to local section
   managedMcpNames = signal<string[]>([]);
-  externalMcpServers = computed(() => this.sortedMcpServers().filter(m => !this.managedMcpNames().includes(m.name)));
-  selfMcpServers     = computed(() => this.sortedMcpServers().filter(m =>  this.managedMcpNames().includes(m.name)));
+
+  isMcpLocal(m: McpServer): boolean {
+    if (this.managedMcpNames().includes(m.name)) return true;
+    const t = m.mcpType;
+    if (t === 'docker' || t === 'stdio' || t === 'local-http') return true;
+    // Fallback: detect from URL if mcpType wasn't set
+    const url = (m.url || '').toLowerCase();
+    return url.startsWith('docker://')
+      || url.includes('localhost')
+      || url.includes('127.0.0.1')
+      || url.startsWith('stdio://')
+      || m.dockerized === true;
+  }
+
+  externalMcpServers = computed(() => this.sortedMcpServers().filter(m => !this.isMcpLocal(m)));
+  localMcpServers    = computed(() => this.sortedMcpServers().filter(m =>  this.isMcpLocal(m)));
+  dockerMcpServers   = computed(() => this.localMcpServers().filter(m => m.mcpType === 'docker' || m.dockerized));
+  stdioMcpServers    = computed(() => this.localMcpServers().filter(m => m.mcpType === 'stdio'));
+  localHttpMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'local-http'));
+
+  // Keep selfMcpServers as alias for backward-compat with agent/skill link display
+  selfMcpServers = this.localMcpServers;
 
   toggleManagedMcp(name: string) {
     this.managedMcpNames.update(arr =>
@@ -134,8 +164,39 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     );
     localStorage.setItem('claude_desktop_managed_mcps', JSON.stringify(this.managedMcpNames()));
   }
-  isMcpManaged(name: string)   { return this.managedMcpNames().includes(name); }
+
   isMcpRunning(status: string) { return status?.toLowerCase().includes('connected'); }
+
+  // Local MCP Docker config
+  localDockerConfig = signal<{name: string; containerName: string; composeFile: string; composeService: string; port: string; notes: string} | null>(null);
+  editingDockerMcp  = signal<string | null>(null);
+
+  openDockerConfig(m: McpServer) {
+    const cfg = this.localMcpConfigs()[m.name] ?? {};
+    this.localDockerConfig.set({
+      name:           m.name,
+      containerName:  cfg.containerName  ?? m.containerName  ?? '',
+      composeFile:    cfg.composeFile    ?? m.composeFile    ?? '',
+      composeService: cfg.composeService ?? m.composeService ?? '',
+      port:           cfg.port           ?? m.port           ?? '',
+      notes:          cfg.notes          ?? '',
+    });
+    this.editingDockerMcp.set(m.name);
+  }
+
+  saveDockerConfig() {
+    const cfg = this.localDockerConfig();
+    if (!cfg) return;
+    this.claude.saveLocalMcpConfig(cfg.name, cfg).subscribe(() => {
+      this.localMcpConfigs.update(all => ({ ...all, [cfg.name]: cfg }));
+      this.showToast(`Docker 設定已儲存：${cfg.name}`, 'success', 2000);
+      this.editingDockerMcp.set(null);
+    });
+  }
+
+  loadLocalMcpConfigs() {
+    this.claude.getLocalMcpConfig().subscribe(cfg => this.localMcpConfigs.set(cfg));
+  }
 
   getMcpColor(name: string, status: string): string {
     const running = this.isMcpRunning(status);
@@ -2133,6 +2194,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   loadMcp() {
     this.mcpLoading.set(true);
+    this.loadLocalMcpConfigs();
     this.claude.runCliCommand(['mcp', 'list']).subscribe({
       next:  out => {
         this.mcpList.set(out || '（無已安裝的 MCP）');
@@ -2293,20 +2355,26 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const authorized = this.isMcpAuthorized(name);
       const description = this.MCP_DESCRIPTIONS[name] || `Model Context Protocol server for ${name} located at ${url}.`;
       const tools = this.MCP_TOOLS_MAP[name] || [];
-      
+
+      // Auto-detect type from URL
+      const urlL = url.toLowerCase();
+      let mcpType: McpType = 'external';
+      if (urlL.startsWith('docker://') || urlL.includes('docker')) mcpType = 'docker';
+      else if (urlL.includes('localhost') || urlL.includes('127.0.0.1')) mcpType = 'local-http';
+
+      // Extract port
+      const portMatch = url.match(/:(\d+)/);
+      const port = portMatch ? portMatch[1] : undefined;
+
       servers.push({
-        id,
-        name,
-        url,
-        status,
-        authorized,
-        description,
-        dockerized: false,
-        tools
+        id, name, url, status, authorized, description,
+        mcpType, port,
+        dockerized: mcpType === 'docker',
+        tools,
       });
     }
 
-    // Append custom self-built Docker MCP servers for demonstration
+    // Demo Docker MCP servers (shown when no real ones configured)
     if (!servers.some(s => s.name.includes('Docker MySQL Sync'))) {
       servers.push({
         id: 'docker-mysql-sync',
@@ -2315,8 +2383,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         status: 'Connected',
         authorized: true,
         description: 'Custom dockerized database sync MCP server, runs inside an isolated container.',
+        mcpType: 'docker',
         dockerized: true,
         dockerImage: 'mysql-sync-agent:latest',
+        port: '3306',
         tools: this.MCP_TOOLS_MAP['Docker MySQL Sync (Custom)']
       });
     }
@@ -2328,8 +2398,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         status: 'Connected',
         authorized: true,
         description: 'Custom N8N nodes workflow execution trigger. Communicates with visual automated flow charts.',
+        mcpType: 'docker',
         dockerized: true,
         dockerImage: 'n8nio/n8n:latest',
+        port: '5678',
         tools: this.MCP_TOOLS_MAP['N8N Automation (Custom)']
       });
     }

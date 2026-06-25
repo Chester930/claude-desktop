@@ -169,6 +169,16 @@ export class ClaudeService {
   stopMcp(name: string):    Observable<any> { return this.http.post(`${this.api}/mcp/${encodeURIComponent(name)}/stop`,    {}); }
   restartMcp(name: string): Observable<any> { return this.http.post(`${this.api}/mcp/${encodeURIComponent(name)}/restart`, {}); }
 
+  getMcpInfo(name: string): Observable<any> {
+    return this.http.get<any>(`${this.api}/mcp/${encodeURIComponent(name)}/info`);
+  }
+  getLocalMcpConfig(): Observable<Record<string, any>> {
+    return this.http.get<Record<string, any>>(`${this.api}/mcp-local-config`);
+  }
+  saveLocalMcpConfig(name: string, cfg: any): Observable<any> {
+    return this.http.put(`${this.api}/mcp-local-config/${encodeURIComponent(name)}`, cfg);
+  }
+
   restoreBackup(file: File): Promise<any> {
     const form = new FormData();
     form.append('file', file);

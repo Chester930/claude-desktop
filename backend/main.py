@@ -200,6 +200,69 @@ active_sessions: dict[str, str] = {}   # client_id -> claude session_id
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
 _mcp_logs:       dict[str, list[str]] = {}                   # mcp name -> log lines
+
+# Local MCP config (Docker metadata, compose paths, etc.)
+LOCAL_MCP_CONFIG_FILE = CLAUDE_HOME / "claude-desktop-local-mcps.json"
+
+def _load_local_mcp_cfg() -> dict:
+    if LOCAL_MCP_CONFIG_FILE.exists():
+        try:
+            return json.loads(LOCAL_MCP_CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _save_local_mcp_cfg(cfg: dict) -> None:
+    LOCAL_MCP_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOCAL_MCP_CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def _analyze_mcp_entry(name: str) -> dict:
+    """Read ~/.claude/claude.json and return type + metadata for one MCP."""
+    config_path = CLAUDE_HOME / "claude.json"
+    entry: dict = {}
+    if config_path.exists():
+        try:
+            raw = json.loads(config_path.read_text(encoding="utf-8"))
+            entry = raw.get("mcpServers", {}).get(name, {})
+        except Exception:
+            pass
+
+    cmd   = entry.get("command", "")
+    args  = entry.get("args", [])
+    url   = entry.get("url", "")
+    etype = entry.get("type", "")      # "stdio" | "http" | "sse"
+
+    # Docker: command is 'docker' OR first arg is 'run'/'start'/'compose'
+    is_docker_cmd = (cmd == "docker") or (cmd and args and args[0] in ("run", "start", "compose"))
+    is_local_url  = url and (url.startswith("http://localhost") or url.startswith("http://127.0.0.1") or url.startswith("ws://localhost"))
+
+    import re as _re
+    port_match = _re.search(r":(\d+)", url)
+    port = port_match.group(1) if port_match else None
+
+    # Extract Docker image from args: docker run [opts] IMAGE
+    docker_image = None
+    if is_docker_cmd and args:
+        for i, a in enumerate(args):
+            if a in ("-p", "--name", "-e", "--network", "-v", "--rm", "-d", "-it"):
+                continue
+            if a.startswith("-"):
+                continue
+            if args[i-1] in ("-p", "--name", "-e", "--network", "-v") if i > 0 else False:
+                continue
+            # First non-flag arg that isn't a subcommand
+            if a not in ("run", "start", "stop", "restart", "exec", "compose", "up", "down"):
+                docker_image = a
+                break
+
+    if is_docker_cmd:
+        return {"mcpType": "docker", "command": cmd, "args": args, "dockerImage": docker_image, "port": port}
+    elif etype == "stdio" or (cmd and not url):
+        return {"mcpType": "stdio", "command": cmd, "args": args, "port": port}
+    elif is_local_url or etype == "http":
+        return {"mcpType": "local-http", "url": url, "port": port}
+    else:
+        return {"mcpType": "external", "url": url, "port": port}
 _log_buffer: list[str] = []
 
 def _log(msg: str) -> None:
@@ -932,9 +995,53 @@ async def _drain_mcp(name: str, proc: asyncio.subprocess.Process) -> None:
 
 
 async def handle_mcp_logs(request: web.Request) -> web.Response:
-    name = request.match_info["name"]
-    lines = _mcp_logs.get(name, [])
+    name  = request.match_info["name"]
+    lines = list(_mcp_logs.get(name, []))
+
+    # Also try `docker logs --tail 80` if container is configured
+    local_cfg = _load_local_mcp_cfg().get(name, {})
+    container = local_cfg.get("containerName", "")
+    if container and not lines:
+        try:
+            p = await asyncio.create_subprocess_exec(
+                "docker", "logs", "--tail", "80", container,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            out, _ = await asyncio.wait_for(p.communicate(), timeout=5)
+            lines = out.decode("utf-8", errors="replace").splitlines()
+        except Exception:
+            pass
+
     return web.json_response({"name": name, "lines": lines[-100:]})
+
+
+async def handle_local_mcp_config_get(request: web.Request) -> web.Response:
+    """Return all local MCP Docker/compose metadata."""
+    return web.json_response(_load_local_mcp_cfg())
+
+
+async def handle_local_mcp_config_put(request: web.Request) -> web.Response:
+    """Save Docker/compose metadata for one MCP server."""
+    name = request.match_info["name"]
+    data = await request.json()
+    cfg  = _load_local_mcp_cfg()
+    cfg[name] = {
+        "containerName":  data.get("containerName", ""),
+        "composeFile":    data.get("composeFile", ""),
+        "composeService": data.get("composeService", ""),
+        "port":           data.get("port", ""),
+        "notes":          data.get("notes", ""),
+    }
+    _save_local_mcp_cfg(cfg)
+    return web.json_response({"ok": True})
+
+
+async def handle_mcp_info(request: web.Request) -> web.Response:
+    """Return type + metadata for one MCP server (reads claude.json)."""
+    name = request.match_info["name"]
+    info = _analyze_mcp_entry(name)
+    local_cfg = _load_local_mcp_cfg().get(name, {})
+    return web.json_response({**info, **local_cfg})
 
 
 async def handle_session_auto_title(request: web.Request) -> web.Response:
@@ -1020,22 +1127,56 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
     name   = request.match_info["name"]
     action = request.match_info["action"]   # start | stop | restart
 
-    # Read MCP command from Claude settings if available
-    mcp_cmd = _get_mcp_command(name)
+    mcp_info    = _analyze_mcp_entry(name)
+    local_cfg   = _load_local_mcp_cfg().get(name, {})
+    container   = local_cfg.get("containerName", "")
+    compose_f   = local_cfg.get("composeFile", "")
+    compose_svc = local_cfg.get("composeService", "")
+    is_docker   = mcp_info["mcpType"] == "docker" or bool(container) or bool(compose_f)
 
+    # ── STOP / RESTART phase 1: shut down ────────────────────────────────────
     if action in ("stop", "restart"):
-        proc = _mcp_procs.pop(name, None)
-        if proc:
-            try: proc.kill()
-            except Exception: pass
-
-    if action in ("start", "restart") and mcp_cmd:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *mcp_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+        if compose_f:
+            svc_args = [compose_svc] if compose_svc else []
+            p = await asyncio.create_subprocess_exec(
+                "docker", "compose", "-f", compose_f, "stop", *svc_args,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
+            await p.communicate()
+        elif container:
+            p = await asyncio.create_subprocess_exec(
+                "docker", "stop", container,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            await p.communicate()
+        else:
+            proc = _mcp_procs.pop(name, None)
+            if proc:
+                try: proc.kill()
+                except Exception: pass
+
+    # ── START / RESTART phase 2: launch ──────────────────────────────────────
+    if action in ("start", "restart"):
+        try:
+            if compose_f:
+                svc_args = [compose_svc] if compose_svc else []
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "compose", "-f", compose_f, "up", "-d", *svc_args,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+            elif container:
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "start", container,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
+            else:
+                mcp_cmd = _get_mcp_command(name)
+                if not mcp_cmd:
+                    return web.json_response({"ok": False, "error": "no command configured"})
+                proc = await asyncio.create_subprocess_exec(
+                    *mcp_cmd,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                )
             _mcp_procs[name] = proc
             _mcp_logs[name] = []
             asyncio.create_task(_drain_mcp(name, proc))
@@ -1043,7 +1184,10 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
             return web.json_response({"ok": False, "error": str(e)})
 
     running = name in _mcp_procs and _mcp_procs[name].returncode is None
-    return web.json_response({"ok": True, "name": name, "action": action, "running": running})
+    return web.json_response({
+        "ok": True, "name": name, "action": action, "running": running,
+        "mcpType": mcp_info["mcpType"],
+    })
 
 
 def _get_mcp_command(name: str) -> list[str] | None:
@@ -1364,8 +1508,11 @@ def build_app() -> web.Application:
         ("POST",   "/api/cli",             handle_cli),
         ("GET",    "/api/config",          handle_config_get),
         ("PUT",    "/api/config",          handle_config_put),
-        ("POST",   "/api/mcp/{name}/{action}", handle_mcp_action),
-        ("GET",    "/api/mcp/{name}/logs",    handle_mcp_logs),
+        ("POST",   "/api/mcp/{name}/{action}",  handle_mcp_action),
+        ("GET",    "/api/mcp/{name}/logs",     handle_mcp_logs),
+        ("GET",    "/api/mcp/{name}/info",     handle_mcp_info),
+        ("GET",    "/api/mcp-local-config",    handle_local_mcp_config_get),
+        ("PUT",    "/api/mcp-local-config/{name}", handle_local_mcp_config_put),
         # P3
         ("GET",    "/api/profiles",           handle_profiles),
         ("POST",   "/api/chat/provider",      handle_chat_provider),
