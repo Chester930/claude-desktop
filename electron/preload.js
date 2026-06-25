@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_, pct) => cb(pct)),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', () => cb()),
   onUpdateReady: (cb) => ipcRenderer.on('update-ready', () => cb()),
+  getLoginItem: () => ipcRenderer.invoke('loginItem:get'),
+  setLoginItem: (enabled: boolean) => ipcRenderer.invoke('loginItem:set', enabled),
 });

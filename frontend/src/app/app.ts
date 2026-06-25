@@ -50,15 +50,17 @@ export interface McpServer {
   styleUrl: './app.scss'
 })
 export class App implements OnInit, OnDestroy, AfterViewChecked {
-  @ViewChild('chatEnd')    chatEnd!: ElementRef;
-  @ViewChild('inputRef')   inputRef!: ElementRef;
+  @ViewChild('chatEnd') chatEnd!: ElementRef;
+  @ViewChild('inputRef') inputRef!: ElementRef;
   @ViewChild('scrollArea') scrollArea!: ElementRef;
 
+  readonly isElectron = !!(window as any).electronAPI;
+
   // Data
-  agents    = signal<Agent[]>([]);
-  skills    = signal<Skill[]>([]);
-  sessions  = signal<Session[]>([]);
-  memory    = signal<Record<string, string>>({});
+  agents = signal<Agent[]>([]);
+  skills = signal<Skill[]>([]);
+  sessions = signal<Session[]>([]);
+  memory = signal<Record<string, string>>({});
   schedules = signal<Schedule[]>([]);
 
   rightPanelFilter = signal('');
@@ -128,7 +130,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // 永久綁定：儲存於 localStorage（由使用者在 UI 操作）
   agentSkillsMap = signal<Record<string, string[]>>({});
-  agentMcpsMap   = signal<Record<string, string[]>>({}); // agent 直連 MCP，不透過 skill
+  agentMcpsMap = signal<Record<string, string[]>>({}); // agent 直連 MCP，不透過 skill
 
   // MCP panel split (top section height %, clamped 15–80)
   mcpSplitPct = signal<number>(
@@ -140,17 +142,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   onMcpDividerDown(e: MouseEvent) {
     e.preventDefault();
-    this._mcpDragActive  = true;
-    this._mcpDragStartY  = e.clientY;
+    this._mcpDragActive = true;
+    this._mcpDragStartY = e.clientY;
     this._mcpDragStartPct = this.mcpSplitPct();
 
     const onMove = (mv: MouseEvent) => {
       if (!this._mcpDragActive) return;
       const container = document.querySelector('.mcp-view') as HTMLElement;
       if (!container) return;
-      const totalH  = container.clientHeight;
-      const delta   = mv.clientY - this._mcpDragStartY;
-      const newPct  = Math.max(15, Math.min(80, this._mcpDragStartPct + (delta / totalH) * 100));
+      const totalH = container.clientHeight;
+      const delta = mv.clientY - this._mcpDragStartY;
+      const newPct = Math.max(15, Math.min(80, this._mcpDragStartPct + (delta / totalH) * 100));
       this.mcpSplitPct.set(Math.round(newPct));
     };
 
@@ -158,13 +160,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this._mcpDragActive = false;
       localStorage.setItem('claude_mcp_split_pct', String(this.mcpSplitPct()));
       document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup',   onUp);
+      document.removeEventListener('mouseup', onUp);
       document.body.style.cursor = '';
     };
 
     document.body.style.cursor = 'ns-resize';
     document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup',   onUp);
+    document.addEventListener('mouseup', onUp);
   }
 
   // Local MCP Docker/compose metadata loaded from backend
@@ -187,9 +189,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   externalMcpServers = computed(() => this.sortedMcpServers().filter(m => !this.isMcpLocal(m)));
-  localMcpServers    = computed(() => this.sortedMcpServers().filter(m =>  this.isMcpLocal(m)));
-  dockerMcpServers   = computed(() => this.localMcpServers().filter(m => m.mcpType === 'docker' || m.dockerized));
-  stdioMcpServers    = computed(() => this.localMcpServers().filter(m => m.mcpType === 'stdio'));
+  localMcpServers = computed(() => this.sortedMcpServers().filter(m => this.isMcpLocal(m)));
+  dockerMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'docker' || m.dockerized));
+  stdioMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'stdio'));
   localHttpMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'local-http'));
 
   // Keep selfMcpServers as alias for backward-compat with agent/skill link display
@@ -205,18 +207,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   isMcpRunning(status: string) { return status?.toLowerCase().includes('connected'); }
 
   // Local MCP Docker config
-  localDockerConfig = signal<{name: string; containerName: string; composeFile: string; composeService: string; port: string; notes: string} | null>(null);
-  editingDockerMcp  = signal<string | null>(null);
+  localDockerConfig = signal<{ name: string; containerName: string; composeFile: string; composeService: string; port: string; notes: string } | null>(null);
+  editingDockerMcp = signal<string | null>(null);
 
   openDockerConfig(m: McpServer) {
     const cfg = this.localMcpConfigs()[m.name] ?? {};
     this.localDockerConfig.set({
-      name:           m.name,
-      containerName:  cfg.containerName  ?? m.containerName  ?? '',
-      composeFile:    cfg.composeFile    ?? m.composeFile    ?? '',
+      name: m.name,
+      containerName: cfg.containerName ?? m.containerName ?? '',
+      composeFile: cfg.composeFile ?? m.composeFile ?? '',
       composeService: cfg.composeService ?? m.composeService ?? '',
-      port:           cfg.port           ?? m.port           ?? '',
-      notes:          cfg.notes          ?? '',
+      port: cfg.port ?? m.port ?? '',
+      notes: cfg.notes ?? '',
     });
     this.editingDockerMcp.set(m.name);
   }
@@ -237,35 +239,35 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   getMcpColor(name: string, status: string): string {
     const running = this.isMcpRunning(status);
-    const inUse   = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse)  return '#ef4444'; // 未啟動 + 使用中 → 紅
-    if (!running)           return '';        // 未啟動 + 未使用 → 無色
-    if (!inUse)             return '#f59e0b'; // 啟動 + 未使用  → 黃
+    const inUse = this.isMcpLinkedToActiveAgent(name);
+    if (!running && inUse) return '#ef4444'; // 未啟動 + 使用中 → 紅
+    if (!running) return '';        // 未啟動 + 未使用 → 無色
+    if (!inUse) return '#f59e0b'; // 啟動 + 未使用  → 黃
     return '#10b981';                         // 啟動 + 使用中  → 綠
   }
 
   /** CSS class for the status lamp — encodes the 4-state traffic-light logic. */
   getMcpLampClass(name: string, status: string): string {
     const running = this.isMcpRunning(status);
-    const inUse   = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse)  return 'lamp-red';    // ⚠ 需要關注
-    if (!running)           return 'lamp-off';    // ● 停止（灰）
-    if (!inUse)             return 'lamp-yellow'; // ● 運行中但未啟用
+    const inUse = this.isMcpLinkedToActiveAgent(name);
+    if (!running && inUse) return 'lamp-red';    // ⚠ 需要關注
+    if (!running) return 'lamp-off';    // ● 停止（灰）
+    if (!inUse) return 'lamp-yellow'; // ● 運行中但未啟用
     return 'lamp-green';                          // ● 運行中且啟用
   }
 
   getMcpLampTitle(name: string, status: string): string {
     const running = this.isMcpRunning(status);
-    const inUse   = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse)  return '⚠ 伺服器未啟動，但已被 Agent 使用';
-    if (!running)           return '● 已停止';
-    if (!inUse)             return '● 運行中（未綁定到目前 Agent）';
+    const inUse = this.isMcpLinkedToActiveAgent(name);
+    if (!running && inUse) return '⚠ 伺服器未啟動，但已被 Agent 使用';
+    if (!running) return '● 已停止';
+    if (!inUse) return '● 運行中（未綁定到目前 Agent）';
     return '● 運行中 · 已啟用';
   }
 
-  startMcp(name: string)   { this.claude.startMcp(name).subscribe();   }
-  stopMcp(name: string)    { this.claude.stopMcp(name).subscribe();     }
-  restartMcp(name: string) { this.claude.restartMcp(name).subscribe();  }
+  startMcp(name: string) { this.claude.startMcp(name).subscribe(); }
+  stopMcp(name: string) { this.claude.stopMcp(name).subscribe(); }
+  restartMcp(name: string) { this.claude.restartMcp(name).subscribe(); }
 
   private saveAgentSkillsMap() {
     localStorage.setItem('claude_desktop_agent_skills', JSON.stringify(this.agentSkillsMap()));
@@ -359,17 +361,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   };
 
   // Chat state
-  messages    = signal<ChatMessage[]>([]);
-  inputText   = '';
-  isStreaming  = signal(false);
+  messages = signal<ChatMessage[]>([]);
+  inputText = '';
+  isStreaming = signal(false);
   selectedAgent = signal('');
-  activeTab   = signal<'agents' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp'>('agents');
+  activeTab = signal<'agents' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp'>('agents');
   selectedMemoryKey = signal('');
   sessionSearch = '';
 
   // Schedule form
   newSchedulePrompt = '';
-  newScheduleCron   = '';
+  newScheduleCron = '';
 
   // Token usage + cost
   tokenUsage = signal<{ input: number; output: number; cost: number } | null>(null);
@@ -377,11 +379,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // Attachments
   attachedFiles = signal<{ name: string; path: string; preview?: string }[]>([]);
-  isUploading   = signal(false);
+  isUploading = signal(false);
 
   // Soul / Persona
   soulContent = '';
-  soulSaved   = signal(true);
+  soulSaved = signal(true);
   private soulTimer: any = null;
 
   // Multi-soul state
@@ -394,25 +396,25 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   renameSoulInput = '';
 
   // Resizing signals & state
-  sidebarWidth   = signal(300);
-  rightWidth     = signal(390);
-  inputHeight    = signal(140);
+  sidebarWidth = signal(300);
+  rightWidth = signal(300);
+  inputHeight = signal(140);
   soulSplitRatio = signal(0.5);   // 0 = all upper, 1 = all lower
 
   private _resizing = false;
-  private _startX   = 0;
-  private _startW   = 0;
+  private _startX = 0;
+  private _startW = 0;
 
   private _rightResizing = false;
-  private _startXRight   = 0;
-  private _startWRight   = 0;
+  private _startXRight = 0;
+  private _startWRight = 0;
 
   private _inputResizing = false;
-  private _startYInput   = 0;
-  private _startHInput   = 0;
+  private _startYInput = 0;
+  private _startHInput = 0;
 
-  private _soulResizing  = false;
-  private _soulStartY    = 0;
+  private _soulResizing = false;
+  private _soulStartY = 0;
   private _soulStartRatio = 0;
   private _soulPanelHeight = 0;
 
@@ -432,8 +434,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   onSoulDividerMousedown(e: MouseEvent, panelEl: HTMLElement) {
-    this._soulResizing   = true;
-    this._soulStartY     = e.clientY;
+    this._soulResizing = true;
+    this._soulStartY = e.clientY;
     this._soulStartRatio = this.soulSplitRatio();
     this._soulPanelHeight = panelEl.clientHeight;
     e.preventDefault();
@@ -459,7 +461,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this._resizing = false;
     this._rightResizing = false;
     this._inputResizing = false;
-    this._soulResizing  = false;
+    this._soulResizing = false;
   }
 
   // Scroll to bottom
@@ -488,7 +490,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   debugMode = signal(false);
 
   // ── T11 多 Tab 對話 ────────────────────────────────────
-  chatTabs   = signal<ChatTab[]>([]);
+  chatTabs = signal<ChatTab[]>([]);
   activeChatId = signal('');
 
   get activeChat(): ChatTab | undefined {
@@ -534,8 +536,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   checkQuotaInMessages(msgs: ChatMessage[]) {
     const hasLimit = msgs.some(m => m.text && (
-      m.text.toLowerCase().includes('session limit') || 
-      m.text.toLowerCase().includes('rate limit') || 
+      m.text.toLowerCase().includes('session limit') ||
+      m.text.toLowerCase().includes('rate limit') ||
       m.text.toLowerCase().includes('limit · resets') ||
       m.text.toLowerCase().includes('quota')
     ));
@@ -556,7 +558,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // Tab 關閉確認 modal state
-  tabCloseConfirmId    = signal<string | null>(null);
+  tabCloseConfirmId = signal<string | null>(null);
   tabCloseConfirmAgent = signal<string>('');
 
   closeChatTab(tabId: string, e: Event) {
@@ -729,7 +731,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // ── T13 File tree ────────────────────────────────────────
   fileTreePath = signal('');
-  fileTree     = signal<{ path: string; parent: string; items: FileItem[] } | null>(null);
+  fileTree = signal<{ path: string; parent: string; items: FileItem[] } | null>(null);
   fileTreeOpen = signal(false);
 
   loadFileTree(path?: string) {
@@ -751,9 +753,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // ── T14 ⌘K 全局搜尋 ─────────────────────────────────────
-  cmdOpen  = signal(false);
-  cmdQ     = signal('');
-  cmdIdx   = signal(0);
+  cmdOpen = signal(false);
+  cmdQ = signal('');
+  cmdIdx = signal(0);
   cmdInputText = '';
 
   cmdItems = computed(() => {
@@ -791,26 +793,26 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   selectCmdItem(item: { type: string; id: string; label: string } | undefined) {
     if (!item) return;
     this.closeCmd();
-    if (item.type === 'cmd')     { this.executeBuiltinCmd(item.id); }
+    if (item.type === 'cmd') { this.executeBuiltinCmd(item.id); }
     else if (item.type === 'session') { const s = this.sessions().find(x => x.id === item.id); if (s) this.loadSession(s); }
-    else if (item.type === 'agent')   { this.selectAgent(item.id); }
-    else if (item.type === 'skill')   { this.inputText = item.label + ' '; this.inputRef?.nativeElement?.focus(); }
+    else if (item.type === 'agent') { this.selectAgent(item.id); }
+    else if (item.type === 'skill') { this.inputText = item.label + ' '; this.inputRef?.nativeElement?.focus(); }
   }
 
   // T01 — model / effort / permissionMode（對應 Claude CLI 參數）
-  readonly MODEL_OPTIONS   = ['sonnet','opus','haiku','fable'] as const;
-  readonly EFFORT_OPTIONS  = ['low','medium','high','xhigh','max'] as const;
-  readonly PERM_OPTIONS    = ['acceptEdits','default','plan','bypassPermissions','auto'] as const;
-  readonly PERM_LABELS: Record<string,string> = {
+  readonly MODEL_OPTIONS = ['sonnet', 'opus', 'haiku', 'fable'] as const;
+  readonly EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+  readonly PERM_OPTIONS = ['acceptEdits', 'default', 'plan', 'bypassPermissions', 'auto'] as const;
+  readonly PERM_LABELS: Record<string, string> = {
     acceptEdits: 'Accept edits', default: 'Default',
     plan: 'Plan', bypassPermissions: 'Bypass', auto: 'Auto',
   };
-  readonly MODEL_LABELS: Record<string,string> = {
+  readonly MODEL_LABELS: Record<string, string> = {
     sonnet: 'Sonnet 4.6', opus: 'Opus 4.8', haiku: 'Haiku 4.5', fable: 'Fable 5',
   };
-  model          = signal('sonnet');
-  effort         = signal<'low'|'medium'|'high'|'xhigh'|'max'>('medium');
-  permissionMode = signal<'default'|'acceptEdits'|'bypassPermissions'|'plan'|'auto'>('acceptEdits');
+  model = signal('sonnet');
+  effort = signal<'low' | 'medium' | 'high' | 'xhigh' | 'max'>('medium');
+  permissionMode = signal<'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto'>('acceptEdits');
   showSettingsHelp = signal(false);
   bannerDismissed = signal(false);
   outOfQuota = signal(false);
@@ -844,7 +846,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   isDragOver = signal(false);
 
   onDragOver(e: DragEvent) { e.preventDefault(); this.isDragOver.set(true); }
-  onDragLeave()             { this.isDragOver.set(false); }
+  onDragLeave() { this.isDragOver.set(false); }
   async onDrop(e: DragEvent) {
     e.preventDefault(); this.isDragOver.set(false);
     const files = Array.from(e.dataTransfer?.files ?? []);
@@ -853,9 +855,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     for (const file of files) {
       try {
         const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
-        const result  = await this.claude.uploadFile(file);
+        const result = await this.claude.uploadFile(file);
         this.attachedFiles.update(a => [...a, { ...result, preview }]);
-      } catch {}
+      } catch { }
     }
     this.isUploading.set(false);
   }
@@ -921,9 +923,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // T07 — token fun fact
   readonly BOOKS = [
     { name: '哈利波特（全集）', tokens: 1_100_000 },
-    { name: '戰爭與和平',       tokens: 580_000 },
-    { name: '傲慢與偏見',       tokens: 130_000 },
-    { name: '星際大戰劇本',     tokens: 30_000  },
+    { name: '戰爭與和平', tokens: 580_000 },
+    { name: '傲慢與偏見', tokens: 130_000 },
+    { name: '星際大戰劇本', tokens: 30_000 },
   ];
   funFact = computed(() => {
     const t = this.stats()?.total_tokens;
@@ -977,39 +979,39 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // Built-in slash commands
   readonly BUILTIN_CMDS = [
-    { id: '__new',       name: 'new',       description: '開始新對話' },
-    { id: '__clear',     name: 'clear',     description: '清除目前訊息' },
-    { id: '__undo',      name: 'undo',      description: '撤銷最後一次對話（移除最後一組問答）' },
-    { id: '__retry',     name: 'retry',     description: '重試上一則訊息' },
-    { id: '__compact',   name: 'compact',   description: '壓縮對話以節省 token' },
-    { id: '__model',     name: 'model',     description: '切換 AI 模型' },
-    { id: '__usage',     name: 'usage',     description: '顯示 token 用量' },
-    { id: '__debug',     name: 'debug',     description: '切換 debug 模式' },
-    { id: '__status',    name: 'status',    description: '顯示 Claude 狀態' },
-    { id: '__review',    name: 'review',    description: '程式碼審查（Code Review）' },
-    { id: '__plan',      name: 'plan',      description: '規劃實作步驟' },
-    { id: '__tdd',       name: 'tdd',       description: '測試驅動開發流程' },
-    { id: '__explain',   name: 'explain',   description: '解釋目前的程式碼或問題' },
-    { id: '__git',       name: 'git',       description: '顯示 Git 狀態與最近提交' },
-    { id: '__search',    name: 'search',    description: '搜尋對話歷史' },
+    { id: '__new', name: 'new', description: '開始新對話' },
+    { id: '__clear', name: 'clear', description: '清除目前訊息' },
+    { id: '__undo', name: 'undo', description: '撤銷最後一次對話（移除最後一組問答）' },
+    { id: '__retry', name: 'retry', description: '重試上一則訊息' },
+    { id: '__compact', name: 'compact', description: '壓縮對話以節省 token' },
+    { id: '__model', name: 'model', description: '切換 AI 模型' },
+    { id: '__usage', name: 'usage', description: '顯示 token 用量' },
+    { id: '__debug', name: 'debug', description: '切換 debug 模式' },
+    { id: '__status', name: 'status', description: '顯示 Claude 狀態' },
+    { id: '__review', name: 'review', description: '程式碼審查（Code Review）' },
+    { id: '__plan', name: 'plan', description: '規劃實作步驟' },
+    { id: '__tdd', name: 'tdd', description: '測試驅動開發流程' },
+    { id: '__explain', name: 'explain', description: '解釋目前的程式碼或問題' },
+    { id: '__git', name: 'git', description: '顯示 Git 狀態與最近提交' },
+    { id: '__search', name: 'search', description: '搜尋對話歷史' },
     { id: '__shortcuts', name: 'shortcuts', description: '顯示所有鍵盤快捷鍵' },
   ];
 
   // Model picker
   readonly MODEL_PICKER_OPTIONS = [
-    { id: 'opus',   label: 'Opus 4.8',   desc: '最強能力，適合複雜任務' },
+    { id: 'opus', label: 'Opus 4.8', desc: '最強能力，適合複雜任務' },
     { id: 'sonnet', label: 'Sonnet 4.6', desc: '速度與能力的最佳平衡（預設）' },
-    { id: 'haiku',  label: 'Haiku 4.5',  desc: '最快速，適合簡單任務' },
-    { id: 'fable',  label: 'Fable 5',    desc: '特殊能力模型' },
+    { id: 'haiku', label: 'Haiku 4.5', desc: '最快速，適合簡單任務' },
+    { id: 'fable', label: 'Fable 5', desc: '特殊能力模型' },
   ];
   modelPickerOpen = signal(false);
 
   // Cron presets
   readonly CRON_PRESETS = [
-    { label: '每 5 分鐘',  value: '*/5 * * * *' },
-    { label: '每小時',     value: '0 * * * *'   },
-    { label: '每天 9:00',  value: '0 9 * * *'   },
-    { label: '每週一早上', value: '0 9 * * 1'   },
+    { label: '每 5 分鐘', value: '*/5 * * * *' },
+    { label: '每小時', value: '0 * * * *' },
+    { label: '每天 9:00', value: '0 9 * * *' },
+    { label: '每週一早上', value: '0 9 * * 1' },
   ];
 
   // Session pin/star
@@ -1030,15 +1032,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const today: any[] = [], yesterday: any[] = [], week: any[] = [], older: any[] = [];
     for (const s of unpinned) {
       const age = now - s.mtime;
-      if      (age < day)       today.push(s);
-      else if (age < 2 * day)   yesterday.push(s);
-      else if (age < 7 * day)   week.push(s);
-      else                      older.push(s);
+      if (age < day) today.push(s);
+      else if (age < 2 * day) yesterday.push(s);
+      else if (age < 7 * day) week.push(s);
+      else older.push(s);
     }
-    if (today.length)     groups.push({ label: '今天',  items: today });
-    if (yesterday.length) groups.push({ label: '昨天',  items: yesterday });
-    if (week.length)      groups.push({ label: '本週',  items: week });
-    if (older.length)     groups.push({ label: '更早',  items: older });
+    if (today.length) groups.push({ label: '今天', items: today });
+    if (yesterday.length) groups.push({ label: '昨天', items: yesterday });
+    if (week.length) groups.push({ label: '本週', items: week });
+    if (older.length) groups.push({ label: '更早', items: older });
     return groups;
   });
 
@@ -1053,25 +1055,25 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   isPinned(id: string) { return this.pinnedIds().includes(id); }
 
   // ── Session metadata: colors + tags ─────────────────────────────────────
-  sessionMeta     = signal<Record<string, { tags: string[]; color: string }>>({});
+  sessionMeta = signal<Record<string, { tags: string[]; color: string }>>({});
   sessionGroupMode = signal<'date' | 'project'>('date');
-  tagInputId      = signal<string | null>(null);
-  tagInputVal     = '';
+  tagInputId = signal<string | null>(null);
+  tagInputVal = '';
 
   getSessionMeta(id: string) { return this.sessionMeta()[id] || { tags: [], color: '' }; }
 
   groupedByProject = computed(() => {
     const pinned = this.pinnedIds();
-    const all    = this.sessions();
+    const all = this.sessions();
     // key = projectPath (full) OR projectDir (short) OR '未知專案'
     const map = new Map<string, { sessions: Session[]; latestMtime: number; folderName: string; fullPath: string }>();
     for (const s of all) {
-      const fullPath   = s.projectPath || '';
+      const fullPath = s.projectPath || '';
       // Use actual path's last segment as folder name; fall back to slug-derived projectDir
       const folderName = fullPath
         ? (fullPath.split(/[/\\]/).filter(Boolean).pop() ?? s.projectDir ?? '未知專案')
         : (s.projectDir || '未知專案');
-      const key        = fullPath || s.projectDir || '未知專案';
+      const key = fullPath || s.projectDir || '未知專案';
       if (!map.has(key)) map.set(key, { sessions: [], latestMtime: 0, folderName: folderName || '未知專案', fullPath });
       const entry = map.get(key)!;
       entry.sessions.push(s);
@@ -1086,9 +1088,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const unpinned = entry.sessions.filter(s => !pinned.includes(s.id));
       if (unpinned.length) {
         groups.push({
-          label:    entry.folderName,
+          label: entry.folderName,
           subLabel: entry.fullPath || undefined,
-          items:    unpinned,
+          items: unpinned,
         });
       }
     }
@@ -1103,7 +1105,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const raw = localStorage.getItem('claude_session_meta');
       if (raw) this.sessionMeta.set(JSON.parse(raw));
-    } catch {}
+    } catch { }
   }
 
   private _saveSessionMeta() {
@@ -1114,7 +1116,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     e.stopPropagation();
     const colors = ['', 'red', 'orange', 'yellow', 'green', 'blue', 'purple'];
     this.sessionMeta.update(m => {
-      const cur  = m[id]?.color || '';
+      const cur = m[id]?.color || '';
       const next = colors[(colors.indexOf(cur) + 1) % colors.length];
       return { ...m, [id]: { tags: m[id]?.tags || [], color: next } };
     });
@@ -1161,9 +1163,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (e.ctrlKey && e.key === 'b' && !inInput) { e.preventDefault(); this.sidebarOpen.update(v => !v); }
     if (e.ctrlKey && e.key === 'k') { e.preventDefault(); if (this.cmdOpen()) this.closeCmd(); else this.openCmd(); }
     if (e.key === 'Escape') {
-      if (this.contextMenu())         this.closeContextMenu();
-      else if (this.cmdOpen())        this.closeCmd();
-      else if (this.settingsOpen())   this.settingsOpen.set(false);
+      if (this.contextMenu()) this.closeContextMenu();
+      else if (this.cmdOpen()) this.closeCmd();
+      else if (this.settingsOpen()) this.settingsOpen.set(false);
       else if (this.expandedAgentId() || this.expandedSkillId() || this.expandedMcpId()) {
         this.expandedAgentId.set('');
         this.expandedSkillId.set('');
@@ -1171,7 +1173,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.expandedTranslation.set(null);
       }
       else if (this.showSettingsHelp()) this.showSettingsHelp.set(false);
-      else if (this.renamingId())     this.renamingId.set(null);
+      else if (this.renamingId()) this.renamingId.set(null);
     }
   }
 
@@ -1191,7 +1193,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // Session rename
-  renamingId  = signal<string | null>(null);
+  renamingId = signal<string | null>(null);
   renameTitle = '';
 
   startRename(s: Session, event: Event) {
@@ -1211,7 +1213,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // Memory editing
-  memoryDraft     = '';
+  memoryDraft = '';
   memoryDraftSaved = signal(true);
   contextMemoryKeys = signal<string[]>([]);
 
@@ -1271,7 +1273,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     e.preventDefault();
     e.stopPropagation();
     // Keep menu inside viewport
-    const x = Math.min(e.clientX, window.innerWidth  - 180);
+    const x = Math.min(e.clientX, window.innerWidth - 180);
     const y = Math.min(e.clientY, window.innerHeight - 180);
     this.contextMenu.set({ x, y, session: s });
   }
@@ -1316,7 +1318,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // Message edit + regenerate (#11)
-  editingMsgIdx  = signal<number | null>(null);
+  editingMsgIdx = signal<number | null>(null);
   editingMsgText = signal('');
 
   startEditMsg(idx: number, text: string) {
@@ -1340,8 +1342,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // ── #17 Profile switching ─────────────────────────────────────────────────
-  profiles            = signal<Profile[]>([]);
-  profileSwitching    = signal(false);
+  profiles = signal<Profile[]>([]);
+  profileSwitching = signal(false);
   profileDropdownOpen = signal(false);
 
   loadProfiles() {
@@ -1397,28 +1399,28 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // ── #19 i18n ──────────────────────────────────────────────────────────────
   readonly EN_STRINGS: Record<string, string> = {
-    '新對話':       'New Chat',
-    '設定':         'Settings',
-    '搜尋對話':     'Search chats',
-    '發送訊息':     'Send message',
-    '停止':         'Stop',
-    '今天':         'Today',
-    '昨天':         'Yesterday',
-    '本週':         'This week',
-    '更早':         'Earlier',
-    '置頂':         'Pinned',
-    '模型':         'Model',
-    '記憶':         'Memory',
-    '排程':         'Schedule',
-    'Agents':       'Agents',
-    'Skills':       'Skills',
-    'MCP':          'MCP',
-    '匯出':         'Export',
-    '備份':         'Backup',
-    '說明':         'Help',
-    '工作目錄':     'Work dir',
-    '目前無對話':   'No conversations yet',
-    '無記憶項目':   'No memory items',
+    '新對話': 'New Chat',
+    '設定': 'Settings',
+    '搜尋對話': 'Search chats',
+    '發送訊息': 'Send message',
+    '停止': 'Stop',
+    '今天': 'Today',
+    '昨天': 'Yesterday',
+    '本週': 'This week',
+    '更早': 'Earlier',
+    '置頂': 'Pinned',
+    '模型': 'Model',
+    '記憶': 'Memory',
+    '排程': 'Schedule',
+    'Agents': 'Agents',
+    'Skills': 'Skills',
+    'MCP': 'MCP',
+    '匯出': 'Export',
+    '備份': 'Backup',
+    '說明': 'Help',
+    '工作目錄': 'Work dir',
+    '目前無對話': 'No conversations yet',
+    '無記憶項目': 'No memory items',
   };
 
   t(key: string): string {
@@ -1436,16 +1438,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   exportChatAs(format: 'md' | 'json' | 'txt') {
     const msgs = this.messages().filter(m => m.role !== 'error' && m.role !== 'system');
-    const date  = new Date().toLocaleString('zh-TW');
+    const date = new Date().toLocaleString('zh-TW');
     let content = '';
-    let mime    = 'text/plain';
-    let ext     = format;
+    let mime = 'text/plain';
+    let ext = format;
 
     if (format === 'md') {
       mime = 'text/markdown';
       const lines = msgs.map(m => {
         const ts = m.time ? ` *(${m.time})*` : '';
-        if (m.role === 'user')      return `## 使用者${ts}\n\n${m.text}`;
+        if (m.role === 'user') return `## 使用者${ts}\n\n${m.text}`;
         if (m.role === 'assistant') return `## Claude${ts}\n\n${m.text}`;
         if (m.role === 'tool') {
           const res = m.result ? `\n\n**結果：**\n\`\`\`\n${m.result}\n\`\`\`` : '';
@@ -1465,8 +1467,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
 
     const blob = new Blob([content], { type: mime });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
     a.href = url; a.download = `chat-${Date.now()}.${ext}`; a.click();
     URL.revokeObjectURL(url);
   }
@@ -1477,14 +1479,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // ── #18 Telegram settings ─────────────────────────────────────────────────
-  telegramToken   = '';
+  telegramToken = '';
   telegramEnabled = signal(false);
   telegramRunning = signal(false);
-  telegramSaving  = signal(false);
+  telegramSaving = signal(false);
 
   loadTelegramSettings() {
     this.claude.getTelegram().subscribe(r => {
-      this.telegramToken   = r.token;
+      this.telegramToken = r.token;
       this.telegramEnabled.set(r.enabled);
       this.telegramRunning.set(r.running);
     });
@@ -1493,7 +1495,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   saveTelegramSettings() {
     this.telegramSaving.set(true);
     this.claude.setTelegram({
-      token:   this.telegramToken,
+      token: this.telegramToken,
       enabled: this.telegramEnabled(),
     }).subscribe({
       next: r => {
@@ -1505,13 +1507,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // ── #22 Auto-update progress ──────────────────────────────────────────────
-  updateProgress  = signal<number | null>(null);
+  updateProgress = signal<number | null>(null);
   updateAvailable = signal(false);
-  updateReady     = signal(false);
+  updateReady = signal(false);
 
   // MCP log viewer (#15)
-  mcpLogOpen   = signal<string | null>(null);
-  mcpLogLines  = signal<string[]>([]);
+  mcpLogOpen = signal<string | null>(null);
+  mcpLogLines = signal<string[]>([]);
 
   toggleMcpLog(name: string) {
     if (this.mcpLogOpen() === name) {
@@ -1597,7 +1599,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // Retry last message
-  private lastUserText   = '';
+  private lastUserText = '';
   private lastAttachments: string[] = [];
 
   retryLast() {
@@ -1620,17 +1622,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const now = Date.now() / 1000;
     const day = 86400;
     const groups: { label: string; items: Session[] }[] = [
-      { label: '今天',  items: [] },
-      { label: '昨天',  items: [] },
-      { label: '本週',  items: [] },
-      { label: '更早',  items: [] },
+      { label: '今天', items: [] },
+      { label: '昨天', items: [] },
+      { label: '本週', items: [] },
+      { label: '更早', items: [] },
     ];
     for (const s of this.sessions()) {
       const age = now - s.mtime;
-      if      (age < day)       groups[0].items.push(s);
-      else if (age < 2 * day)   groups[1].items.push(s);
-      else if (age < 7 * day)   groups[2].items.push(s);
-      else                      groups[3].items.push(s);
+      if (age < day) groups[0].items.push(s);
+      else if (age < 2 * day) groups[1].items.push(s);
+      else if (age < 7 * day) groups[2].items.push(s);
+      else groups[3].items.push(s);
     }
     return groups.filter(g => g.items.length > 0);
   });
@@ -1654,7 +1656,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!item || this.detailTranslation() !== null) return;
     this.detailTranslation.set('');
     this.claude.translate(item.description).subscribe({
-      next:  r => this.detailTranslation.set(r),
+      next: r => this.detailTranslation.set(r),
       error: () => this.detailTranslation.set('[翻譯失敗，請重試]'),
     });
   }
@@ -1664,49 +1666,49 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   // Slash command menu
-  slashMenuOpen  = signal(false);
+  slashMenuOpen = signal(false);
   slashMenuIndex = signal(0);
   slashMenuItems = computed(() => {
     const q = this.slashQuery().toLowerCase();
     const builtins = this.BUILTIN_CMDS.filter(c => !q || c.name.includes(q));
-    const skills   = this.skills().filter(s => !q || s.name.toLowerCase().includes(q));
+    const skills = this.skills().filter(s => !q || s.name.toLowerCase().includes(q));
     return [...builtins, ...skills].slice(0, 10);
   });
   private slashQuery = signal('');
 
   // UI state
-  sidebarOpen  = signal(true);
-  rightOpen    = signal(true);
+  sidebarOpen = signal(true);
+  rightOpen = signal(true);
   settingsOpen = signal(false);
   shouldScroll = false;
 
   settingsForm!: AppSettings;
-  backendLogs      = signal<string[]>([]);
-  statusInfo       = signal('確認中…');
-  projectSlug      = signal('');
+  backendLogs = signal<string[]>([]);
+  statusInfo = signal('確認中…');
+  projectSlug = signal('');
   resolvedClaudeHome = signal('');
-  skillGenBusy     = signal(false);
-  skillGenResult   = signal<string | null>(null);
+  skillGenBusy = signal(false);
+  skillGenResult = signal<string | null>(null);
 
   // ── Onboarding wizard ────────────────────────────────
-  showOnboarding   = signal(false);
-  onboardingStep   = signal(1);   // 1=歡迎 2=確認連線 3=專案目錄 4=完成
-  onboardingDir    = signal('');
+  showOnboarding = signal(false);
+  onboardingStep = signal(1);   // 1=歡迎 2=確認連線 3=專案目錄 4=完成
+  onboardingDir = signal('');
   onboardingStatus = signal<any>(null);
-  onboardingSlug   = computed(() => {
+  onboardingSlug = computed(() => {
     const d = this.onboardingDir();
     return d ? d.replace(/:/g, '-').replace(/\\/g, '-').replace(/\//g, '-') : '';
   });
 
   // ── Help modal ───────────────────────────────────────
-  helpOpen      = signal(false);
-  helpSection   = signal<'start'|'features'|'faq'>('start');
+  helpOpen = signal(false);
+  helpSection = signal<'start' | 'features' | 'faq'>('start');
 
-  memoryKeys       = computed(() => Object.keys(this.memory()));
+  memoryKeys = computed(() => Object.keys(this.memory()));
   memoryTotalChars = computed(() =>
     Object.values(this.memory()).reduce((sum, v) => sum + v.length, 0)
   );
-  memoryUsagePct   = computed(() => Math.min((this.memoryTotalChars() / 50000) * 100, 100));
+  memoryUsagePct = computed(() => Math.min((this.memoryTotalChars() / 50000) * 100, 100));
 
   constructor(private claude: ClaudeService, private settings: SettingsService) {
     this.settingsForm = this.settings.get();
@@ -1724,26 +1726,26 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     // Initialize authorizations
     const savedSkills = localStorage.getItem('claude_desktop_auth_skills');
     if (savedSkills) {
-      try { this.authorizedSkills.set(JSON.parse(savedSkills)); } catch {}
+      try { this.authorizedSkills.set(JSON.parse(savedSkills)); } catch { }
     }
     const savedMcps = localStorage.getItem('claude_desktop_auth_mcps');
     if (savedMcps) {
-      try { this.authorizedMcps.set(JSON.parse(savedMcps)); } catch {}
+      try { this.authorizedMcps.set(JSON.parse(savedMcps)); } catch { }
     }
 
     // 載入永久 agent 綁定
     try {
       const as = localStorage.getItem('claude_desktop_agent_skills');
       if (as) this.agentSkillsMap.set(JSON.parse(as));
-    } catch {}
+    } catch { }
     try {
       const am = localStorage.getItem('claude_desktop_agent_mcps_direct');
       if (am) this.agentMcpsMap.set(JSON.parse(am));
-    } catch {}
+    } catch { }
     try {
       const mm = localStorage.getItem('claude_desktop_managed_mcps');
       if (mm) this.managedMcpNames.set(JSON.parse(mm));
-    } catch {}
+    } catch { }
 
     this.loadMcp();
 
@@ -1755,7 +1757,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     try {
       const pinned = localStorage.getItem('claude_pinned_sessions');
       if (pinned) this.pinnedIds.set(JSON.parse(pinned));
-    } catch {}
+    } catch { }
 
     // Session metadata 恢復（顏色 + 標籤）
     this.loadSessionMeta();
@@ -1773,7 +1775,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   nextOnboardingStep() {
     const s = this.onboardingStep();
     if (s < 4) { this.onboardingStep.set(s + 1); }
-    else        { this.completeOnboarding(); }
+    else { this.completeOnboarding(); }
   }
   prevOnboardingStep() {
     const s = this.onboardingStep();
@@ -1842,11 +1844,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.userMenuOpen.set(false);
     this.claude.runCliCommand(['logout']).subscribe({
       next: out => this.showToast(out || '已登出 Claude Code'),
-      error: ()  => this.showToast('登出指令執行失敗'),
+      error: () => this.showToast('登出指令執行失敗'),
     });
   }
 
-  openSettings() {
+  async openSettings() {
     this.settingsForm = this.settings.get();
     this.settingsOpen.set(true);
     this.loadLogs();
@@ -1867,6 +1869,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.settingsForm.claudeHome = c.claudeHome;
       }
     });
+    // 從 Electron 讀取真實的 login item 狀態
+    const eAPI = (window as any).electronAPI;
+    if (eAPI?.getLoginItem) {
+      this.settingsForm.openAtLogin = await eAPI.getLoginItem();
+    }
   }
 
   loadLogs() {
@@ -1877,9 +1884,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.settings.save(this.settingsForm);
     this.claude.setConfig({
       projectDir: this.settingsForm.projectDir,
-      apiKeyCmd:  this.settingsForm.apiKeyCmd,
+      apiKeyCmd: this.settingsForm.apiKeyCmd,
       claudeHome: this.settingsForm.claudeHome,
     }).subscribe();
+    // 同步 Electron login item
+    const eAPI = (window as any).electronAPI;
+    if (eAPI?.setLoginItem) {
+      eAPI.setLoginItem(this.settingsForm.openAtLogin);
+    }
     this.settingsOpen.set(false);
   }
 
@@ -1900,9 +1912,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
     // #22 — Wire Electron auto-updater IPC events
     const eAPI = (window as any).electronAPI;
-    if (eAPI?.onUpdateProgress)  eAPI.onUpdateProgress((pct: number)  => this.updateProgress.set(pct));
+    if (eAPI?.onUpdateProgress) eAPI.onUpdateProgress((pct: number) => this.updateProgress.set(pct));
     if (eAPI?.onUpdateAvailable) eAPI.onUpdateAvailable(() => this.updateAvailable.set(true));
-    if (eAPI?.onUpdateReady)     eAPI.onUpdateReady(() => { this.updateReady.set(true); this.updateProgress.set(100); });
+    if (eAPI?.onUpdateReady) eAPI.onUpdateReady(() => { this.updateReady.set(true); this.updateProgress.set(100); });
   }
 
   ngOnDestroy() { clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); }
@@ -1919,9 +1931,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.isUploading.set(true);
     try {
       const preview = URL.createObjectURL(file);
-      const result  = await this.claude.uploadFile(file);
+      const result = await this.claude.uploadFile(file);
       this.attachedFiles.update(a => [...a, { ...result, preview }]);
-    } catch {}
+    } catch { }
     this.isUploading.set(false);
   }
 
@@ -2133,7 +2145,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     for (const file of Array.from(input.files)) {
       try {
         const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
-        const result  = await this.claude.uploadFile(file);
+        const result = await this.claude.uploadFile(file);
         this.attachedFiles.update(a => [...a, { ...result, preview }]);
       } catch { /* ignore upload error */ }
     }
@@ -2148,7 +2160,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   send() {
     const text = this.inputText.trim();
     if (!text || this.isStreaming()) return;
-    this.lastUserText    = text;
+    this.lastUserText = text;
     this.lastAttachments = this.attachedFiles().map(f => f.path);
     this.inputText = '';
     localStorage.removeItem('claude_input_draft');
@@ -2171,75 +2183,75 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
     // Build event handler (shared between Claude and provider mode)
     const onEvent = (ev: any) => {
-        if (ev.type === 'assistant' && ev.message?.content) {
-          // tool is done once assistant starts replying
-          this.messages.update(msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
-          for (const block of ev.message.content) {
-            if (block.type === 'text') {
-              this.messages.update(msgs => {
-                const copy = [...msgs];
-                copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + block.text };
-                return copy;
-              });
-              this.shouldScroll = true;
-              if (block.text && (block.text.toLowerCase().includes('session limit') || block.text.toLowerCase().includes('rate limit') || block.text.toLowerCase().includes('limit · resets') || block.text.toLowerCase().includes('quota'))) {
-                this.outOfQuota.set(true);
-              }
-            }
-          }
-        } else if (ev.type === 'text') {
-          this.messages.update(msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
-          this.messages.update(msgs => {
-            const copy = [...msgs];
-            copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + ev.text };
-            return copy;
-          });
-          this.shouldScroll = true;
-          if (ev.text && (ev.text.toLowerCase().includes('session limit') || ev.text.toLowerCase().includes('rate limit') || ev.text.toLowerCase().includes('limit · resets') || ev.text.toLowerCase().includes('quota'))) {
-            this.outOfQuota.set(true);
-          }
-        } else if (ev.type === 'tool_use') {
-          this.messages.update(m => [...m, {
-            role: 'tool', text: JSON.stringify(ev.input ?? {}, null, 2),
-            toolName: ev.name, toolUseId: ev.id, isRunning: true, startTime: Date.now()
-          }]);
-          this.shouldScroll = true;
-        } else if (ev.type === 'user' && ev.message?.content) {
-          for (const block of ev.message.content) {
-            if (block.type === 'tool_result') {
-              const res = typeof block.content === 'string'
-                ? block.content
-                : JSON.stringify(block.content);
-              this.messages.update(msgs => msgs.map(m =>
-                m.toolUseId === block.tool_use_id
-                  ? { ...m, isRunning: false, result: res.slice(0, 3000) }
-                  : m
-              ));
-            }
-          }
-        } else if (ev.type === 'result') {
-          const totalCost = ev.total_cost_usd ?? 0;
-          const msgCost   = Math.max(0, totalCost - this._prevCostUsd);
-          this._prevCostUsd = totalCost;
-          this.tokenUsage.set({
-            input:  ev.usage?.input_tokens  ?? 0,
-            output: ev.usage?.output_tokens ?? 0,
-            cost:   totalCost,
-          });
-          // 標記本次訊息費用
-          if (msgCost > 0) {
+      if (ev.type === 'assistant' && ev.message?.content) {
+        // tool is done once assistant starts replying
+        this.messages.update(msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
+        for (const block of ev.message.content) {
+          if (block.type === 'text') {
             this.messages.update(msgs => {
               const copy = [...msgs];
-              for (let i = copy.length - 1; i >= 0; i--) {
-                if (copy[i].role === 'assistant') {
-                  copy[i] = { ...copy[i], cost: msgCost };
-                  break;
-                }
-              }
+              copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + block.text };
               return copy;
             });
+            this.shouldScroll = true;
+            if (block.text && (block.text.toLowerCase().includes('session limit') || block.text.toLowerCase().includes('rate limit') || block.text.toLowerCase().includes('limit · resets') || block.text.toLowerCase().includes('quota'))) {
+              this.outOfQuota.set(true);
+            }
           }
         }
+      } else if (ev.type === 'text') {
+        this.messages.update(msgs => msgs.map(m => m.isRunning ? { ...m, isRunning: false } : m));
+        this.messages.update(msgs => {
+          const copy = [...msgs];
+          copy[copy.length - 1] = { ...copy[copy.length - 1], text: copy[copy.length - 1].text + ev.text };
+          return copy;
+        });
+        this.shouldScroll = true;
+        if (ev.text && (ev.text.toLowerCase().includes('session limit') || ev.text.toLowerCase().includes('rate limit') || ev.text.toLowerCase().includes('limit · resets') || ev.text.toLowerCase().includes('quota'))) {
+          this.outOfQuota.set(true);
+        }
+      } else if (ev.type === 'tool_use') {
+        this.messages.update(m => [...m, {
+          role: 'tool', text: JSON.stringify(ev.input ?? {}, null, 2),
+          toolName: ev.name, toolUseId: ev.id, isRunning: true, startTime: Date.now()
+        }]);
+        this.shouldScroll = true;
+      } else if (ev.type === 'user' && ev.message?.content) {
+        for (const block of ev.message.content) {
+          if (block.type === 'tool_result') {
+            const res = typeof block.content === 'string'
+              ? block.content
+              : JSON.stringify(block.content);
+            this.messages.update(msgs => msgs.map(m =>
+              m.toolUseId === block.tool_use_id
+                ? { ...m, isRunning: false, result: res.slice(0, 3000) }
+                : m
+            ));
+          }
+        }
+      } else if (ev.type === 'result') {
+        const totalCost = ev.total_cost_usd ?? 0;
+        const msgCost = Math.max(0, totalCost - this._prevCostUsd);
+        this._prevCostUsd = totalCost;
+        this.tokenUsage.set({
+          input: ev.usage?.input_tokens ?? 0,
+          output: ev.usage?.output_tokens ?? 0,
+          cost: totalCost,
+        });
+        // 標記本次訊息費用
+        if (msgCost > 0) {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            for (let i = copy.length - 1; i >= 0; i--) {
+              if (copy[i].role === 'assistant') {
+                copy[i] = { ...copy[i], cost: msgCost };
+                break;
+              }
+            }
+            return copy;
+          });
+        }
+      }
     };
 
     const onDone = () => {
@@ -2289,7 +2301,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const val = this.inputText;
     // 草稿持久化
     if (val) localStorage.setItem('claude_input_draft', val);
-    else     localStorage.removeItem('claude_input_draft');
+    else localStorage.removeItem('claude_input_draft');
     const slashMatch = val.match(/(?:^|\s)\/(\S*)$/);
     if (slashMatch) {
       this.slashQuery.set(slashMatch[1]);
@@ -2366,15 +2378,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       case '__search':
         document.querySelector<HTMLInputElement>('.session-search-input')?.focus(); break;
       case '__shortcuts':
-        this.messages.update(m => [...m, { role: 'system', text:
-          '⌨️ 快捷鍵：\n' +
-          'Ctrl+N — 新對話分頁\n' +
-          'Ctrl+B — 切換側欄\n' +
-          'Ctrl+K — 指令面板\n' +
-          'Ctrl+Enter — 傳送訊息（enterToSend=false 時）\n' +
-          'Esc — 關閉彈窗 / 取消\n' +
-          '/ — 輸入框中觸發技能選單\n' +
-          'Alt+← / → — 切換對話分頁'
+        this.messages.update(m => [...m, {
+          role: 'system', text:
+            '⌨️ 快捷鍵：\n' +
+            'Ctrl+N — 新對話分頁\n' +
+            'Ctrl+B — 切換側欄\n' +
+            'Ctrl+K — 指令面板\n' +
+            'Ctrl+Enter — 傳送訊息（enterToSend=false 時）\n' +
+            'Esc — 關閉彈窗 / 取消\n' +
+            '/ — 輸入框中觸發技能選單\n' +
+            'Alt+← / → — 切換對話分頁'
         }]); break;
     }
   }
@@ -2447,7 +2460,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.doctorRunning.set(true);
     this.doctorOutput.set('執行中…');
     this.claude.runCliCommand(['doctor']).subscribe({
-      next:  out => { this.doctorOutput.set(out); this.doctorRunning.set(false); },
+      next: out => { this.doctorOutput.set(out); this.doctorRunning.set(false); },
       error: err => { this.doctorOutput.set(String(err)); this.doctorRunning.set(false); },
     });
   }
@@ -2455,27 +2468,27 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   runClaudeUpdate() {
     this.messages.update(m => [...m, { role: 'system', text: '正在檢查 Claude Code 更新…' }]);
     this.claude.runCliCommand(['update']).subscribe({
-      next:  out => this.messages.update(m => [...m, { role: 'system', text: out || '已是最新版本' }]),
+      next: out => this.messages.update(m => [...m, { role: 'system', text: out || '已是最新版本' }]),
       error: err => this.messages.update(m => [...m, { role: 'system', text: String(err) }]),
     });
   }
 
   // T10 — MCP 管理
-  mcpList    = signal<string>('');
+  mcpList = signal<string>('');
   mcpLoading = signal(false);
   mcpNewName = '';
-  mcpNewCmd  = '';
+  mcpNewCmd = '';
 
   loadMcp() {
     this.mcpLoading.set(true);
     this.loadLocalMcpConfigs();
     this.claude.runCliCommand(['mcp', 'list']).subscribe({
-      next:  out => {
+      next: out => {
         this.mcpList.set(out || '（無已安裝的 MCP）');
         this.parseMcpList(out || '');
         this.mcpLoading.set(false);
       },
-      error: ()  => {
+      error: () => {
         this.mcpList.set('[無法取得清單]');
         this.mcpLoading.set(false);
       },
@@ -2554,7 +2567,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return this.chatTabs().find(t => t.id === this.activeChatId())?.[key] ?? [];
   }
   isSkillInTab(skillId: string): boolean { return this.activeTabField('sessionSkills').includes(skillId); }
-  isMcpInTab(mcpName: string): boolean   { return this.activeTabField('sessionMcps').includes(mcpName); }
+  isMcpInTab(mcpName: string): boolean { return this.activeTabField('sessionMcps').includes(mcpName); }
 
   toggleSkillInTab(skillId: string) {
     const tabId = this.activeChatId();
@@ -2575,7 +2588,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // 取得所有有效技能（永久 + 當前 tab 一次性）
   getLinkedSkills(agentId: string): string[] {
-    const perm    = this.getPermSkills(agentId);
+    const perm = this.getPermSkills(agentId);
     const session = this.activeTabField('sessionSkills');
     return [...new Set([...perm, ...session])];
   }
@@ -2606,17 +2619,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     }
     const lines = out.split('\n');
     const servers: McpServer[] = [];
-    
+
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('Checking MCP server')) continue;
-      
+
       const colonIdx = trimmed.indexOf(':');
       if (colonIdx === -1) continue;
-      
+
       const name = trimmed.substring(0, colonIdx).trim();
       const rest = trimmed.substring(colonIdx + 1).trim();
-      
+
       const dashIdx = rest.lastIndexOf(' - ');
       let url = rest;
       let status = '';
@@ -2624,7 +2637,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         url = rest.substring(0, dashIdx).trim();
         status = rest.substring(dashIdx + 3).trim();
       }
-      
+
       const id = name.toLowerCase().replace(/\s+/g, '-');
       const authorized = this.isMcpAuthorized(name);
       const description = this.MCP_DESCRIPTIONS[name] || `Model Context Protocol server for ${name} located at ${url}.`;

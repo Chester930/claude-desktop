@@ -140,6 +140,17 @@ ipcMain.handle('notify', (_, { title, body }) => {
   if (Notification.isSupported()) new Notification({ title, body }).show();
 });
 
+ipcMain.handle('loginItem:get', () => {
+  return app.getLoginItemSettings().openAtLogin;
+});
+
+ipcMain.handle('loginItem:set', (_, enabled) => {
+  app.setLoginItemSettings({
+    openAtLogin: enabled,
+    args: enabled ? ['--hidden'] : [],
+  });
+});
+
 // ── 建立主視窗 ────────────────────────────────────────────
 function createWindow() {
   const preloadPath = path.join(__dirname, 'preload.js');
@@ -158,7 +169,8 @@ function createWindow() {
     : `file://${useSrc ? srcFrontend : bundledFrontend}`;
 
   mainWindow.loadURL(url);
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  const startHidden = process.argv.includes('--hidden');
+  mainWindow.once('ready-to-show', () => { if (!startHidden) mainWindow.show(); });
 
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
@@ -228,6 +240,12 @@ function checkForUpdates() {
 
 // ── 應用程式生命週期 ──────────────────────────────────────
 app.whenReady().then(async () => {
+  // 同步 Login Item args（確保已打包版本帶 --hidden）
+  const current = app.getLoginItemSettings();
+  if (current.openAtLogin && !current.openAsHidden) {
+    app.setLoginItemSettings({ openAtLogin: true, args: ['--hidden'] });
+  }
+
   createTray();
 
   // 偵測 Claude Code

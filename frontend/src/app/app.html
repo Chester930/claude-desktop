@@ -274,6 +274,12 @@
             <input type="checkbox" [(ngModel)]="settingsForm.enterToSend">
             Enter 鍵直接傳送（Shift+Enter 換行）
           </label>
+          @if (isElectron) {
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="settingsForm.openAtLogin">
+              開機自動啟動（最小化至系統匣）
+            </label>
+          }
         </div>
 
         <!-- #16 Multi-provider settings -->

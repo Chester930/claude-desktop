@@ -25,6 +25,8 @@ export interface AppSettings {
   providerModel: string;
   // #19 i18n
   lang: 'zh' | 'en';
+  // 開機自動啟動
+  openAtLogin: boolean;
 }
 
 const DEFAULTS: AppSettings = {
@@ -53,6 +55,7 @@ const DEFAULTS: AppSettings = {
   providerApiKey: '',
   providerModel: '',
   lang: 'zh',
+  openAtLogin: false,
 };
 
 const KEY = 'claude_desktop_settings';
