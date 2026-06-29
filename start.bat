@@ -4,16 +4,22 @@ echo Starting Claude Desktop...
 :: Parse flags
 set DEV_MODE=0
 set DOCKER_MODE=0
+set BUILD_MODE=0
 for %%A in (%*) do (
   if /I "%%A"=="--dev"    set DEV_MODE=1
   if /I "%%A"=="--docker" set DOCKER_MODE=1
+  if /I "%%A"=="--build"  set BUILD_MODE=1
 )
 
 :: ── Docker mode ───────────────────────────────────────────────────────────────
 if "%DOCKER_MODE%"=="1" (
   echo [Docker] Starting backend + ngrok via Docker Compose...
   cd /d %~dp0
-  docker compose up -d --build
+  if "%BUILD_MODE%"=="1" (
+    docker compose up -d --build
+  ) else (
+    docker compose up -d
+  )
   if errorlevel 1 (
     echo [Error] Docker Compose failed. Is Docker Desktop running?
     pause & exit /b 1
