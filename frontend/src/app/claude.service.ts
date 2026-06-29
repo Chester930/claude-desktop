@@ -166,10 +166,14 @@ export class ClaudeService {
     return this.http.delete<{ ok: boolean }>(`${this.api}/teams/${id}`);
   }
 
-  runTeam(teamId: string, task: string, model?: string, cwd?: string): Observable<{ ok: boolean; run_id: string }> {
+  runTeam(teamId: string, task: string, model?: string, cwd?: string, team?: any): Observable<{ ok: boolean; run_id: string }> {
     return this.http.post<{ ok: boolean; run_id: string }>(`${this.api}/team/run`, {
-      team_id: teamId, task, model: model ?? '', cwd: cwd ?? '',
+      team_id: teamId, task, model: model ?? '', cwd: cwd ?? '', team,
     });
+  }
+
+  dispatchHR(task: string): Observable<any> {
+    return this.http.post<any>(`${this.api}/hr/dispatch`, { task });
   }
 
   getTeamRun(runId: string): Observable<TeamRun> {
@@ -215,6 +219,9 @@ export class ClaudeService {
   getSchedules(): Observable<Schedule[]> { return this.http.get<Schedule[]>(`${this.api}/schedules`); }
   addSchedule(prompt: string, cron: string): Observable<any> {
     return this.http.post(`${this.api}/schedules`, { prompt, cron });
+  }
+  parseCron(text: string): Observable<{ cron: string }> {
+    return this.http.post<{ cron: string }>(`${this.api}/schedules/parse-cron`, { text });
   }
   deleteSchedule(id: string): Observable<any> {
     return this.http.delete(`${this.api}/schedules/${id}`);

@@ -56,8 +56,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   readonly isElectron = !!(window as any).electronAPI;
 
-  // Data
   agents = signal<Agent[]>([]);
+  dropdownAgents = computed(() => {
+    const list = this.agents();
+    const orchestrator = list.find(x => x.id === 'orchestrator');
+    const others = list.filter(x => x.id !== 'orchestrator');
+    if (orchestrator) {
+      const mainAgent = { ...orchestrator, name: '總代理人' };
+      return [mainAgent, ...others];
+    }
+    return list;
+  });
   skills = signal<Skill[]>([]);
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
@@ -365,7 +374,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   inputText = '';
   isStreaming = signal(false);
   selectedAgent = signal('');
-  activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp'>('agents');
+  activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp'>('teams');
   selectedMemoryKey = signal('');
   sessionSearch = '';
 
@@ -394,6 +403,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   newSoulName = '';
   renamingSoulId = signal<string | null>(null);
   renameSoulInput = '';
+  agentEditorSoulContent = '';
 
   // Resizing signals & state
   sidebarWidth = signal(300);
@@ -1015,6 +1025,48 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     { label: '每週一早上', value: '0 9 * * 1' },
   ];
 
+  translateCron(cron: string): string {
+    if (!cron) return '';
+    const trimmed = cron.trim();
+    const preset = this.CRON_PRESETS.find(p => p.value === trimmed);
+    if (preset) return preset.label;
+
+    const parts = trimmed.split(/\s+/);
+    if (parts.length === 5) {
+      const [min, hour, dom, month, dow] = parts;
+      if (min === '*' && hour === '*' && dom === '*' && month === '*' && dow === '*') {
+        return '每分鐘';
+      }
+      if (min.startsWith('*/') && hour === '*' && dom === '*' && month === '*' && dow === '*') {
+        const m = min.split('/')[1];
+        return `每 ${m} 分鐘`;
+      }
+      if (hour.startsWith('*/') && min === '0' && dom === '*' && month === '*' && dow === '*') {
+        const h = hour.split('/')[1];
+        return `每 ${h} 小時`;
+      }
+      if (min === '0' && hour === '*' && dom === '*' && month === '*' && dow === '*') {
+        return '每小時';
+      }
+      if (dom === '*' && month === '*' && dow === '*') {
+        const mStr = min.padStart(2, '0');
+        const hStr = hour.padStart(2, '0');
+        return `每天 ${hStr}:${mStr}`;
+      }
+      if (dom === '*' && month === '*' && dow !== '*') {
+        const days = ['日', '一', '二', '三', '四', '五', '六'];
+        const dayNames = dow.split(',').map(d => {
+          const idx = parseInt(d, 10);
+          return isNaN(idx) ? d : `週${days[idx]}`;
+        }).join('、');
+        const mStr = min.padStart(2, '0');
+        const hStr = hour.padStart(2, '0');
+        return `每${dayNames} ${hStr}:${mStr}`;
+      }
+    }
+    return cron;
+  }
+
   // Session pin/star
   pinnedIds = signal<string[]>([]);
 
@@ -1393,9 +1445,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (agent) {
       this.agentEditorData.set({ ...agent });
       this.agentEditorIsNew.set(false);
+      const soulId = agent.soul || agent.id;
+      const s = this.souls().find(x => x.id === soulId);
+      this.agentEditorSoulContent = s ? s.content : '';
     } else {
       this.agentEditorData.set({ name: '', description: '', soul: '', skills: [], memory: [], mcp: [], output_memory: [], tools: 'Read, Grep, Glob' });
       this.agentEditorIsNew.set(true);
+      this.agentEditorSoulContent = '';
     }
     this.agentEditorOpen.set(true);
   }
@@ -1403,10 +1459,33 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   saveAgentEditor() {
     const d = this.agentEditorData();
     if (!d.name?.trim()) return;
+
+    const agentId = this.agentEditorIsNew()
+      ? d.name.toLowerCase().replace(/[\\/:*?"<>|\s]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+      : d.id!;
+
+    d.soul = agentId;
+
     const obs = this.agentEditorIsNew()
       ? this.claude.createAgent(d)
       : this.claude.updateAgent(d.id!, d);
-    obs.subscribe({ next: () => { this.agentEditorOpen.set(false); this.claude.getAgents().subscribe(a => this.agents.set(a)); } });
+
+    obs.subscribe({
+      next: () => {
+        this.claude.saveSoulProfile(agentId, this.agentEditorSoulContent).subscribe({
+          next: () => {
+            this.agentEditorOpen.set(false);
+            this.claude.getAgents().subscribe(a => this.agents.set(a));
+            this.claude.getSouls().subscribe(s => this.souls.set(s));
+          }
+        });
+      }
+    });
+  }
+
+  getAgentSoulContent(soulId: string): string {
+    const s = this.souls().find(x => x.id === soulId);
+    return s ? s.content : '';
   }
 
   deleteAgent(id: string) {
@@ -1623,6 +1702,121 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   closeTeamRun() {
     if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
     this.teamRunOpen.set(false);
+  }
+
+  // ── HR Agent (Phase 4) ────────────────────────────────────────────────────
+  hrLoading  = signal(false);
+  hrPlanOpen = signal(false);
+  hrTeamPlan = signal<any>(null);
+  hrError    = signal<string | null>(null);
+
+  dispatchHR() {
+    const task = this.inputText.trim();
+    if (!task) return;
+    this.hrLoading.set(true);
+    this.hrError.set(null);
+
+    this.claude.dispatchHR(task).subscribe({
+      next: (plan) => {
+        this.hrLoading.set(false);
+        if (plan.error) {
+          this.hrError.set(plan.error);
+          this.showToast(plan.error, 'error');
+        } else {
+          // Normalise plan fields to avoid undefined errors
+          if (!plan.members) plan.members = [];
+          plan.members.forEach((m: any) => {
+            if (!m.input_memory) m.input_memory = [];
+            if (!m.output_memory) m.output_memory = [];
+          });
+          this.hrTeamPlan.set(plan);
+          this.hrPlanOpen.set(true);
+        }
+      },
+      error: (err) => {
+        this.hrLoading.set(false);
+        const errMsg = err.error?.error || err.message || '自動組隊失敗';
+        this.hrError.set(errMsg);
+        this.showToast(errMsg, 'error');
+      }
+    });
+  }
+
+  hrAddStep() {
+    const plan = this.hrTeamPlan();
+    if (!plan) return;
+    const members = [...(plan.members || []), { agent: '', role: '', input_memory: [], output_memory: [] }];
+    this.hrTeamPlan.set({ ...plan, members });
+  }
+
+  hrRemoveStep(idx: number) {
+    const plan = this.hrTeamPlan();
+    if (!plan) return;
+    const members = (plan.members || []).filter((_: any, i: number) => i !== idx);
+    this.hrTeamPlan.set({ ...plan, members });
+  }
+
+  hrUpdateStep(idx: number, field: string, val: any) {
+    const plan = this.hrTeamPlan();
+    if (!plan) return;
+    if (idx === -1) {
+      this.hrTeamPlan.set({ ...plan, [field]: val });
+      return;
+    }
+    const members = (plan.members || []).map((m: any, i: number) => {
+      if (i === idx) {
+        if (field === 'input_memory' || field === 'output_memory') {
+          return { ...m, [field]: typeof val === 'string' ? val.split(',').map((x: string) => x.trim()).filter((x: string) => x) : val };
+        }
+        return { ...m, [field]: val };
+      }
+      return m;
+    });
+    this.hrTeamPlan.set({ ...plan, members });
+  }
+
+  submitHRTeamRun() {
+    const plan = this.hrTeamPlan();
+    const task = this.inputText.trim();
+    if (!plan || !task) return;
+
+    this.hrPlanOpen.set(false);
+    this.teamRunTarget.set({
+      id: '',
+      name: plan.name || '自動組隊任務',
+      description: plan.description || '',
+      members: plan.members
+    });
+    this.teamRunTask.set(task);
+    this.teamRunLoading.set(true);
+    this.teamRunOpen.set(true);
+
+    this.teamRunState.set({
+      id: '', team_id: '', name: plan.name || '自動組隊任務', task,
+      status: 'running',
+      steps: plan.members.map((m: any) => ({ agent: m.agent, role: m.role, status: 'pending' as const, output: '' })),
+      summary: '',
+    });
+
+    const s = this.settings.get();
+    this.claude.runTeam('', task, s.model, s.workDir, plan).subscribe({
+      next: (r) => {
+        this.teamRunLoading.set(false);
+        const runId = r.run_id;
+        this.teamRunState.update(st => st ? { ...st, id: runId } : st);
+        this._teamRunStopFn = this.claude.streamTeamRun(
+          runId,
+          (ev) => this._handleTeamRunEvent(ev),
+          () => {},
+          (e) => { console.error('team run error', e); }
+        );
+      },
+      error: (err) => {
+        this.teamRunLoading.set(false);
+        const errMsg = err.error?.error || err.message || '執行失敗';
+        this.showToast(errMsg, 'error');
+      }
+    });
   }
 
   // 清空某個對話欄的訊息
@@ -2256,7 +2450,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       },
       error: (err) => {
         console.error(err);
-        this.showToast('名稱只能包含字母、數字、連字號（-）或底線（_）', 'error', 4000);
+        this.showToast('新增靈魂失敗，請確認名稱無包含特殊字元。', 'error', 4000);
       }
     });
   }
@@ -2296,6 +2490,44 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           this.selectSoulProfile(list[0].id);
         }
       });
+    });
+  }
+
+  aiParsing = signal(false);
+
+  isNaturalLanguage(text: string): boolean {
+    if (!text) return false;
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const hasChinese = /[\u4e00-\u9fa5]/.test(trimmed);
+    if (hasChinese) return true;
+    
+    const isCronChars = /^[0-9\s*\/,\-?LW#]+$/.test(trimmed);
+    if (!isCronChars) return true;
+
+    const parts = trimmed.split(/\s+/);
+    if (parts.length !== 5) return true;
+
+    return false;
+  }
+
+  parseCronFromAI() {
+    const text = this.newScheduleCron.trim();
+    if (!text) return;
+    this.aiParsing.set(true);
+    this.claude.parseCron(text).subscribe({
+      next: (res) => {
+        this.aiParsing.set(false);
+        if (res && res.cron) {
+          this.newScheduleCron = res.cron;
+        } else {
+          alert('AI 無法解析該頻率，請嘗試更具體的描述。');
+        }
+      },
+      error: (err) => {
+        this.aiParsing.set(false);
+        alert('AI 轉換失敗：' + (err?.message || err));
+      }
     });
   }
 

@@ -158,9 +158,7 @@ def _backfill_project_paths() -> None:
     except Exception as e:
         print(f"[sqlite] backfill error: {e}")
 
-_init_db()
-_migrate_db()
-_backfill_project_paths()
+
 
 def _read_session_cwd(f: Path) -> str:
     """Read the first cwd value found in a session JSONL (scans at most 20 lines)."""
@@ -380,6 +378,57 @@ def save_schedules(data: list) -> None:
     SCHEDULES_FILE.parent.mkdir(parents=True, exist_ok=True)
     SCHEDULES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+async def _natural_to_cron(natural_text: str) -> str:
+    import re
+    # 1. Check if it's already a valid 5-column cron expression
+    if HAS_CRONITER:
+        try:
+            if croniter.is_valid(natural_text):
+                return natural_text
+        except Exception:
+            pass
+    else:
+        if re.match(r"^(\S+\s+){4}\S+$", natural_text):
+            return natural_text
+
+    # 2. Otherwise, translate via Claude CLI
+    prompt = (
+        "請將以下的自然語言時間，轉換為 5 欄的標準 Cron 表達式（分 時 日 月 週）。\n"
+        "每個欄位用空格分隔。不要輸出任何其他欄位（如秒或年），只保留 5 欄格式。\n"
+        "範例：\n"
+        "「每天早上 9 點」 -> 0 9 * * *\n"
+        "「每小時」 -> 0 * * * *\n"
+        "「每星期一早上 8:30」 -> 30 8 * * 1\n"
+        "「每 5 分鐘」 -> */5 * * * *\n"
+        "「每天 15:30」 -> 30 15 * * *\n\n"
+        "請嚴格只輸出 Cron 表達式本身，絕對不要包含任何 Markdown 程式碼區塊包裹、引號、說明、前言或後記。\n"
+        f"時間：{natural_text}"
+    )
+    env = os.environ.copy()
+    key = _resolve_api_key()
+    if key:
+        env["ANTHROPIC_API_KEY"] = key
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "-p", prompt, "--output-format", "text", "--no-caching",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=env, cwd=str(Path.home()),
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        res = stdout.decode("utf-8", errors="replace").strip()
+        res = re.sub(r"[`'\"“”]", "", res)
+        lines = [l.strip() for l in res.splitlines() if l.strip()]
+        for cand in lines:
+            parts = cand.split()
+            if len(parts) == 5:
+                return cand
+        if lines:
+            return lines[0]
+    except Exception as e:
+        print(f"[schedule] Error translating natural time to cron: {e}")
+    return natural_text
+
+
 # ── Locate claude executable on Windows ───────────────
 def find_claude() -> str:
     found = shutil.which("claude")
@@ -561,7 +610,12 @@ async def handle_sessions(request: web.Request) -> web.Response:
     except Exception as e:
         print(f"[sessions] DB error, falling back: {e}")
         items, total = [], 0
-    return web.json_response({"items": items, "has_more": total > offset + PAGE})
+    return web.json_response({
+        "items": items,
+        "sessions": items,
+        "total": total,
+        "has_more": total > offset + PAGE
+    })
 
 
 async def handle_restore(request: web.Request) -> web.Response:
@@ -782,6 +836,7 @@ def _parse_full_frontmatter(path: Path) -> dict:
             result[key] = items
         elif val.startswith("["):
             result[key] = [x.strip().strip("\"'") for x in val.strip("[]").split(",") if x.strip()]
+            i += 1
         else:
             result[key] = val.strip("\"'")
             i += 1
@@ -818,12 +873,31 @@ def _write_frontmatter(path: Path, fm: dict) -> None:
 
 
 def _agent_dict(f: Path) -> dict:
+    aid = f.stem
     fm = _parse_full_frontmatter(f)
+
+    # 確保每個 Agent 都有對應的 soul 檔案，沒有就自動建立空白檔案
+    soul_file = SOULS_DIR / f"{aid}.md"
+    if not soul_file.exists():
+        try:
+            SOULS_DIR.mkdir(parents=True, exist_ok=True)
+            soul_file.write_text("", encoding="utf-8")
+        except Exception:
+            pass
+
+    # 確保 Agent frontmatter 中的 soul 屬性有設定且為 aid
+    if not fm.get("soul") or fm.get("soul") != aid:
+        fm["soul"] = aid
+        try:
+            _write_frontmatter(f, fm)
+        except Exception:
+            pass
+
     return {
-        "id":            f.stem,
-        "name":          fm.get("name", f.stem),
+        "id":            aid,
+        "name":          fm.get("name", aid),
         "description":   fm.get("description", _desc_from_md_file(f)),
-        "soul":          fm.get("soul", ""),
+        "soul":          aid,
         "skills":        fm.get("skills", []) if isinstance(fm.get("skills"), list) else [],
         "memory":        fm.get("memory", []) if isinstance(fm.get("memory"), list) else [],
         "mcp":           fm.get("mcp", [])    if isinstance(fm.get("mcp"), list)    else [],
@@ -843,6 +917,123 @@ async def handle_agents(request: web.Request) -> web.Response:
             except Exception:
                 pass
     return web.json_response(agents)
+
+
+async def handle_agents_registry(request: web.Request) -> web.Response:
+    registry = []
+    if AGENTS_DIR.exists():
+        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
+            try:
+                d = _agent_dict(f)
+                registry.append({
+                    "id": f.stem,
+                    "name": d.get("name", f.stem),
+                    "description": d.get("description", ""),
+                    "skills": d.get("skills", [])
+                })
+            except Exception:
+                pass
+    return web.json_response(registry)
+
+
+async def _run_hr_agent(task: str) -> dict:
+    agents_list = []
+    if AGENTS_DIR.exists():
+        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
+            try:
+                d = _agent_dict(f)
+                agents_list.append({
+                    "id": f.stem,
+                    "name": d.get("name", f.stem),
+                    "description": d.get("description", ""),
+                    "skills": d.get("skills", [])
+                })
+            except Exception:
+                pass
+    if not agents_list:
+        return {"error": "尚未建立任何 Agent。請先至 Agent 頁籤建立 Agent 後，再使用自動組隊功能。"}
+
+    registry_str = json.dumps(agents_list, ensure_ascii=False, indent=2)
+    prompt = f"""你是一個 HR Agent（任務協調整合器）。請分析使用者的任務描述，並從下方的 Agent 列表中，挑選最適合的 Agent 組成一個循序執行的團隊（Team）來完成任務。
+
+可用 Agent 列表：
+{registry_str}
+
+請務必遵守以下規定：
+1. 僅從上述列表中挑選 Agent，不要捏造不存在的 Agent ID。
+2. 根據任務的邏輯順序安排執行步驟（Step 1, Step 2...）。前一個 Agent 的輸出將作為下一個 Agent 的輸入上下文。
+3. 為每個步驟的 Agent 設定合適的 role（任務職責說明）。
+4. 設定 input_memory（讀取）與 output_memory（寫入）的鍵值（keys），用於在步驟間傳遞 context 或保存中間產物。例如第一步寫入 'step1-result'，第二步讀取 'step1-result'。
+5. 請只輸出一個純 JSON 對象，不要包含任何 markdown 標記（如 ```json ... ```）、引言或額外說明文字。
+
+JSON Schema:
+{{
+  "name": "auto-created-team-name",
+  "description": "說明此團隊如何協作與組隊理由",
+  "members": [
+    {{
+      "agent": "選用的 Agent ID",
+      "role": "該步驟的具體工作描述",
+      "input_memory": ["要讀取的 memory 鍵"],
+      "output_memory": ["要寫入的 memory 鍵"]
+    }}
+  ]
+}}
+
+使用者任務描述：
+{task}
+"""
+
+    env = os.environ.copy()
+    key = _resolve_api_key()
+    if key:
+        env["ANTHROPIC_API_KEY"] = key
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "-p", prompt, "--output-format", "text", "--no-caching",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=env, cwd=str(Path.home()),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90)
+        output_str = stdout.decode("utf-8", errors="replace").strip()
+    except Exception as e:
+        return {"error": f"HR dispatch failed: {e}"}
+
+    s = output_str.strip()
+    if s.startswith("```"):
+        first_newline = s.find("\n")
+        if first_newline != -1:
+            s = s[first_newline:].strip()
+        if s.endswith("```"):
+            s = s[:-3].strip()
+
+    try:
+        plan = json.loads(s)
+        return plan
+    except Exception:
+        start_idx = s.find("{")
+        end_idx = s.rfind("}")
+        if start_idx != -1 and end_idx != -1:
+            try:
+                plan = json.loads(s[start_idx:end_idx+1])
+                return plan
+            except Exception:
+                pass
+        return {"error": "Failed to parse HR Agent JSON response", "raw": output_str}
+
+
+async def handle_hr_dispatch(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        task = data.get("task", "").strip()
+        if not task:
+            return web.json_response({"error": "task is required"}, status=400)
+        plan = await _run_hr_agent(task)
+        if "error" in plan:
+            return web.json_response(plan, status=500)
+        return web.json_response(plan)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
 
 
 async def handle_agent_get(request: web.Request) -> web.Response:
@@ -977,12 +1168,53 @@ async def handle_skill_put(request: web.Request) -> web.Response:
 
 def _parse_yaml_simple(text: str) -> dict:
     """Parse team YAML using PyYAML, with fallback to regex."""
+    if not text:
+        return {}
+    
+    # 處理可能被 --- frontmatter 包裹的內容
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        end = None
+        for i, line in enumerate(lines[1:], 1):
+            if line.strip() == "---":
+                end = i
+                break
+        if end is not None:
+            text = "\n".join(lines[1:end])
+
     try:
         import yaml as _yaml
-        return _yaml.safe_load(text) or {}
+        res = _yaml.safe_load(text)
+        if isinstance(res, dict):
+            return res
+        return {}
     except Exception:
         pass
-    return {}
+
+    import re as _re
+    result = {}
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip() or line.strip().startswith("#"):
+            i += 1
+            continue
+        m = _re.match(r'^([\w][\w-]*):\s*(.*)', line)
+        if not m:
+            i += 1
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if val == "":
+            items, i = _parse_yaml_list(lines, i + 1)
+            result[key] = items
+        elif val.startswith("[") and val.endswith("]"):
+            result[key] = [x.strip().strip("\"'") for x in val[1:-1].split(",") if x.strip()]
+            i += 1
+        else:
+            result[key] = val.strip("\"'")
+            i += 1
+    return result
 
 
 def _write_team_yaml(path: Path, data: dict) -> None:
@@ -1190,20 +1422,57 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         _tr_emit(run_id, {"type": "step_start", "step": i,
                            "agent": step["agent"], "role": step["role"]})
 
+        agent_id = step["agent"]
+        agent_info = {}
+        try:
+            f_agent = AGENTS_DIR / f"{agent_id}.md"
+            if f_agent.exists():
+                agent_info = _agent_dict(f_agent)
+        except Exception:
+            pass
+
+        memory_content = []
+        read_keys = agent_info.get("memory", [])
+        mem_dir = _memory_dir()
+        for key in read_keys:
+            key_file = mem_dir / f"{key}.md"
+            if key_file.exists():
+                try:
+                    content = key_file.read_text(encoding="utf-8")
+                    memory_content.append(f"### Memory Context: {key}\n\n{content}")
+                except Exception:
+                    pass
+
+        prompt_parts = []
         if i == 0:
-            prompt = task
+            prompt_parts.append(task)
         else:
-            prompt = (
+            prompt_parts.append(
                 f"{task}\n\n"
                 f"---\n## 前置 Agent（{steps[i-1]['agent']}）的輸出\n\n"
                 f"{prev_output}"
             )
 
-        output = await _agent_run_capture(run_id, i, step["agent"], prompt, model, cwd)
+        if memory_content:
+            prompt_parts.append("\n\n---\n## 相關 Memory 上下文\n\n" + "\n\n".join(memory_content))
+
+        prompt = "\n".join(prompt_parts)
+
+        output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd)
         step["output"] = output
         step["status"] = "done"
         prev_output = output
         _tr_emit(run_id, {"type": "step_done", "step": i})
+
+        write_keys = agent_info.get("output_memory", [])
+        if write_keys:
+            mem_dir.mkdir(parents=True, exist_ok=True)
+            for key in write_keys:
+                try:
+                    key_file = mem_dir / f"{key}.md"
+                    key_file.write_text(output, encoding="utf-8")
+                except Exception:
+                    pass
 
     if run.get("status") != "cancelled":
         run["status"] = "done"
@@ -1220,23 +1489,27 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
     task    = data.get("task", "").strip()
     model   = data.get("model", "")
     cwd     = data.get("cwd", "")
+    team_payload = data.get("team", None)
 
     if not task:
         return web.json_response({"error": "task required"}, status=400)
 
-    f = TEAMS_DIR / f"{team_id}.yaml"
-    if not f.exists():
-        return web.json_response({"error": "team not found"}, status=404)
+    if team_payload:
+        team = team_payload
+    else:
+        f = TEAMS_DIR / f"{team_id}.yaml"
+        if not f.exists():
+            return web.json_response({"error": "team not found"}, status=404)
+        team = _team_dict(f)
 
-    team = _team_dict(f)
-    if not team["members"]:
+    if not team.get("members"):
         return web.json_response({"error": "team has no members"}, status=400)
 
     run_id = _uuid.uuid4().hex[:8]
     _team_runs[run_id] = {
         "id":      run_id,
-        "team_id": team_id,
-        "name":    team["name"],
+        "team_id": team.get("id", team_id),
+        "name":    team.get("name", "Auto Team"),
         "task":    task,
         "status":  "running",
         "steps": [
@@ -1309,12 +1582,15 @@ async def handle_team_run_cancel(request: web.Request) -> web.Response:
 
 
 async def handle_memory(request: web.Request) -> web.Response:
-    files = {}
+    files = []
     mem_dir = _memory_dir()
     if mem_dir.exists():
         for f in mem_dir.glob("*.md"):
             try:
-                files[f.stem] = f.read_text(encoding="utf-8")
+                files.append({
+                    "key": f.stem,
+                    "content": f.read_text(encoding="utf-8")
+                })
             except Exception:
                 pass
     return web.json_response(files)
@@ -1399,8 +1675,8 @@ async def handle_soul_save(request: web.Request) -> web.Response:
     sid = request.match_info["id"]
     if sid.lower().endswith(".md"):
         sid = sid[:-3]
-    # Check alphanumeric with hyphens/underscores
-    if not sid.replace("-", "").replace("_", "").isalnum():
+    # 支援中文檔名，但需排除非法檔名字元與路徑穿越
+    if ".." in sid or "/" in sid or "\\" in sid or not sid.strip() or any(c in sid for c in '<>:"/\\|?*'):
         return web.json_response({"error": "invalid name"}, status=400)
     data = await request.json()
     content = data.get("content", "")
@@ -1448,6 +1724,9 @@ async def handle_schedules_post(request: web.Request) -> web.Response:
     cron   = data.get("cron", "").strip()
     if not prompt or not cron:
         return web.json_response({"error": "prompt and cron required"}, status=400)
+    
+    cron = await _natural_to_cron(cron)
+    
     schedules = load_schedules()
     entry = {"id": str(uuid.uuid4()), "prompt": prompt, "cron": cron, "enabled": True}
     schedules.append(entry)
@@ -1482,6 +1761,80 @@ async def handle_schedules_run(request: web.Request) -> web.Response:
     target["last_run"] = datetime.now().isoformat()
     save_schedules(schedules)
     return web.json_response({"ok": True})
+
+async def handle_schedules_parse_cron(request: web.Request) -> web.Response:
+    data = await request.json()
+    text = data.get("text", "").strip()
+    if not text:
+        return web.json_response({"cron": ""})
+
+    prompt = f"""You are a Cron translation assistant. Convert the user's natural language time description into a standard 5-field Cron expression (minute hour day-of-month month day-of-week).
+Only output the Cron expression itself, without any other explanation, markdown markup or extra characters.
+Examples:
+Input: 每天早上九點
+Output: 0 9 * * *
+Input: 每週一到週五的下午五點半
+Output: 30 17 * * 1-5
+Input: 每 5 分鐘
+Output: */5 * * * *
+
+Now convert this: {text}"""
+
+    cron_result = ""
+    api_key = _resolve_api_key()
+    if api_key:
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json"
+        }
+        payload = {
+            "model": "claude-3-5-sonnet-20241022",
+            "max_tokens": 50,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=10) as resp:
+                    if resp.status == 200:
+                        res = await resp.json()
+                        cron_result = res["content"][0]["text"].strip()
+        except Exception as e:
+            print(f"[parse-cron] HTTP API failed: {e}")
+
+    if not cron_result:
+        # Fallback to CLAUDE_BIN
+        cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "stream-json"]
+        try:
+            env = {**os.environ}
+            if api_key:
+                env["ANTHROPIC_API_KEY"] = api_key
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+                env=env
+            )
+            stdout, _ = await proc.communicate()
+            text_parts = []
+            for line in stdout.decode("utf-8", errors="replace").splitlines():
+                try:
+                    event = json.loads(line.strip())
+                    if event.get("type") == "text":
+                        text_parts.append(event.get("text", ""))
+                except Exception:
+                    pass
+            cron_result = "".join(text_parts).strip()
+        except Exception as e:
+            print(f"[parse-cron] CLAUDE_BIN failed: {e}")
+
+    if cron_result:
+        cron_result = cron_result.replace("`", "").replace("'", "").replace("\"", "").strip()
+        if "output:" in cron_result.lower():
+            cron_result = cron_result.split(":")[-1].strip()
+
+    return web.json_response({"cron": cron_result})
 
 async def handle_stats(request: web.Request) -> web.Response:
     """Dashboard 統計 — 用 SQLite index 計算，不重新掃描 JSONL。"""
@@ -2111,6 +2464,9 @@ async def handle_config_put(request: web.Request) -> web.Response:
 
 
 def build_app() -> web.Application:
+    _init_db()
+    _migrate_db()
+    _backfill_project_paths()
     app = web.Application()
 
     cors = aiohttp_cors.setup(app, defaults={
@@ -2146,6 +2502,7 @@ def build_app() -> web.Application:
         ("PATCH",  "/api/sessions/{id}",               handle_session_rename),
         ("POST",   "/api/sessions/{id}/auto-title",    handle_session_auto_title),
         ("GET",    "/api/agents",             handle_agents),
+        ("GET",    "/api/agents/registry",     handle_agents_registry),
         ("POST",   "/api/agents",             handle_agent_post),
         ("GET",    "/api/agents/{id}",         handle_agent_get),
         ("PUT",    "/api/agents/{id}",         handle_agent_put),
@@ -2163,9 +2520,11 @@ def build_app() -> web.Application:
         ("GET",    "/api/team/run/{run_id}",       handle_team_run_get),
         ("GET",    "/api/team/run/{run_id}/stream",handle_team_run_stream),
         ("DELETE", "/api/team/run/{run_id}",       handle_team_run_cancel),
+        ("POST",   "/api/hr/dispatch",         handle_hr_dispatch),
         ("GET",    "/api/memory",          handle_memory),
         ("GET",    "/api/schedules",       handle_schedules_get),
         ("POST",   "/api/schedules",       handle_schedules_post),
+        ("POST",   "/api/schedules/parse-cron", handle_schedules_parse_cron),
         ("DELETE", "/api/schedules/{id}",       handle_schedules_delete),
         ("PATCH",  "/api/schedules/{id}",       handle_schedules_patch),
         ("POST",   "/api/schedules/{id}/run",   handle_schedules_run),

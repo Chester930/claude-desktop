@@ -560,6 +560,7 @@ body {
 .tab-bar {
   display: flex;
   border-bottom: 1px solid $border;
+  padding: 0 8px;
   button {
     flex: 1;
     background: none;
@@ -567,7 +568,8 @@ body {
     border-bottom: 2px solid transparent;
     color: $text-dim;
     padding: 10px 0;
-    font-size: 12px;
+    font-size: 11px;
+    letter-spacing: -0.2px;
     cursor: pointer;
     &.active { color: $accent; border-bottom-color: $accent; font-weight: 600; }
     &:hover:not(.active) { color: $text; }
@@ -1891,7 +1893,24 @@ body {
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.15s, color 0.15s;
-  &:hover { background: #252525; color: #e8e8e8; }
+}
+.hr-btn {
+  color: #6ee7b7;
+  border: 1px solid rgba(110, 231, 183, 0.2);
+  margin-left: 6px;
+  &:hover {
+    background: rgba(110, 231, 183, 0.1);
+    color: #6ee7b7;
+    border-color: rgba(110, 231, 183, 0.4);
+  }
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    border-color: transparent;
+    color: #555;
+    background: none;
+    &:hover { background: none; color: #555; }
+  }
 }
 
 // ── T04 Drag & drop ───────────────────────────────────

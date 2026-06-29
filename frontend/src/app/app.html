@@ -253,7 +253,7 @@
           <label>預設代理人
             <select [(ngModel)]="settingsForm.defaultAgent">
               <option value="">（無）</option>
-              @for (a of agents(); track a.id) {
+              @for (a of dropdownAgents(); track a.id) {
                 <option [value]="a.id">{{ a.name }}</option>
               }
             </select>
@@ -747,7 +747,7 @@
                 <div class="panel-agent-selector" (click)="$event.stopPropagation()" style="display: inline-flex; align-items: center; margin-right: 6px; margin-left: 2px;">
                   <select [value]="tab.selectedAgent || ''" (change)="changeTabAgent(tab.id, $any($event.target).value)" style="background: #111; border: 1px solid #333; color: #d4a853; font-size: 11px; padding: 2px 6px; border-radius: 4px; outline: none; cursor: pointer; font-family: inherit;">
                     <option value="">🤖 無代理人</option>
-                    @for (a of agents(); track a.id) {
+                    @for (a of dropdownAgents(); track a.id) {
                       <option [value]="a.id">🤖 {{ a.name }}</option>
                     }
                   </select>
@@ -1057,6 +1057,9 @@
             <button class="sb-btn mic-btn" (click)="toggleMic()" title="語音輸入（未啟用）" style="margin-left: 4px; padding: 2px 4px; opacity: 0.8;">
               🎤
             </button>
+            <button class="sb-btn hr-btn" (click)="dispatchHR()" [disabled]="!inputText.trim() || isStreaming() || hrLoading()" [title]="'🤖 自動組隊 (HR Agent) 分析任務並建立臨時 Team'">
+              {{ hrLoading() ? '🤖 組隊中…' : '🤖 自動組隊' }}
+            </button>
           </div>
           <div class="statusbar-right">
             @if (inputText.length > 500) {
@@ -1082,20 +1085,18 @@
       <aside class="right-panel" [style.width.px]="rightWidth()">
         <div class="right-resize" (mousedown)="onRightResizeStart($event)" title="拖曳調整寬度"></div>
         <div class="tab-bar">
-          <button [class.active]="activeTab()==='agents'"    (click)="activeTab.set('agents')">Agent</button>
-          <button [class.active]="activeTab()==='teams'"     (click)="activeTab.set('teams');loadTeams()">Teams</button>
-          <button [class.active]="activeTab()==='skills'"    (click)="activeTab.set('skills')">Skills</button>
+          <button [class.active]="activeTab()==='teams'"     (click)="activeTab.set('teams');loadTeams()">TEAM</button>
+          <button [class.active]="activeTab()==='agents'"    (click)="activeTab.set('agents')">AGENT</button>
+          <button [class.active]="activeTab()==='skills'"    (click)="activeTab.set('skills')">SKILL</button>
           <button [class.active]="activeTab()==='mcp'"       (click)="activeTab.set('mcp');loadMcp()">MCP</button>
-          <button [class.active]="activeTab()==='memory'"    (click)="activeTab.set('memory')">Memory</button>
-          <button [class.active]="activeTab()==='schedules'" (click)="activeTab.set('schedules')">Schedule</button>
-          <button [class.active]="activeTab()==='soul'"      (click)="activeTab.set('soul')">Soul</button>
+          <button [class.active]="activeTab()==='schedules'" (click)="activeTab.set('schedules')">Scheduling</button>
         </div>
         @if (['agents','skills','mcp'].includes(activeTab())) {
           <div class="right-panel-search">
             <input class="right-panel-search-input"
               [ngModel]="rightPanelFilter()"
               (ngModelChange)="rightPanelFilter.set($event)"
-              [placeholder]="activeTab() === 'agents' ? '搜尋 agent…' : activeTab() === 'skills' ? '搜尋 skill…' : '搜尋 MCP…'">
+              [placeholder]="activeTab() === 'agents' ? '搜尋 AGENT…' : activeTab() === 'skills' ? '搜尋 SKILL…' : '搜尋 MCP…'">
             @if (rightPanelFilter()) {
               <button class="right-panel-search-clear" (click)="rightPanelFilter.set('')">✕</button>
             }
@@ -1181,6 +1182,12 @@
                           } @empty {
                             <div style="font-size:10px;color:#555;font-style:italic;">無直連 MCP</div>
                           }
+                        </div>
+                        
+                        <!-- 靈魂人格 -->
+                        <div class="linked-title" style="margin-top:8px;">靈魂人格 (Soul Persona)：</div>
+                        <div class="soul-persona-preview" style="font-size:11px;color:#bbb;background:#151515;border:1px solid #222;border-radius:4px;padding:8px;margin-top:4px;white-space:pre-wrap;max-height:120px;overflow-y:auto;line-height:1.5;">
+                          {{ getAgentSoulContent(a.soul || a.id) }}
                         </div>
                       </div>
                     </div>
@@ -1332,7 +1339,7 @@
             </div>
           }
 
-          @if (activeTab() === 'memory') {
+          @if (false) {
             <div class="memory-panel">
               <!-- 專案切換列 -->
               <div class="memory-project-bar">
@@ -1426,10 +1433,15 @@
             <div class="schedule-view">
               <div class="schedule-form">
                 <input [(ngModel)]="newSchedulePrompt" placeholder="要排程執行的指令…" class="schedule-input">
-                <div class="cron-row">
-                  <input [(ngModel)]="newScheduleCron" placeholder="Cron（例：0 9 * * *）" class="schedule-input cron-input">
+                <div class="cron-row" style="display: flex; gap: 6px; width: 100%;">
+                  <input [(ngModel)]="newScheduleCron" placeholder="執行週期（例：每天早上 9:00）" class="schedule-input cron-input" style="flex: 1; min-width: 0;">
+                  @if (isNaturalLanguage(newScheduleCron)) {
+                    <button class="btn-primary" (click)="parseCronFromAI()" [disabled]="aiParsing()" style="flex-shrink: 0; background: #6366f1; border-color: #6366f1; font-weight: bold; cursor: pointer; padding: 6px 12px; font-size: 12px; border-radius: 6px; color: white;">
+                      {{ aiParsing() ? '解析中...' : '🧠 AI 轉換' }}
+                    </button>
+                  }
                   <button class="btn-primary schedule-add-btn" (click)="addSchedule()"
-                    [disabled]="!newSchedulePrompt.trim() || !newScheduleCron.trim()">新增</button>
+                    [disabled]="!newSchedulePrompt.trim() || !newScheduleCron.trim() || isNaturalLanguage(newScheduleCron) || aiParsing()" style="flex-shrink: 0;">新增</button>
                 </div>
                 <div class="cron-presets">
                   @for (p of CRON_PRESETS; track p.value) {
@@ -1440,16 +1452,20 @@
               <div class="panel-list" style="margin-top:10px">
                 @for (sc of schedules(); track sc.id) {
                   <div class="panel-card">
-                    <div class="card-name schedule-header">
-                      <span>{{ sc.cron }}</span>
-                      <div class="schedule-actions">
+                    <div class="schedule-header">
+                      <div class="card-name" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" [title]="sc.prompt">
+                        {{ sc.prompt }}
+                      </div>
+                      <div class="schedule-actions" style="flex-shrink: 0;">
                         <button class="icon-btn-sm" (click)="runScheduleNow(sc.id)" title="立即執行">▶</button>
                         <button class="icon-btn-sm" (click)="toggleSchedule(sc.id, sc.enabled)"
                           [title]="sc.enabled ? '停用' : '啟用'">{{ sc.enabled ? '⏸' : '▷' }}</button>
                         <button class="del-btn" (click)="deleteSchedule(sc.id)">✕</button>
                       </div>
                     </div>
-                    <div class="card-desc">{{ sc.prompt }}</div>
+                    <div class="card-desc" style="margin-top: 4px; font-size: 11.5px; color: #aaa;">
+                      執行週期：<span style="color: #eee; font-weight: bold;">{{ translateCron(sc.cron) }}</span>
+                    </div>
                     <div class="schedule-status" [class.active]="sc.enabled">
                       {{ sc.enabled ? '✓ 啟用中' : '✗ 已停用' }}
                       @if (sc.last_run) { · 上次：{{ sc.last_run | date:'MM/dd HH:mm' }} }
@@ -2133,16 +2149,11 @@
           <label class="editor-label">名稱
             <input class="editor-input" [value]="agentEditorData().name || ''" (input)="agentEditorData.set({...agentEditorData(), name: $any($event.target).value})" [disabled]="!agentEditorIsNew()" placeholder="my-agent">
           </label>
-          <label class="editor-label">說明
-            <input class="editor-input" [value]="agentEditorData().description || ''" (input)="agentEditorData.set({...agentEditorData(), description: $any($event.target).value})" placeholder="這個 Agent 的用途">
-          </label>
-          <label class="editor-label">Soul
-            <select class="memory-project-select" style="width:100%" [value]="agentEditorData().soul || ''" (change)="agentEditorData.set({...agentEditorData(), soul: $any($event.target).value})">
-              <option value="">（不指定）</option>
-              @for (s of souls(); track s.id) {
-                <option [value]="s.id">{{ s.name }}</option>
-              }
-            </select>
+          <label class="editor-label">靈魂人格設定 (Soul Persona)
+            <textarea class="memory-editor"
+              [(ngModel)]="agentEditorSoulContent"
+              style="width:100%;height:140px;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:6px;padding:8px;font-size:12px;outline:none;resize:vertical;font-family:inherit;line-height:1.5;"
+              placeholder="請輸入此 Agent 的個性、說話風格與行為準則..."></textarea>
           </label>
         </div>
         <!-- Skills -->
@@ -2311,7 +2322,7 @@
                 [value]="m.agent"
                 (change)="teamEditorUpdateMember($index, 'agent', $any($event.target).value)">
                 <option value="">選擇 Agent…</option>
-                @for (a of agents(); track a.id) {
+                @for (a of dropdownAgents(); track a.id) {
                   <option [value]="a.id">@{{ a.name }}</option>
                 }
               </select>
@@ -2399,6 +2410,74 @@
           <button class="btn-secondary" (click)="closeTeamRun()">關閉</button>
         </div>
       }
+    </div>
+  }
+
+  <!-- ── HR Agent 編輯計畫 Modal ─────────────────────────────────────────── -->
+  @if (hrPlanOpen()) {
+    <div class="editor-modal-overlay" (click)="hrPlanOpen.set(false)"></div>
+    <div class="editor-modal" (click)="$event.stopPropagation()">
+      <div class="editor-modal-header">
+        <span class="editor-modal-title">🤖 HR Agent 臨時組隊計畫</span>
+        <button class="usage-modal-close" (click)="hrPlanOpen.set(false)">✕</button>
+      </div>
+      <div class="editor-modal-body">
+        <!-- 基本資訊 -->
+        <div class="editor-section">
+          <div class="editor-section-title">團隊設定</div>
+          <label class="editor-label">團隊名稱
+            <input class="editor-input" [value]="hrTeamPlan()?.name || ''" (input)="hrUpdateStep(-1, 'name', $any($event.target).value)" placeholder="auto-team">
+          </label>
+          <label class="editor-label">說明 / 組隊理由
+            <input class="editor-input" [value]="hrTeamPlan()?.description || ''" (input)="hrUpdateStep(-1, 'description', $any($event.target).value)" placeholder="組隊理由">
+          </label>
+        </div>
+        <!-- 執行步驟 -->
+        <div class="editor-section">
+          <div class="editor-section-title">執行步驟順序</div>
+          @for (m of hrTeamPlan()?.members ?? []; track $index) {
+            <div class="team-member-editor-row" style="flex-direction: column; align-items: stretch; border: 1px solid #333; padding: 10px; border-radius: 6px; margin-bottom: 12px; gap: 8px;">
+              <div style="display:flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: bold; color: #6ee7b7;">Step {{ $index + 1 }}</span>
+                <button class="del-btn" (click)="hrRemoveStep($index)">✕ 刪除步驟</button>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <select class="memory-project-select" style="flex:1"
+                  [value]="m.agent"
+                  (change)="hrUpdateStep($index, 'agent', $any($event.target).value)">
+                  <option value="">選擇 Agent…</option>
+                  @for (a of dropdownAgents(); track a.id) {
+                    <option [value]="a.id">@{{ a.name }}</option>
+                  }
+                </select>
+                <input class="editor-input" style="flex:2" placeholder="角色與具體工作說明"
+                  [value]="m.role"
+                  (input)="hrUpdateStep($index, 'role', $any($event.target).value)">
+              </div>
+              <div style="display:flex; gap:8px;">
+                <label style="flex:1; font-size: 11px; color: #888;">
+                  讀取 Memory (以逗號分隔)
+                  <input class="editor-input" style="width:100%; font-size: 12px; margin-top:2px;"
+                    [value]="m.input_memory?.join(', ') || ''"
+                    (input)="hrUpdateStep($index, 'input_memory', $any($event.target).value)">
+                </label>
+                <label style="flex:1; font-size: 11px; color: #888;">
+                  寫入 Memory (以逗號分隔)
+                  <input class="editor-input" style="width:100%; font-size: 12px; margin-top:2px;"
+                    [value]="m.output_memory?.join(', ') || ''"
+                    (input)="hrUpdateStep($index, 'output_memory', $any($event.target).value)">
+                </label>
+              </div>
+            </div>
+          }
+          <button class="btn-secondary" style="width:100%;margin-top:8px;font-size:12px;" (click)="hrAddStep()">＋ 新增執行步驟</button>
+        </div>
+      </div>
+      <div class="editor-modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn-secondary" (click)="hrPlanOpen.set(false)">取消</button>
+        <button class="btn-primary" [disabled]="!(hrTeamPlan()?.members?.length)" (click)="submitHRTeamRun()">▶ 開始執行</button>
+      </div>
     </div>
   }
 </div>

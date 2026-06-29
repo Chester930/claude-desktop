@@ -180,3 +180,138 @@ test.describe('Claude Desktop — P3 功能', () => {
   });
 
 });
+
+// ── P4 / Teams / Memory 新增測試 ─────────────────────────────────────────────
+
+test.describe('Claude Desktop — Phase 4 HR Agent & Teams', () => {
+
+  test.beforeEach(async ({ page }) => {
+    // 跳過 onboarding 避免遮蓋 UI
+    await page.addInitScript(() => localStorage.setItem('claude_onboarding_done', '1'));
+  });
+
+  test('後端 /api/agents/registry 回傳正確結構', async ({ request }) => {
+    const res = await request.get('http://localhost:8765/api/agents/registry');
+    if (!res.ok()) { test.skip(); return; }
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+    if (body.length > 0) {
+      const first = body[0];
+      expect(first).toHaveProperty('id');
+      expect(first).toHaveProperty('name');
+      expect(first).toHaveProperty('description');
+      expect(first).toHaveProperty('skills');
+      expect(Array.isArray(first.skills)).toBe(true);
+    }
+  });
+
+  test('後端 /api/hr/dispatch 缺少 task 回傳 400', async ({ request }) => {
+    const res = await request.post('http://localhost:8765/api/hr/dispatch', {
+      data: {},
+    });
+    if (res.status() === 0) { test.skip(); return; }
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body).toHaveProperty('error');
+  });
+
+  test('後端 /api/teams 回傳清單', async ({ request }) => {
+    const res = await request.get('http://localhost:8765/api/teams');
+    if (!res.ok()) { test.skip(); return; }
+    const body = await res.json();
+    expect(Array.isArray(body)).toBe(true);
+  });
+
+  test('後端 Teams CRUD — 建立 / 查詢 / 刪除', async ({ request }) => {
+    const BASE = 'http://localhost:8765';
+    // 建立
+    const created = await request.post(`${BASE}/api/teams`, {
+      data: { name: 'e2e-test-team', description: 'E2E 測試', members: [] },
+    });
+    if (!created.ok()) { test.skip(); return; }
+    // 查詢
+    const got = await request.get(`${BASE}/api/teams/e2e-test-team`);
+    expect(got.ok()).toBe(true);
+    const body = await got.json();
+    expect(body.name).toBe('e2e-test-team');
+    // 刪除
+    const del = await request.delete(`${BASE}/api/teams/e2e-test-team`);
+    expect(del.ok()).toBe(true);
+    // 確認刪除
+    const notFound = await request.get(`${BASE}/api/teams/e2e-test-team`);
+    expect(notFound.status()).toBe(404);
+  });
+
+  test('後端 Team Run — 建立 / 查詢狀態', async ({ request }) => {
+    const BASE = 'http://localhost:8765';
+    const runRes = await request.post(`${BASE}/api/team/run`, {
+      data: {
+        task: 'E2E 測試任務',
+        team: {
+          name: 'e2e-run-team',
+          members: [{ agent: 'nonexistent-agent', role: '測試' }],
+        },
+      },
+    });
+    if (!runRes.ok()) { test.skip(); return; }
+    const runBody = await runRes.json();
+    expect(runBody).toHaveProperty('run_id');
+    expect(runBody.ok).toBe(true);
+
+    // 查詢狀態
+    const statusRes = await request.get(`${BASE}/api/team/run/${runBody.run_id}`);
+    expect(statusRes.ok()).toBe(true);
+    const status = await statusRes.json();
+    expect(status.id).toBe(runBody.run_id);
+    expect(status).toHaveProperty('status');
+    expect(status).toHaveProperty('steps');
+    expect(Array.isArray(status.steps)).toBe(true);
+  });
+
+  test('後端 Memory CRUD — 寫入 / 讀取 / 刪除', async ({ request }) => {
+    const BASE = 'http://localhost:8765';
+    const content = 'E2E memory relay 測試 — UNIQUE_MARKER_' + Date.now();
+    // 寫入
+    const writeRes = await request.put(`${BASE}/api/memory/e2e-relay-key`, {
+      data: { content },
+    });
+    if (!writeRes.ok()) { test.skip(); return; }
+
+    // 讀取列表確認存在
+    const listRes = await request.get(`${BASE}/api/memory`);
+    const list = await listRes.json();
+    expect(Array.isArray(list)).toBe(true);
+    const keys = list.map((m: { key: string }) => m.key);
+    expect(keys).toContain('e2e-relay-key');
+
+    // 刪除
+    const delRes = await request.delete(`${BASE}/api/memory/e2e-relay-key`);
+    expect(delRes.ok()).toBe(true);
+  });
+
+  test('Agent 頁籤存在', async ({ page }) => {
+    await page.goto('/');
+    const agentTab = page.locator('.tab-bar button', { hasText: /Agent/i });
+    await expect(agentTab).toBeVisible();
+  });
+
+  test('Teams 頁籤存在', async ({ page }) => {
+    await page.goto('/');
+    const teamsTab = page.locator('.tab-bar button', { hasText: /Team/i });
+    await expect(teamsTab).toBeVisible();
+  });
+
+  test('Memory 頁籤存在', async ({ page }) => {
+    await page.goto('/');
+    const memTab = page.locator('.tab-bar button', { hasText: /Memory/i });
+    await expect(memTab).toBeVisible();
+  });
+
+  test('自動組隊按鈕（HR）存在', async ({ page }) => {
+    await page.goto('/');
+    // HR 按鈕帶有「自動組隊」或 data-testid="hr-btn" 或 class="hr-btn"
+    const hrBtn = page.locator('.hr-btn, [title*="自動組隊"], button:has-text("自動組隊")').first();
+    await expect(hrBtn).toBeVisible();
+  });
+
+});
