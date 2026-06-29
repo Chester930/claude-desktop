@@ -4644,3 +4644,16 @@ body[style*="ns-resize"] .mcp-divider-grip {
   border-radius: 3px; padding: 1px 4px; flex-shrink: 0;
 }
 
+.memview-textarea {
+  width: 100%; box-sizing: border-box;
+  background: rgba(0,0,0,0.3); color: #ccc;
+  border: 1px solid rgba(255,255,255,0.12); border-radius: 4px;
+  font-size: 11px; font-family: monospace; line-height: 1.5;
+  padding: 6px 8px; resize: vertical; outline: none;
+  &:focus { border-color: rgba(255,255,255,0.25); }
+}
+
+.memview-edit-actions {
+  display: flex; gap: 6px; margin-top: 6px;
+}
+

@@ -350,6 +350,10 @@ export class ClaudeService {
     return this.http.put(`${this.api}/mem/user`, { content });
   }
 
+  putMemorySystem(content: string): Observable<any> {
+    return this.http.put(`${this.api}/mem/system`, { content });
+  }
+
   putMemoryAgent(agentId: string, content: string): Observable<any> {
     return this.http.put(`${this.api}/mem/agents/${encodeURIComponent(agentId)}`, { content });
   }

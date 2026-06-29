@@ -73,6 +73,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   schedules = signal<Schedule[]>([]);
   memoryOverview = signal<any>(null);
   memViewExpanded = signal<Record<string, boolean>>({});
+  memEditMode = signal<Record<string, boolean>>({});
+  memEditContent = signal<Record<string, string>>({});
 
   rightPanelFilter = signal('');
 
@@ -1299,7 +1301,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   loadMemoryOverview() {
-    this.claude.getMemoryOverview().subscribe(data => this.memoryOverview.set(data));
+    this.claude.getMemoryOverview().subscribe(data => {
+      this.memoryOverview.set(data);
+      this.memEditContent.update(m => ({
+        ...m,
+        user:   data?.user?.content   ?? '',
+        system: data?.system?.content ?? '',
+      }));
+    });
   }
 
   toggleMemViewSection(key: string) {
@@ -1314,6 +1323,27 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const base = 'C:\\Users\\666\\.claude\\memory';
     const segments = [base, ...parts].join('\\');
     return segments;
+  }
+
+  startMemEdit(key: string, currentContent: string) {
+    this.memEditContent.update(m => ({ ...m, [key]: currentContent || '' }));
+    this.memEditMode.update(m => ({ ...m, [key]: true }));
+  }
+
+  cancelMemEdit(key: string) {
+    this.memEditMode.update(m => ({ ...m, [key]: false }));
+  }
+
+  saveMemEdit(key: string) {
+    const content = this.memEditContent()[key] ?? '';
+    const save$ = key === 'user'
+      ? this.claude.putMemoryUser(content)
+      : this.claude.putMemorySystem(content);
+
+    save$.subscribe(() => {
+      this.memEditMode.update(m => ({ ...m, [key]: false }));
+      this.loadMemoryOverview();
+    });
   }
 
   isMemoryInContext(key: string): boolean {
@@ -2310,6 +2340,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.settingsOpen.set(true);
     this.loadLogs();
     this.loadTelegramSettings();
+    this.loadMemoryOverview();
     this.claude.getStatus().subscribe(s => {
       this.statusInfo.set(s.claude_bin ?? '未知');
     });
