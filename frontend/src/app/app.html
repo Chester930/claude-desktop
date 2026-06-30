@@ -148,32 +148,21 @@
     <span class="logo">⚡ Claude 桌面版</span>
 
     @if (usage()) {
-      <div class="usage-bar-group">
-        <div class="usage-item"
-             [title]="'5小時用量：' + usage()!.fiveHour + '%\n重置：' + (usage()!.fiveHourReset | date:'MM/dd HH:mm')">
-          <span class="usage-label">5h</span>
-          <div class="usage-track">
-            <div class="usage-fill"
-                 [style.width.%]="usage()!.fiveHour"
-                 [class.warn]="usage()!.fiveHour >= 70"
-                 [class.crit]="usage()!.fiveHour >= 90"></div>
-          </div>
-          <span class="usage-pct" [class.warn]="usage()!.fiveHour >= 70" [class.crit]="usage()!.fiveHour >= 90">
-            {{ usage()!.fiveHour }}%
-          </span>
+      <div class="usage-panel">
+        <div class="usage-slot" [class.low]="(100 - usage()!.fiveHour) <= 20">
+          <span class="usage-scope">5h</span>
+          <span class="usage-remain">剩 {{ 100 - usage()!.fiveHour }}%</span>
+          @if (usage()!.fiveHourReset) {
+            <span class="usage-reset-time">↺ {{ usage()!.fiveHourReset | date:'HH:mm' }}</span>
+          }
         </div>
-        <div class="usage-item"
-             [title]="'7天用量：' + usage()!.sevenDay + '%\n重置：' + (usage()!.sevenDayReset | date:'MM/dd HH:mm')">
-          <span class="usage-label">7d</span>
-          <div class="usage-track">
-            <div class="usage-fill"
-                 [style.width.%]="usage()!.sevenDay"
-                 [class.warn]="usage()!.sevenDay >= 70"
-                 [class.crit]="usage()!.sevenDay >= 90"></div>
-          </div>
-          <span class="usage-pct" [class.warn]="usage()!.sevenDay >= 70" [class.crit]="usage()!.sevenDay >= 90">
-            {{ usage()!.sevenDay }}%
-          </span>
+        <span class="usage-divider">|</span>
+        <div class="usage-slot" [class.low]="(100 - usage()!.sevenDay) <= 20">
+          <span class="usage-scope">7d</span>
+          <span class="usage-remain">剩 {{ 100 - usage()!.sevenDay }}%</span>
+          @if (usage()!.sevenDayReset) {
+            <span class="usage-reset-time">↺ {{ usage()!.sevenDayReset | date:'M/d HH:mm' }}</span>
+          }
         </div>
       </div>
     }

@@ -99,53 +99,45 @@ body {
 
   .topbar-right { display: flex; gap: 4px; margin-left: auto; }
 
-  .usage-bar-group {
+  .usage-panel {
     display: flex;
-    gap: 10px;
     align-items: center;
+    gap: 8px;
     margin-left: 16px;
-    padding: 0 10px;
+    padding: 0 12px;
     border-left: 1px solid $border;
     border-right: 1px solid $border;
-  }
-
-  .usage-item {
-    display: flex;
-    align-items: center;
-    gap: 5px;
     font-size: 11px;
-    cursor: default;
   }
 
-  .usage-label {
-    color: $text-dim;
-    font-weight: 600;
-    min-width: 16px;
-  }
+  .usage-divider { color: $border; }
 
-  .usage-track {
-    width: 52px;
-    height: 5px;
-    background: rgba(255,255,255,0.1);
-    border-radius: 3px;
-    overflow: hidden;
-  }
+  .usage-slot {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
 
-  .usage-fill {
-    height: 100%;
-    background: #4ade80;
-    border-radius: 3px;
-    transition: width 0.4s ease;
-    &.warn { background: #facc15; }
-    &.crit { background: #f87171; }
-  }
+    .usage-scope {
+      color: $text-dim;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
 
-  .usage-pct {
-    color: $text-dim;
-    min-width: 30px;
-    text-align: right;
-    &.warn { color: #facc15; }
-    &.crit { color: #f87171; font-weight: 700; }
+    .usage-remain {
+      color: #4ade80;
+      font-weight: 700;
+      font-size: 12px;
+    }
+
+    .usage-reset-time {
+      color: $text-dim;
+      font-size: 10px;
+    }
+
+    &.low {
+      .usage-remain { color: #f87171; }
+    }
   }
 }
 
