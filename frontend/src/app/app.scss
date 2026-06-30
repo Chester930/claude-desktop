@@ -4628,55 +4628,23 @@ body[style*="ns-resize"] .mcp-divider-grip {
 }
 
 // ── Team Run Panel ────────────────────────────────────────────────────────────
-.tr-overlay {
-  position: fixed; inset: 0; z-index: 2100;
-  background: rgba(0,0,0,0.5); backdrop-filter: blur(2px);
+.embedded-tr-steps {
+  margin: 12px 0;
+  padding: 12px;
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.tr-panel {
-  position: fixed;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 2101;
-  width: 560px;
-  max-height: 82vh;
-  display: flex; flex-direction: column;
-  background: #13131f;
-  border: 1px solid rgba(124,111,255,0.35);
-  border-radius: 16px;
-  box-shadow: 0 32px 80px rgba(0,0,0,0.7);
-  overflow: hidden;
+.embedded-tr-steps-mini {
+  margin: 8px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
-
-.tr-header {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  padding: 16px 18px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  flex-shrink: 0;
-}
-.tr-title   { font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 2px; }
-.tr-subtitle { font-size: 11px; color: #666; max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.tr-input-area {
-  padding: 16px 18px;
-  display: flex; flex-direction: column; gap: 10px;
-  flex-shrink: 0;
-}
-
-.tr-task-input {
-  background: rgba(255,255,255,0.05);
-  border: 1px solid #333;
-  border-radius: 8px;
-  color: #e0e0e0;
-  font-size: 13px;
-  padding: 10px 12px;
-  resize: none;
-  outline: none;
-  font-family: inherit;
-  &:focus { border-color: #7c6fff; }
-}
-
-.tr-input-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .tr-steps {
   overflow-y: auto; flex: 1;
@@ -4710,8 +4678,31 @@ body[style*="ns-resize"] .mcp-divider-grip {
   &.badge-running { color: #fbbf24; background: rgba(251,191,36,0.12); animation: tr-pulse 1.5s infinite; }
   &.badge-done    { color: #6ee7b7; background: rgba(110,231,183,0.1); }
   &.badge-error   { color: #f87171; background: rgba(248,113,113,0.1); }
+  &.badge-pending_permission { color: #fbbf24; background: rgba(251,191,36,0.12); animation: tr-pulse 1.5s infinite; }
 }
 @keyframes tr-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.tr-auth-card {
+  .btn-danger, .btn-primary {
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.15s ease;
+  }
+  .btn-danger {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    &:hover { background: rgba(239, 68, 68, 0.35); }
+  }
+  .btn-primary {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    &:hover { background: rgba(16, 185, 129, 0.35); }
+  }
+}
 
 .tr-step-output {
   font-size: 11px; color: #888; line-height: 1.5;

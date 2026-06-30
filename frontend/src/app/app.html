@@ -847,11 +847,66 @@
                       @if (msg.role === 'assistant') {
                         <div class="msg-assistant-group">
                           <div class="bubble assistant-bubble">
-                            <span class="role-tag">Claude</span>
+                            <span class="role-tag">
+                              @if (msg.agentId) {
+                                🤖 @{{ msg.agentId }}
+                              } @else if (msg.teamRun) {
+                                👥 {{ msg.teamRun.name }} (Team)
+                              } @else {
+                                Claude
+                              }
+                            </span>
                             @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
                             @if (msg.cost && msg.cost > 0) {
                               <span class="msg-cost" title="本則訊息費用">${{ msg.cost.toFixed(4) }}</span>
                             }
+
+                            <!-- 嵌入式 Team Run 步驟顯示 -->
+                            @if (msg.teamRun) {
+                              <div class="embedded-tr-steps" style="margin: 12px 0; padding: 12px; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; display: flex; flex-direction: column; gap: 10px;">
+                                @for (step of msg.teamRun.steps; track $index) {
+                                  <div class="tr-step" [class.running]="step.status === 'running' || step.status === 'pending_permission'" [class.done]="step.status === 'done'" style="border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 10px; background: rgba(255,255,255,0.01); transition: border-color 0.2s;">
+                                    <div class="tr-step-header" style="display: flex; align-items: center; gap: 8px;">
+                                      <span class="tr-step-icon" style="font-size: 13px; width: 14px; text-align: center;">
+                                        @if (step.status === 'pending') { <span style="color: #666;">○</span> }
+                                        @if (step.status === 'running') { <span class="tr-spin" style="color: #fbbf24; display: inline-block;">⟳</span> }
+                                        @if (step.status === 'pending_permission') { <span style="color: #fbbf24;">⚠</span> }
+                                        @if (step.status === 'done')    { <span style="color: #6ee7b7;">✓</span> }
+                                        @if (step.status === 'error')   { <span style="color: #f87171;">✕</span> }
+                                      </span>
+                                      <span class="tr-step-agent" style="font-size: 12px; font-weight: 600; color: #a5b4fc;">@{{ step.agent }}</span>
+                                      @if (step.role) { <span class="tr-step-role" style="font-size: 11px; color: #888; font-style: italic;">({{ step.role }})</span> }
+                                      <span class="tr-step-status-badge" [class]="'badge-' + step.status">{{ step.status }}</span>
+                                    </div>
+
+                                    @if (step.status === 'pending_permission') {
+                                      <div class="tr-auth-card" style="margin-top: 10px; border-top: 1px solid rgba(251,191,36,0.2); padding-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+                                        <div style="font-size: 11px; color: #fbbf24; font-weight: bold; display: flex; align-items: center; gap: 4px;">
+                                          <span>🔑 請求授權執行此動作：</span>
+                                        </div>
+                                        <pre style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px; font-family: monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; margin: 0; color: #e5e7eb; border: 1px solid rgba(255,255,255,0.05);">{{ step.command }}</pre>
+                                        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                                          <button class="btn-danger" style="font-size: 11px; padding: 3px 10px;" (click)="handleUserAuthorize(step.requestId!, step.agent, 'reject')">✕ 拒絕</button>
+                                          <button class="btn-primary" style="font-size: 11px; padding: 3px 10px;" (click)="handleUserAuthorize(step.requestId!, step.agent, 'approve')">✓ 允許</button>
+                                        </div>
+                                      </div>
+                                    }
+
+                                    @if (step.output) {
+                                      <div class="tr-step-output" [class.tr-step-output-expanded]="expandedOutputs().includes($index)" style="font-size: 11px; color: #b0b0b0; line-height: 1.5; margin-top: 6px; padding-left: 20px; white-space: pre-wrap; word-break: break-word; max-height: 150px; overflow-y: auto;">
+                                        {{ expandedOutputs().includes($index) ? step.output : (step.output | slice:0:300) }}{{ !expandedOutputs().includes($index) && step.output.length > 300 ? '…' : '' }}
+                                      </div>
+                                      @if (step.output.length > 300) {
+                                        <button class="tr-output-toggle" (click)="toggleStepOutput($index)" style="margin-left: 20px; margin-top: 4px; background: none; border: none; padding: 2px 0; font-size: 10px; color: #6ee7b7; cursor: pointer; opacity: 0.8;">
+                                          {{ expandedOutputs().includes($index) ? '▲ 收合' : '▼ 展開完整輸出' }}
+                                        </button>
+                                      }
+                                    }
+                                  </div>
+                                }
+                              </div>
+                            }
+
                             @if (msg.isStreaming && !msg.text) {
                               <div class="msg-skeleton" aria-label="Claude 思考中">
                                 <div class="skeleton-line" style="width:78%"></div>
@@ -933,7 +988,32 @@
                       }
                       @if (msg.role === 'assistant') {
                         <div class="bubble assistant-bubble">
-                          <span class="role-tag">Claude</span>
+                          <span class="role-tag">
+                            @if (msg.agentId) {
+                              🤖 @{{ msg.agentId }}
+                            } @else if (msg.teamRun) {
+                              👥 {{ msg.teamRun.name }} (Team)
+                            } @else {
+                              Claude
+                            }
+                          </span>
+
+                          @if (msg.teamRun) {
+                            <div class="embedded-tr-steps-mini" style="margin: 8px 0; display: flex; flex-wrap: wrap; gap: 6px;">
+                              @for (step of msg.teamRun.steps; track $index) {
+                                <span class="team-member-chip" style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.05); display: inline-flex; align-items: center; gap: 4px; border: 1px solid rgba(255,255,255,0.08);">
+                                  <span style="font-size: 8px;">
+                                    @if (step.status === 'pending') { <span>○</span> }
+                                    @if (step.status === 'running') { <span style="color: #fbbf24;">●</span> }
+                                    @if (step.status === 'done')    { <span style="color: #6ee7b7;">✓</span> }
+                                    @if (step.status === 'error')   { <span style="color: #f87171;">✕</span> }
+                                  </span>
+                                  @{{ step.agent }}
+                                </span>
+                              }
+                            </div>
+                          }
+
                           @if (msg.isStreaming && !msg.text) {
                             <div class="msg-skeleton">
                               <div class="skeleton-line" style="width:70%"></div>
@@ -1265,8 +1345,7 @@
                   <div class="card-header-row">
                     <span class="card-name">{{ t.name }}</span>
                     <div class="agent-action-btns">
-                      <button class="agent-activate-btn" style="background:#28a745;color:white;" (click)="selectTeamLeader(t)" title="與組長對話（組長以 Team 身份指引任務）">💬 組長對話</button>
-                      <button class="agent-activate-btn" style="background:#6366f1;color:white;" (click)="activateTeam(t)" title="啟動 Team Run（所有成員依序執行任務）">▶ Team Run</button>
+                      <button class="agent-activate-btn" style="background: linear-gradient(135deg, #6366f1, #28a745); color:white;" (click)="selectTeamLeader(t)" title="與整個團隊對話（各成員依序序列執行任務）">💬 團隊對話</button>
                       <button class="agent-edit-btn" (click)="openTeamEditor(t)" title="編輯 Team">✎</button>
                     </div>
                   </div>
@@ -2428,87 +2507,7 @@
     </div>
   }
 
-  <!-- ── Team Run Panel ─────────────────────────────────────────────────── -->
-  @if (teamRunOpen()) {
-    <div class="tr-overlay" (click)="closeTeamRun()"></div>
-    <div class="tr-panel" (click)="$event.stopPropagation()">
-      <div class="tr-header">
-        <div>
-          <div class="tr-title">👥 {{ teamRunTarget()?.name }}</div>
-          <div class="tr-subtitle">{{ teamRunState()?.task || '輸入任務…' }}</div>
-        </div>
-        <button class="usage-modal-close" (click)="closeTeamRun()">✕</button>
-      </div>
 
-      @if (!teamRunState() || teamRunState()?.status === 'cancelled') {
-        <div class="tr-input-area">
-          <textarea class="tr-task-input"
-            rows="4"
-            placeholder="描述你要交給這個 Team 的任務…"
-            [value]="teamRunTask()"
-            (input)="teamRunTask.set($any($event.target).value)">
-          </textarea>
-          <div class="tr-input-actions">
-            <button class="btn-secondary" (click)="closeTeamRun()">取消</button>
-            <button class="btn-primary"
-              [disabled]="!teamRunTask().trim() || teamRunLoading()"
-              (click)="submitTeamRun()">
-              {{ teamRunLoading() ? '準備中…' : '▶ 開始執行' }}
-            </button>
-          </div>
-        </div>
-      }
-
-      @if (teamRunState() && teamRunState()?.status !== 'cancelled') {
-        <div class="tr-steps">
-          @for (step of teamRunState()!.steps; track $index) {
-            <div class="tr-step" [class.running]="step.status === 'running'" [class.done]="step.status === 'done'">
-              <div class="tr-step-header">
-                <span class="tr-step-icon">
-                  @if (step.status === 'pending') { <span>○</span> }
-                  @if (step.status === 'running') { <span class="tr-spin">⟳</span> }
-                  @if (step.status === 'done')    { <span>✓</span> }
-                  @if (step.status === 'error')   { <span>✕</span> }
-                </span>
-                <span class="tr-step-agent">@{{ step.agent }}</span>
-                @if (step.role) { <span class="tr-step-role">{{ step.role }}</span> }
-                <span class="tr-step-status-badge" [class]="'badge-' + step.status">{{ step.status }}</span>
-              </div>
-              @if (step.output) {
-                <div class="tr-step-output" [class.tr-step-output-expanded]="expandedOutputs().includes($index)">
-                  {{ expandedOutputs().includes($index) ? step.output : (step.output | slice:0:400) }}{{ !expandedOutputs().includes($index) && step.output.length > 400 ? '…' : '' }}
-                </div>
-                @if (step.output.length > 400) {
-                  <button class="tr-output-toggle" (click)="toggleStepOutput($index)">
-                    {{ expandedOutputs().includes($index) ? '▲ 收合' : '▼ 展開完整輸出' }}
-                  </button>
-                }
-              }
-            </div>
-          }
-        </div>
-
-        @if (teamRunState()?.summary) {
-          <div class="tr-summary">
-            <div class="tr-summary-label">📋 執行摘要</div>
-            <div class="tr-summary-body">{{ teamRunState()!.summary }}</div>
-            <button class="tr-summary-copy" (click)="copyText(teamRunState()!.summary)">📋 複製摘要</button>
-          </div>
-        }
-
-        <div class="tr-footer">
-          @if (teamRunState()?.status === 'running') {
-            <button class="btn-danger" (click)="cancelTeamRun()">⏹ 停止</button>
-          }
-          @if (teamRunState()?.status === 'done') {
-            <span style="color:#6ee7b7;font-size:12px;">✓ 全部完成</span>
-          }
-          <div style="flex:1"></div>
-          <button class="btn-secondary" (click)="closeTeamRun()">關閉</button>
-        </div>
-      }
-    </div>
-  }
 
   <!-- ── HR Agent 編輯計畫 Modal ─────────────────────────────────────────── -->
   @if (hrPlanOpen()) {

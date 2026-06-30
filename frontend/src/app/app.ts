@@ -1782,7 +1782,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.saveCurrentTab();
 
     const leaderName = leaderAgent.name || leaderId;
-    const tabLabel = `與組長對話 (${leaderName})`;
+    const tabLabel = `👥 團隊對話 (${t.name})`;
 
     // 2. 檢查是否已經有現成的 chat tab 綁定了該團隊的組長對話
     const existingTab = this.chatTabs().find(tab => tab.selectedAgent === leaderId && tab.teamId === t.id);
@@ -2898,8 +2898,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const attachments = this.attachedFiles().map(f => f.path);
     this.attachedFiles.set([]);
 
-    // T11 — 若 tab 還是預設名稱，用第一條訊息更新
     const curTab = this.activeChat;
+    if (curTab && curTab.teamId) {
+      this.submitTeamMessage(text, attachments);
+      return;
+    }
+
+    // T11 — 若 tab 還是預設名稱，用第一條訊息更新
     if (curTab && curTab.label === '新對話') {
       const id = this.activeChatId();
       this.chatTabs.update(tabs => tabs.map(t => t.id === id ? { ...t, label: text.slice(0, 20) } : t));
@@ -3026,6 +3031,303 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.activeChat?.teamId       // 綁定的團隊 ID
       );
     }
+  }
+
+  submitTeamMessage(text: string, attachments: string[]) {
+    const curTab = this.activeChat;
+    if (!curTab || !curTab.teamId) return;
+
+    const team = this.teams().find(t => t.id === curTab.teamId);
+    const teamName = team ? team.name : 'Auto Team';
+    const now = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+
+    // 1. 新增 User 訊息
+    const displayText = text + (attachments.length ? ` 📎×${attachments.length}` : '');
+    this.messages.update(m => [...m, { role: 'user', text: displayText, time: now }]);
+    this.shouldScroll = true;
+
+    // 2. 啟動團隊討論
+    let createdProjectPath = '';
+    
+    const stopTeamChat = this.claude.streamTeamChat(
+      text,
+      curTab.teamId,
+      (ev) => {
+        if (ev.type === 'agent_start') {
+          const agentName = ev.agent;
+          const msg: ChatMessage = {
+            role: 'assistant',
+            agentId: agentName,
+            text: '',
+            isStreaming: true,
+            time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
+          };
+          this.messages.update(m => [...m, msg]);
+          this.shouldScroll = true;
+        } else if (ev.type === 'text') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            for (let i = copy.length - 1; i >= 0; i--) {
+              if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
+                copy[i] = { ...copy[i], text: copy[i].text + ev.text };
+                break;
+              }
+            }
+            return copy;
+          });
+          this.shouldScroll = true;
+        } else if (ev.type === 'agent_done') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            for (let i = copy.length - 1; i >= 0; i--) {
+              if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
+                copy[i] = { ...copy[i], isStreaming: false };
+                break;
+              }
+            }
+            return copy;
+          });
+          this.shouldScroll = true;
+        } else if (ev.type === 'project_created') {
+          createdProjectPath = ev.project_path;
+          this.messages.update(m => [...m, {
+            role: 'system',
+            text: `📁 專案資料夾 "${ev.project_name}" 建立成功。路徑: ${ev.project_path}`,
+            time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
+          }]);
+          const activeId = this.activeChatId();
+          this.chatTabs.update(tabs => tabs.map(t => t.id === activeId ? { ...t, projectDir: ev.project_path } : t));
+          this.shouldScroll = true;
+        } else if (ev.type === 'error') {
+          this.messages.update(m => [...m, { role: 'error', text: ev.text }]);
+          this.isStreaming.set(false);
+          this.shouldScroll = true;
+        }
+      },
+      () => {
+        this.stopFn = null;
+        this.isStreaming.set(false);
+        this.reload();
+        
+        if (createdProjectPath) {
+          this.executeTeamCodePhase(curTab.teamId!, createdProjectPath, text);
+        } else {
+          this.inputRef?.nativeElement?.focus();
+        }
+      },
+      (err) => {
+        console.error('team chat error', err);
+        this.isStreaming.set(false);
+        this.stopFn = null;
+        this.messages.update(m => [...m, { role: 'error', text: `團隊討論異常斷開: ${err}` }]);
+      },
+      attachments,
+      curTab.projectDir
+    );
+
+    this.stopFn = () => {
+      stopTeamChat();
+      this.isStreaming.set(false);
+      this.stopFn = null;
+      this.messages.update(msgs => msgs.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
+    };
+  }
+
+  executeTeamCodePhase(teamId: string, projectPath: string, task: string) {
+    const team = this.teams().find(t => t.id === teamId);
+    const teamName = team ? team.name : 'Auto Team';
+    const now = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+
+    const teamRun: TeamRun = {
+      id: 'executing',
+      team_id: teamId,
+      name: teamName,
+      task: task,
+      status: 'running',
+      steps: team ? team.members.map(m => ({ agent: m.agent, role: m.role, status: 'pending', output: '' })) : [],
+      summary: ''
+    };
+
+    const execMsg: ChatMessage = {
+      role: 'assistant',
+      text: '🤖 各 Agent 啟動 Claude Code 進行實作中...',
+      isStreaming: true,
+      time: now,
+      teamRun
+    };
+    this.messages.update(m => [...m, execMsg]);
+    this.shouldScroll = true;
+    this.isStreaming.set(true);
+
+    const stopExec = this.claude.executeTeamTask(
+      teamId,
+      projectPath,
+      task,
+      (ev) => {
+        if (ev.type === 'exec_start') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              const tr = { ...lastMsg.teamRun };
+              const steps = tr.steps.map(s => s.agent === ev.agent ? { ...s, status: 'running' as const } : s);
+              copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+            }
+            return copy;
+          });
+        } else if (ev.type === 'exec_text') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              const tr = { ...lastMsg.teamRun };
+              const steps = tr.steps.map(s => s.agent === ev.agent ? { ...s, output: s.output + ev.text } : s);
+              copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+            }
+            return copy;
+          });
+          this.shouldScroll = true;
+        } else if (ev.type === 'exec_done') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              const tr = { ...lastMsg.teamRun };
+              const steps = tr.steps.map(s => s.agent === ev.agent ? { ...s, status: 'done' as const } : s);
+              copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+            }
+            return copy;
+          });
+        } else if (ev.type === 'permission_request') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              const tr = { ...lastMsg.teamRun };
+              const steps = tr.steps.map(s => s.agent === ev.agent ? {
+                ...s,
+                status: 'pending_permission' as const,
+                requestId: ev.request_id,
+                command: ev.command
+              } : s);
+              copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+            }
+            return copy;
+          });
+          this.shouldScroll = true;
+        } else if (ev.type === 'done') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              copy[lastIdx] = {
+                ...lastMsg,
+                text: '✓ 協同實作全部完成！所有產出已存入專案目錄。',
+                isStreaming: false,
+                teamRun: { ...lastMsg.teamRun!, status: 'done' }
+              };
+            }
+            return copy;
+          });
+          this.isStreaming.set(false);
+          this.stopFn = null;
+          this.reload();
+          setTimeout(() => this.scrollToBottom(), 100);
+        } else if (ev.type === 'error') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              copy[lastIdx] = {
+                ...lastMsg,
+                text: `⚠ 執行出錯: ${ev.text}`,
+                isStreaming: false,
+                teamRun: { ...lastMsg.teamRun!, status: 'error' }
+              };
+            }
+            return copy;
+          });
+          this.isStreaming.set(false);
+          this.stopFn = null;
+        }
+      },
+      () => {
+        this.isStreaming.set(false);
+        this.stopFn = null;
+      },
+      (err) => {
+        console.error('exec error', err);
+        this.isStreaming.set(false);
+        this.stopFn = null;
+        this.messages.update(msgs => {
+          const copy = [...msgs];
+          const lastIdx = copy.length - 1;
+          const lastMsg = copy[lastIdx];
+          if (lastMsg && lastMsg.teamRun) {
+            copy[lastIdx] = {
+              ...lastMsg,
+              text: `⚠ 執行異常中斷: ${err}`,
+              isStreaming: false,
+              teamRun: { ...lastMsg.teamRun!, status: 'error' }
+            };
+          }
+          return copy;
+        });
+      }
+    );
+
+    this.stopFn = () => {
+      stopExec();
+      this.isStreaming.set(false);
+      this.stopFn = null;
+      this.messages.update(msgs => {
+        const copy = [...msgs];
+        const lastIdx = copy.length - 1;
+        const lastMsg = copy[lastIdx];
+        if (lastMsg && lastMsg.teamRun) {
+          copy[lastIdx] = {
+            ...lastMsg,
+            text: `⏹ 實作已被使用者停止。`,
+            isStreaming: false,
+            teamRun: { ...lastMsg.teamRun!, status: 'cancelled' }
+          };
+        }
+        return copy;
+      });
+    };
+  }
+
+  handleUserAuthorize(requestId: string, agent: string, decision: 'approve' | 'reject') {
+    this.claude.authorizeTeamTask(requestId, decision).subscribe({
+      next: () => {
+        this.messages.update(msgs => {
+          const copy = [...msgs];
+          for (let i = copy.length - 1; i >= 0; i--) {
+            const msg = copy[i];
+            if (msg.teamRun) {
+              const steps = msg.teamRun.steps.map(s =>
+                s.requestId === requestId ? {
+                  ...s,
+                  status: (decision === 'approve' ? 'running' as const : 'error' as const)
+                } : s
+              );
+              copy[i] = { ...msg, teamRun: { ...msg.teamRun, steps } };
+              break;
+            }
+          }
+          return copy;
+        });
+      },
+      error: (e) => {
+        alert(`授權請求發送失敗: ${e.message ?? e}`);
+      }
+    });
   }
 
   onInput() {

@@ -998,3 +998,47 @@ class TestMemviewAPI:
         assert resp.status == 200
         body = await resp.json()
         assert isinstance(body, dict)
+
+    async def test_team_chat_endpoint(self, client, tmp_claude_home, sample_team, sample_agent):
+        """POST /api/team/chat 應能正常呼叫並回傳串流資料"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        main.TEAMS_DIR = tmp_claude_home / "teams"
+        main.AGENTS_DIR = tmp_claude_home / "agents"
+        
+        payload = {
+            "message": "哈囉團隊，請幫我分析專案",
+            "team_id": "test-team",
+            "client_id": "test-client-id",
+            "cwd": str(tmp_claude_home)
+        }
+        resp = await client.post("/api/team/chat", json=payload)
+        assert resp.status == 200
+        body = await resp.text()
+        assert "data:" in body
+
+    async def test_team_execute_endpoint(self, client, tmp_claude_home, sample_team):
+        """POST /api/team/execute 對無效路徑應報錯"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        main.TEAMS_DIR = tmp_claude_home / "teams"
+        
+        payload = {
+            "team_id": "test-team",
+            "project_path": "invalid_path_123",
+            "task": "測試實作"
+        }
+        resp = await client.post("/api/team/execute", json=payload)
+        assert resp.status == 200
+        body = await resp.text()
+        assert "invalid project path" in body
+
+    async def test_team_authorize_endpoint(self, client):
+        """POST /api/team/authorize 對無效的 request_id 應回傳 404"""
+        payload = {
+            "request_id": "nonexistent_req",
+            "decision": "approve"
+        }
+        resp = await client.post("/api/team/authorize", json=payload)
+        assert resp.status == 404
+
