@@ -3847,12 +3847,16 @@ async def run_schedule_prompt(schedule: dict) -> None:
     prompt = schedule["prompt"] if isinstance(schedule, dict) else schedule
     # 移除 --dangerously-skip-permissions 旗標以支援 Docker 容器安全執行
     cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json"]
+    env = os.environ.copy()
+    key = _resolve_api_key()
+    if key:
+        env["ANTHROPIC_API_KEY"] = key
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=os.environ.copy(), # 確保環境變數（如 API Key）被傳入
+            env=env,
             cwd=str(Path.home()),
         )
         stdout, _ = await proc.communicate()
@@ -3869,6 +3873,7 @@ async def run_schedule_prompt(schedule: dict) -> None:
             await _send_line_message(to, result_text)
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
+
 
 
 
