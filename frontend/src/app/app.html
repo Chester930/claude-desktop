@@ -764,7 +764,7 @@
             </div>
           </div>
           <span class="gauge-num">{{ tokenUsage()!.input + tokenUsage()!.output | number }}</span>
-          <span class="gauge-remaining">/ {{ remainingTokens()! | number }} 剩</span>
+          <span class="gauge-remaining">/ {{ remainingTokens()! | number }}</span>
           @if (tokenUsage()!.cost > 0) {
             <span class="gauge-cost">${{ tokenUsage()!.cost.toFixed(4) }}</span>
           }
