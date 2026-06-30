@@ -486,6 +486,17 @@ def find_claude() -> str:
 
 CLAUDE_BIN = find_claude()
 
+def _detect_claude_version() -> str:
+    try:
+        import subprocess
+        r = subprocess.run([CLAUDE_BIN, "--version"], capture_output=True, text=True, timeout=5)
+        v = r.stdout.strip().split()[-1] if r.returncode == 0 and r.stdout.strip() else ""
+        return v or "2.1.196"
+    except Exception:
+        return "2.1.196"
+
+CLAUDE_VERSION = _detect_claude_version()
+
 
 def _resolve_api_key() -> str:
     """Run apiKeyCmd from config and return the trimmed API key, or '' if not set."""
@@ -906,7 +917,7 @@ async def handle_usage(request: web.Request) -> web.Response:
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "anthropic-beta": "oauth-2025-04-20",
-                    "User-Agent": "claude-code/2.1.196",
+                    "User-Agent": f"claude-code/{CLAUDE_VERSION}",
                 },
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
