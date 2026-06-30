@@ -3257,12 +3257,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     } else {
       this.saveCurrentTab();
     }
-    this.messages.set([{ role: 'assistant', text: `Session resumed: "${s.title}"` }]);
-    this.claude.resumeSession(s.id).subscribe();
     const id = this.activeChatId();
     this.chatTabs.update(tabs => tabs.map(t =>
       t.id === id ? { ...t, label: s.title.slice(0, 20) } : t
     ));
+    // 先顯示載入中，再取得完整對話
+    this.messages.set([{ role: 'system', text: '載入歷史對話中…' }]);
+    this.claude.resumeSession(s.id).subscribe();
+    this.claude.getSessionMessages(s.id).subscribe({
+      next: res => this.messages.set(res.messages),
+      error: () => this.messages.set([{ role: 'system', text: '無法載入歷史對話' }]),
+    });
   }
 
   deleteSession(s: Session, event: Event) {

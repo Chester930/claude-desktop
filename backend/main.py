@@ -836,6 +836,40 @@ async def handle_resume_session(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def handle_session_messages(request: web.Request) -> web.Response:
+    """GET /api/sessions/{id}/messages — 讀取 JSONL 回傳完整對話紀錄"""
+    sid = request.match_info["id"]
+    f = _find_session_file(sid)
+    if not f:
+        return web.json_response({"error": "session not found"}, status=404)
+
+    messages = []
+    try:
+        lines = f.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+        for line in lines:
+            try:
+                ev = json.loads(line)
+                t = ev.get("type", "")
+                if t not in ("user", "assistant"):
+                    continue
+                content = ev.get("message", {}).get("content", "")
+                timestamp = ev.get("timestamp", "")
+                text = ""
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    parts = [b["text"] for b in content if b.get("type") == "text" and b.get("text")]
+                    text = "\n".join(parts)
+                if text.strip():
+                    messages.append({"role": t, "text": text, "time": timestamp})
+            except Exception:
+                pass
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+    return web.json_response({"messages": messages})
+
+
 async def handle_agents(request: web.Request) -> web.Response:
     agents = []
     if AGENTS_DIR.exists():
@@ -2937,6 +2971,7 @@ def build_app() -> web.Application:
         ("DELETE", "/api/souls/{id}",  handle_soul_delete),
         ("GET",    "/api/sessions",                      handle_sessions),
         ("POST",   "/api/sessions/resume",              handle_resume_session),
+        ("GET",    "/api/sessions/{id}/messages",      handle_session_messages),
         ("DELETE", "/api/sessions/{id}",               handle_session_delete),
         ("PATCH",  "/api/sessions/{id}",               handle_session_rename),
         ("POST",   "/api/sessions/{id}/auto-title",    handle_session_auto_title),
