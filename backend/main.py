@@ -6,6 +6,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -881,9 +882,7 @@ async def handle_session_messages(request: web.Request) -> web.Response:
 
 async def handle_usage(request: web.Request) -> web.Response:
     """GET /api/usage — 查詢 Claude Code 用量，快取 5 分鐘"""
-    import time as _time
-
-    now = _time.time()
+    now = time.time()
     if _usage_cache["data"] and now < _usage_cache["expires"]:
         return web.json_response(_usage_cache["data"])
 
@@ -921,17 +920,6 @@ async def handle_usage(request: web.Request) -> web.Response:
     _usage_cache["data"] = data
     _usage_cache["expires"] = now + 300  # 5 分鐘
     return web.json_response(data)
-
-
-async def handle_agents(request: web.Request) -> web.Response:
-    agents = []
-    if AGENTS_DIR.exists():
-        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
-            try:
-                agents.append({"id": f.stem, "name": f.stem, "description": _desc_from_md_file(f)})
-            except Exception:
-                pass
-    return web.json_response(agents)
 
 
 import re as _re

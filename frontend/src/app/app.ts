@@ -1324,9 +1324,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   memViewFilePath(type: string, ...parts: string[]): string {
-    const base = 'C:\\Users\\666\\.claude\\memory';
-    const segments = [base, ...parts].join('\\');
-    return segments;
+    const base = this.resolvedClaudeHome() || '~/.claude';
+    const sep = base.includes('\\') ? '\\' : '/';
+    return [base, 'memory', ...parts].join(sep);
   }
 
   startMemEdit(key: string, currentContent: string) {
