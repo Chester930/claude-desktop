@@ -2426,7 +2426,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         sevenDay:      d.seven_day?.utilization  ?? 0,
         sevenDayReset: d.seven_day?.resets_at    ?? '',
       }),
-      error: () => {},
+      error: (err) => {
+        console.error('Failed to fetch usage:', err);
+        if (!this.usage()) {
+          setTimeout(fetchUsage, 10000);
+        }
+      },
     });
     fetchUsage();
     this.usageTimer = setInterval(fetchUsage, 5 * 60 * 1000);
