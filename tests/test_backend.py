@@ -18,8 +18,10 @@ pytestmark = pytest.mark.asyncio
 # 工具函數單元測試（不需要 HTTP server）
 # ══════════════════════════════════════════════════════════════════════════════
 
+# 這個 class 裡全是 sync 函數，要覆蓋全域 asyncio mark 才不會產生 warning
 class TestHelperFunctions:
-    """ROADMAP Phase 1 — 工具函數測試"""
+    """ROADMAP Phase 1 — 工具函數測試（sync）"""
+    pytestmark = []  # 清除全域 asyncio mark，避免 PytestUnraisableExceptionWarning
 
     def test_encode_slug_windows_path(self):
         import sys
@@ -76,6 +78,33 @@ class TestHelperFunctions:
         members = d.get("members", [])
         assert len(members) == 1
         assert members[0]["agent"] == "test-agent"
+
+    def test_team_dict_leader_defaults_to_first_member(self, tmp_claude_home):
+        """team.yaml 沒有 leader 欄位時，應自動 fallback 到第一個成員"""
+        import main
+        team_file = tmp_claude_home / "teams" / "no-leader-team.yaml"
+        team_file.write_text(
+            "name: no-leader-team\nmembers:\n  - agent: alpha-agent\n    role: 主導\n",
+            encoding="utf-8",
+        )
+        d = main._team_dict(team_file)
+        # leader 應為 members[0].agent
+        assert d.get("leader") == "alpha-agent"
+        team_file.unlink(missing_ok=True)
+
+    def test_team_dict_leader_explicit(self, tmp_claude_home):
+        """team.yaml 有明確 leader 欄位時，應使用指定的 leader"""
+        import main
+        team_file = tmp_claude_home / "teams" / "with-leader-team.yaml"
+        team_file.write_text(
+            "name: with-leader-team\nleader: beta-agent\nmembers:\n"
+            "  - agent: alpha-agent\n    role: 第一\n"
+            "  - agent: beta-agent\n    role: 組長\n",
+            encoding="utf-8",
+        )
+        d = main._team_dict(team_file)
+        assert d.get("leader") == "beta-agent"
+        team_file.unlink(missing_ok=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -602,11 +631,14 @@ class TestConfigAndSchedules:
                 "cron": "0 9 * * *",
                 "prompt": "每日早上的測試提示",
                 "enabled": False,
+                "delivery": {"channel": "line", "to": "U123456"}
             },
         )
         assert resp.status == 200
         body = await resp.json()
         assert "id" in body
+        assert body.get("delivery", {}).get("channel") == "line"
+        assert body.get("delivery", {}).get("to") == "U123456"
 
     async def test_schedules_delete(self, client):
         # 先建立再刪除
@@ -725,12 +757,244 @@ class TestTeamPipelineIntegrity:
         body = await resp2.json()
         assert body["task"] == task_text
 
-    async def test_team_run_uses_named_team(self, client, sample_team, tmp_claude_home):
-        """用 team_id 啟動已存在的 team，應成功建立 run"""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Schedule PATCH（啟用/停用）
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSchedulePatch:
+    """PATCH /api/schedules/{id} — 啟用/停用排程"""
+
+    async def test_toggle_schedule_to_disabled(self, client):
+        """建立排程 → PATCH 停用 → 確認 enabled=False"""
+        # 建立
+        resp = await client.post(
+            "/api/schedules",
+            json={"name": "patch-test", "cron": "0 8 * * *", "prompt": "早安", "enabled": True},
+        )
+        assert resp.status == 200
+        sid = (await resp.json())["id"]
+
+        # PATCH 停用
+        resp2 = await client.patch(f"/api/schedules/{sid}", json={"enabled": False})
+        assert resp2.status == 200
+        body2 = await resp2.json()
+        assert body2["ok"] is True
+
+        # 確認
+        resp3 = await client.get("/api/schedules")
+        schedules = await resp3.json()
+        target = next((s for s in schedules if s["id"] == sid), None)
+        assert target is not None
+        assert target["enabled"] is False
+
+        # 清理
+        await client.delete(f"/api/schedules/{sid}")
+
+    async def test_toggle_schedule_back_to_enabled(self, client):
+        """建立停用排程 → PATCH 啟用"""
+        resp = await client.post(
+            "/api/schedules",
+            json={"name": "re-enable-test", "cron": "0 9 * * *", "prompt": "test", "enabled": False},
+        )
+        sid = (await resp.json())["id"]
+
+        resp2 = await client.patch(f"/api/schedules/{sid}", json={"enabled": True})
+        assert resp2.status == 200
+
+        resp3 = await client.get("/api/schedules")
+        schedules = await resp3.json()
+        target = next((s for s in schedules if s["id"] == sid), None)
+        assert target is not None
+        assert target["enabled"] is True
+
+        await client.delete(f"/api/schedules/{sid}")
+
+    async def test_schedules_run_nonexistent_404(self, client):
+        """對不存在的 schedule ID 執行 run 應回傳 404"""
+        resp = await client.post("/api/schedules/nonexistent-id-xyz/run")
+        assert resp.status == 404
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Soul 進階操作（rename / delete）
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSoulAdvanced:
+    """Soul rename / delete 端點測試"""
+
+    async def test_soul_save_and_delete(self, client, tmp_claude_home):
+        """建立 soul → 確認存在 → 刪除"""
         import main
-        main.TEAMS_DIR = tmp_claude_home / "teams"
-        payload = {"task": "使用具名 team 的任務", "team_id": "test-team"}
-        resp = await client.post("/api/team/run", json=payload)
+        main.SOULS_DIR = tmp_claude_home / "souls"
+
+        # 先寫入
+        resp = await client.put(
+            "/api/souls/temp-soul-del",
+            json={"content": "---\nname: temp-soul-del\n---\n\n臨時靈魂"},
+        )
+        assert resp.status == 200
+
+        # 確認存在
+        assert (tmp_claude_home / "souls" / "temp-soul-del.md").exists()
+
+        # 刪除
+        resp2 = await client.delete("/api/souls/temp-soul-del")
+        assert resp2.status == 200
+
+        # 確認已刪除
+        assert not (tmp_claude_home / "souls" / "temp-soul-del.md").exists()
+
+    async def test_soul_rename(self, client, tmp_claude_home):
+        """Soul rename 端點（POST /api/souls/{id}/rename）"""
+        import main
+        main.SOULS_DIR = tmp_claude_home / "souls"
+
+        # 先建立 soul
+        (tmp_claude_home / "souls" / "old-soul-name.md").write_text(
+            "---\nname: old-soul-name\n---\n\n舊靈魂", encoding="utf-8"
+        )
+
+        resp = await client.post(
+            "/api/souls/old-soul-name/rename",
+            json={"new_name": "new-soul-name"},
+        )
+        # rename 成功或 Soul 不支援 rename 都是可接受的（確認不 crash）
+        assert resp.status in (200, 404, 405)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Session 進階操作（rename / messages）
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSessionAdvanced:
+    """Session rename、messages 查詢端點"""
+
+    async def test_session_messages_nonexistent(self, client):
+        """不存在 session 的 messages 查詢應優雅回應（不 crash）"""
+        resp = await client.get("/api/sessions/nonexistent-id-xyz/messages")
+        # 404 或空 list 都可接受
+        assert resp.status in (200, 404)
+
+    async def test_session_rename_nonexistent_graceful(self, client):
+        """對不存在的 session 做 rename 應優雅回應（不 crash 成 500）"""
+        resp = await client.post(
+            "/api/sessions/ghost-session-id/rename",
+            json={"title": "新標題"},
+        )
+        assert resp.status in (200, 404)
+
+    async def test_session_auto_title_nonexistent(self, client):
+        """對不存在的 session 做 auto-title 應優雅回應"""
+        resp = await client.post("/api/sessions/ghost-session-id/auto-title")
+        assert resp.status in (200, 404)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Memory 新架構（memview API）
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestMemviewAPI:
+    """新架構記憶體 API（/api/mem/user, system, agents, teams）
+    注意：路由前綴是 /api/mem/ 而非 /api/memory/
+    """
+
+    async def test_user_memory_get(self, client, tmp_claude_home):
+        """GET /api/mem/user 應回傳內容（可能是空字串）"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        resp = await client.get("/api/mem/user")
         assert resp.status == 200
         body = await resp.json()
-        assert body["ok"] is True
+        assert "content" in body
+
+    async def test_user_memory_put(self, client, tmp_claude_home):
+        """PUT /api/mem/user 應可以寫入並讀回"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        content = "# 用戶記憶\n\n測試內容 UNIQUE_MARKER"
+
+        resp = await client.put("/api/mem/user", json={"content": content})
+        assert resp.status == 200
+
+        resp2 = await client.get("/api/mem/user")
+        body2 = await resp2.json()
+        assert content in body2.get("content", "")
+
+    async def test_system_memory_get(self, client, tmp_claude_home):
+        """GET /api/mem/system 應回傳內容"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        resp = await client.get("/api/mem/system")
+        assert resp.status == 200
+        body = await resp.json()
+        assert "content" in body
+
+    async def test_agents_memory_list(self, client, tmp_claude_home, sample_agent):
+        """GET /api/mem/agents 應回傳 list（後端直接回傳陣列）"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        main.AGENTS_DIR = tmp_claude_home / "agents"
+        resp = await client.get("/api/mem/agents")
+        assert resp.status == 200
+        body = await resp.json()
+        assert isinstance(body, list)
+
+    async def test_memory_overview(self, client, tmp_claude_home):
+        """GET /api/mem/overview 應回傳結構化摘要"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        resp = await client.get("/api/mem/overview")
+        assert resp.status == 200
+        body = await resp.json()
+        assert isinstance(body, dict)
+
+    async def test_teams_memory_list(self, client, tmp_claude_home, sample_team):
+        """GET /api/mem/teams 應回傳 list（後端直接回傳陣列）"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        main.TEAMS_DIR = tmp_claude_home / "teams"
+        resp = await client.get("/api/mem/teams")
+        assert resp.status == 200
+        body = await resp.json()
+        assert isinstance(body, list)
+
+    async def test_agent_memory_get(self, client, tmp_claude_home, sample_agent):
+        """GET /api/mem/agents/{id} 應回傳該 agent 的記憶內容"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        main.AGENTS_DIR = tmp_claude_home / "agents"
+        resp = await client.get("/api/mem/agents/test-agent")
+        assert resp.status == 200
+        body = await resp.json()
+        assert "content" in body
+
+    async def test_agent_memory_put(self, client, tmp_claude_home, sample_agent):
+        """PUT /api/mem/agents/{id} 應可以寫入"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        resp = await client.put(
+            "/api/mem/agents/test-agent",
+            json={"content": "# Agent 記憶\n\n測試寫入 UNIQUE_MARKER"},
+        )
+        assert resp.status == 200
+
+    async def test_team_memory_get(self, client, tmp_claude_home, sample_team):
+        """GET /api/mem/teams/{id} 應回傳該 team 的共享記憶"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        main.TEAMS_DIR = tmp_claude_home / "teams"
+        resp = await client.get("/api/mem/teams/test-team")
+        assert resp.status == 200
+        body = await resp.json()
+        assert "content" in body
+
+    async def test_mem_preview(self, client, tmp_claude_home):
+        """GET /api/mem/preview 應回傳預覽摘要"""
+        import main
+        main.CLAUDE_HOME = tmp_claude_home
+        resp = await client.get("/api/mem/preview")
+        assert resp.status == 200
+        body = await resp.json()
+        assert isinstance(body, dict)

@@ -66,7 +66,17 @@ export class SettingsService {
 
   constructor() {
     const saved = localStorage.getItem(KEY);
-    this._settings = saved ? { ...DEFAULTS, ...JSON.parse(saved) } : { ...DEFAULTS };
+    if (saved) {
+      try {
+        this._settings = { ...DEFAULTS, ...JSON.parse(saved) };
+      } catch {
+        // localStorage 資料損毀，重置到預設值
+        localStorage.removeItem(KEY);
+        this._settings = { ...DEFAULTS };
+      }
+    } else {
+      this._settings = { ...DEFAULTS };
+    }
     this.applyTheme(this._settings.theme);
   }
 

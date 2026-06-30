@@ -385,6 +385,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // Schedule form
   newSchedulePrompt = '';
   newScheduleCron = '';
+  newScheduleChannel = '';
+  newScheduleTo = '';
 
   // Token usage + cost
   tokenUsage = signal<{ input: number; output: number; cost: number } | null>(null);
@@ -1598,17 +1600,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           this.switchChatTab(tab.id);
         }, 0);
       } else {
-        // 如果已經 4 個分頁了，就將當前 active tab 的 agent 切換成該 Agent
+        // 如果已經 4 個分頁了，就將當前 active tab 的 agent 切換成該 Agent（清除 teamId 以免衝突）
         if (activeId) {
           this.chatTabs.update(tabs => tabs.map(tab =>
-            tab.id === activeId ? { ...tab, selectedAgent: agent.id, label: tabLabel } : tab
+            tab.id === activeId ? { ...tab, selectedAgent: agent.id, label: tabLabel, teamId: undefined } : tab
           ));
           this.selectedAgent.set(agent.id);
         } else {
           // 沒有 activeId 的話就使用第一個 tab
           const firstTab = this.chatTabs()[0];
           this.chatTabs.update(tabs => tabs.map(tab =>
-            tab.id === firstTab.id ? { ...tab, selectedAgent: agent.id, label: tabLabel } : tab
+            tab.id === firstTab.id ? { ...tab, selectedAgent: agent.id, label: tabLabel, teamId: undefined } : tab
           ));
           this.switchChatTab(firstTab.id);
         }
@@ -1763,25 +1765,27 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   selectTeamLeader(t: Team) {
-    if (!t.leader) {
-      alert(`此團隊 "${t.name}" 尚未設定組長 (Team Leader)！`);
+    // 組長優先用 t.leader，空時 fallback 到第一個成員
+    const leaderId = t.leader || (t.members[0]?.agent ?? '');
+    if (!leaderId) {
+      alert(`此團隊 "${t.name}" 尚未設定組長且無成員！`);
       return;
     }
 
-    const leaderAgent = this.dropdownAgents().find(a => a.id === t.leader);
+    const leaderAgent = this.dropdownAgents().find(a => a.id === leaderId);
     if (!leaderAgent) {
-      alert(`找不到組長代理人 "${t.leader}"，請確認該代理人已建立！`);
+      alert(`找不到組長代理人 "${leaderId}"，請確認該代理人已建立！`);
       return;
     }
 
     // 1. 儲存當前 active tab 的狀態，避免狀態流失
     this.saveCurrentTab();
 
-    const leaderName = leaderAgent.name || t.leader;
+    const leaderName = leaderAgent.name || leaderId;
     const tabLabel = `與組長對話 (${leaderName})`;
 
     // 2. 檢查是否已經有現成的 chat tab 綁定了該團隊的組長對話
-    const existingTab = this.chatTabs().find(tab => tab.selectedAgent === t.leader && tab.teamId === t.id);
+    const existingTab = this.chatTabs().find(tab => tab.selectedAgent === leaderId && tab.teamId === t.id);
 
     if (existingTab) {
       // 如果有，切換到該對話分頁
@@ -1795,31 +1799,30 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       if (this.chatTabs().length < 4) {
         // 建立新對話分頁，傳入團隊 ID 進行綁定
         const tab = this.makeTab(tabLabel, undefined, t.id);
-        tab.selectedAgent = t.leader;
-        
+        tab.selectedAgent = leaderId;
+
         if (activeTabIsEmpty) {
           // 如果原本對話沒有內容，在添加組長對話的同時，移除(關閉)原本的空對話 Tab
           this.chatTabs.update(tabs => [...tabs.filter(x => x.id !== activeId), tab]);
         } else {
           this.chatTabs.update(tabs => [...tabs, tab]);
         }
-        
+
         // 延遲切換，確保 chatTabs 陣列已更新，並完整同步 Agent 與狀態
         setTimeout(() => {
           this.switchChatTab(tab.id);
         }, 0);
       } else {
-        // 如果已經 4 個分頁了，就將當前 active tab 的 agent 切換成該組長
+        // 已經 4 個分頁：覆蓋當前 active tab，同時正確設置 teamId
         if (activeId) {
           this.chatTabs.update(tabs => tabs.map(tab =>
-            tab.id === activeId ? { ...tab, selectedAgent: t.leader!, label: tabLabel } : tab
+            tab.id === activeId ? { ...tab, selectedAgent: leaderId, label: tabLabel, teamId: t.id } : tab
           ));
-          this.selectedAgent.set(t.leader);
+          this.selectedAgent.set(leaderId);
         } else {
-          // 沒有 activeId 的話就使用第一個 tab
           const firstTab = this.chatTabs()[0];
           this.chatTabs.update(tabs => tabs.map(tab =>
-            tab.id === firstTab.id ? { ...tab, selectedAgent: t.leader!, label: tabLabel } : tab
+            tab.id === firstTab.id ? { ...tab, selectedAgent: leaderId, label: tabLabel, teamId: t.id } : tab
           ));
           this.switchChatTab(firstTab.id);
         }
@@ -1891,6 +1894,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         steps[ev.step] = { ...steps[ev.step], status: 'done' };
       } else if (ev.type === 'done') {
         return { ...st, status: 'done', steps, summary: ev.summary ?? '' };
+      } else if (ev.type === 'cancelled') {
+        return { ...st, status: 'cancelled', steps };
       } else if (ev.type === 'error') {
         return { ...st, status: 'error', steps };
       }
@@ -1902,6 +1907,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const st = this.teamRunState();
     if (st?.id) this.claude.cancelTeamRun(st.id).subscribe();
     if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
+    // 立即更新 UI 狀態，不等 SSE 回應
     this.teamRunState.update(s => s ? { ...s, status: 'cancelled' } : s);
   }
 
@@ -2042,12 +2048,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // 清空某個對話欄的訊息
   clearTab(tabId: string, e: Event) {
     e.stopPropagation();
+    const tab = this.chatTabs().find(t => t.id === tabId);
+    const msgCount = tab?.messages?.length ?? 0;
+    if (msgCount > 0 && !confirm(`確定要清空此對話嗎？（${msgCount} 則訊息將被刪除，此操作無法復原）`)) {
+      return;
+    }
     this.chatTabs.update(tabs => tabs.map(t =>
-      t.id === tabId ? { ...t, messages: [], label: '新對話' } : t
+      t.id === tabId ? { ...t, messages: [], label: '新對話', selectedAgent: '', teamId: undefined } : t
     ));
     if (tabId === this.activeChatId()) {
       this.messages.set([]);
       this.tokenUsage.set(null);
+      this.selectedAgent.set('');
     }
   }
 
@@ -2772,9 +2784,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   addSchedule() {
     if (!this.newSchedulePrompt.trim() || !this.newScheduleCron.trim()) return;
-    this.claude.addSchedule(this.newSchedulePrompt, this.newScheduleCron).subscribe(() => {
+    const delivery = this.newScheduleChannel ? { channel: this.newScheduleChannel, to: this.newScheduleTo } : undefined;
+    this.claude.addSchedule(this.newSchedulePrompt, this.newScheduleCron, delivery).subscribe(() => {
       this.newSchedulePrompt = '';
       this.newScheduleCron = '';
+      this.newScheduleChannel = '';
+      this.newScheduleTo = '';
       this.claude.getSchedules().subscribe(s => this.schedules.set(s));
     });
   }
@@ -3509,7 +3524,24 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   changeTabAgent(tabId: string, agentId: string) {
-    this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, selectedAgent: agentId } : t));
+    this.chatTabs.update(tabs => tabs.map(t => {
+      if (t.id === tabId) {
+        let label = t.label;
+        const currentAgentName = t.selectedAgent ? (this.agents().find(a => a.id === t.selectedAgent)?.name ?? t.selectedAgent) : '';
+        const isDefaultOrAgentLabel = !t.label || t.label === '新對話' || (currentAgentName && t.label === currentAgentName);
+
+        if (isDefaultOrAgentLabel) {
+          if (agentId) {
+            const newAgentObj = this.agents().find(a => a.id === agentId);
+            label = newAgentObj ? newAgentObj.name : agentId;
+          } else {
+            label = '新對話';
+          }
+        }
+        return { ...t, selectedAgent: agentId, label };
+      }
+      return t;
+    }));
     if (tabId === this.activeChatId()) {
       this.selectedAgent.set(agentId);
     }

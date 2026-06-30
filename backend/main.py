@@ -1550,7 +1550,6 @@ async def handle_team_get(request: web.Request) -> web.Response:
 
 async def handle_team_post(request: web.Request) -> web.Response:
     data = await request.json()
-    print("DEBUG: handle_team_post received data:", data)
     import re as _re3
     raw = data.get("name", "").strip()
     tid = _re3.sub(r"[^\w-]", "-", raw).lower().strip("-") or "new-team"
@@ -1573,16 +1572,13 @@ async def handle_team_put(request: web.Request) -> web.Response:
     if not f.exists():
         return web.json_response({"error": "not found"}, status=404)
     data = await request.json()
-    print("DEBUG: handle_team_put received data:", data)
     current = _team_dict(f)
-    print("DEBUG: handle_team_put current database item:", current)
     payload = {
         "name":        data.get("name", current["name"]),
         "description": data.get("description", current["description"]),
         "leader":      data.get("leader", current.get("leader", "")),
         "members":     data.get("members", current["members"]),
     }
-    print("DEBUG: handle_team_put final payload to write:", payload)
     _write_team_yaml(f, payload)
     return web.json_response({"ok": True})
 
@@ -1597,11 +1593,10 @@ async def handle_team_delete(request: web.Request) -> web.Response:
 
 # ── Phase 3: Multi-Agent Sequential Execution ─────────────────────────────────
 
-import uuid as _uuid
-
 _team_runs:   dict[str, dict] = {}
 _team_events: dict[str, list] = {}
 _team_queues: dict[str, list] = {}
+_team_run_processes: dict[str, asyncio.subprocess.Process] = {}
 
 
 def _tr_emit(run_id: str, event: dict) -> None:
@@ -1644,8 +1639,12 @@ async def _agent_run_capture(
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
 
+    if _team_runs.get(run_id, {}).get("status") == "cancelled":
+        return "[Team Run 已取消]"
+
     safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
     output_parts: list[str] = []
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1655,7 +1654,16 @@ async def _agent_run_capture(
             cwd=safe_cwd,
             env=env,
         )
+        _team_run_processes[run_id] = proc
+
         async for line in proc.stdout:
+            if _team_runs.get(run_id, {}).get("status") == "cancelled":
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                break
+
             raw = line.decode("utf-8", errors="replace").strip()
             if not raw:
                 continue
@@ -1678,6 +1686,8 @@ async def _agent_run_capture(
         err = f"\n[Error running {agent_id}: {e}]\n"
         output_parts.append(err)
         _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": err})
+    finally:
+        _team_run_processes.pop(run_id, None)
 
     return "".join(output_parts)
 
@@ -1755,6 +1765,7 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
 
     if run.get("status") != "cancelled":
         run["status"] = "done"
+        run["_finished_at"] = time.time()
         summary_parts = [
             f"### {s['agent']}（{s['role']}）\n\n{s['output']}" for s in steps
         ]
@@ -1764,8 +1775,7 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         # Team Run 完成後自動更新 team project memory
         if team_id and cwd:
             slug = _encode_slug(cwd)
-            import datetime
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             proj_summary = (
                 f"# Team Run 記錄 — {timestamp}\n\n"
                 f"## 任務\n\n{task}\n\n"
@@ -1774,6 +1784,9 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
                 f"\n\n## 執行摘要\n\n{run['summary'][:1800]}"
             )
             _write_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md", proj_summary)
+    else:
+        # cancelled
+        run["_finished_at"] = time.time()
 
 
 async def handle_team_run_post(request: web.Request) -> web.Response:
@@ -1798,7 +1811,7 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
     if not team.get("members"):
         return web.json_response({"error": "team has no members"}, status=400)
 
-    run_id = _uuid.uuid4().hex[:8]
+    run_id = uuid.uuid4().hex[:8]
     _team_runs[run_id] = {
         "id":      run_id,
         "team_id": team.get("id", team_id),
@@ -1843,7 +1856,7 @@ async def handle_team_run_stream(request: web.Request) -> web.StreamResponse:
 
     for ev in _team_events.get(run_id, []):
         await response.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
-        if ev.get("type") in ("done", "error"):
+        if ev.get("type") in ("done", "error", "cancelled"):
             _team_queues[run_id].remove(q)
             return response
 
@@ -1855,7 +1868,7 @@ async def handle_team_run_stream(request: web.Request) -> web.StreamResponse:
                 await response.write(b'data: {"type":"ping"}\n\n')
                 continue
             await response.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
-            if ev.get("type") in ("done", "error"):
+            if ev.get("type") in ("done", "error", "cancelled"):
                 break
     finally:
         queues = _team_queues.get(run_id, [])
@@ -1870,7 +1883,13 @@ async def handle_team_run_cancel(request: web.Request) -> web.Response:
     run = _team_runs.get(run_id)
     if run:
         run["status"] = "cancelled"
-        _tr_emit(run_id, {"type": "error", "text": "cancelled"})
+        _tr_emit(run_id, {"type": "cancelled", "text": "cancelled"})
+        proc = _team_run_processes.get(run_id)
+        if proc:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
     return web.json_response({"ok": True})
 
 
@@ -2227,7 +2246,18 @@ async def handle_schedules_post(request: web.Request) -> web.Response:
     cron = await _natural_to_cron(cron)
     
     schedules = load_schedules()
-    entry = {"id": str(uuid.uuid4()), "prompt": prompt, "cron": cron, "enabled": True}
+    entry = {
+        "id": str(uuid.uuid4()),
+        "prompt": prompt,
+        "cron": cron,
+        "enabled": True
+    }
+    delivery = data.get("delivery")
+    if delivery and isinstance(delivery, dict):
+        entry["delivery"] = {
+            "channel": delivery.get("channel", "").strip(),
+            "to": delivery.get("to", "").strip()
+        }
     schedules.append(entry)
     save_schedules(schedules)
     return web.json_response(entry)
@@ -3343,10 +3373,29 @@ async def run_schedule_prompt(schedule: dict) -> None:
         print(f"[schedule] Error running prompt: {e}")
 
 
+async def _gc_team_runs() -> None:
+    """每 30 分鐘清除超過 2 小時的 completed/cancelled team runs，防止記憶體洩漏"""
+    while True:
+        await asyncio.sleep(1800)  # 30 min
+        cutoff = time.time() - 7200  # 2 hours
+        stale = [
+            rid for rid, run in list(_team_runs.items())
+            if run.get("status") in ("done", "cancelled", "error")
+            and run.get("_finished_at", cutoff + 1) < cutoff
+        ]
+        for rid in stale:
+            _team_runs.pop(rid, None)
+            _team_events.pop(rid, None)
+            _team_queues.pop(rid, None)
+        if stale:
+            _log(f"[gc] Cleaned {len(stale)} stale team runs")
+
+
 async def on_startup(app: web.Application) -> None:
     global _tg_task
     _log(f"Backend started. Claude: {CLAUDE_BIN}")
     asyncio.create_task(run_schedule_runner())
+    asyncio.create_task(_gc_team_runs())  # 定期清除舊 team runs
     # Auto-start Telegram bot if configured
     tg_cfg = _load_tg_config()
     _tg_state.update({"token": tg_cfg.get("token",""), "enabled": tg_cfg.get("enabled", False)})

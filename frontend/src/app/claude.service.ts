@@ -49,6 +49,7 @@ export interface Schedule {
   cron: string;
   enabled: boolean;
   last_run?: string;
+  delivery?: { channel: string; to: string };
 }
 
 export interface FileItem {
@@ -218,8 +219,8 @@ export class ClaudeService {
   }
 
   getSchedules(): Observable<Schedule[]> { return this.http.get<Schedule[]>(`${this.api}/schedules`); }
-  addSchedule(prompt: string, cron: string): Observable<any> {
-    return this.http.post(`${this.api}/schedules`, { prompt, cron });
+  addSchedule(prompt: string, cron: string, delivery?: { channel: string; to: string }): Observable<any> {
+    return this.http.post(`${this.api}/schedules`, { prompt, cron, delivery });
   }
   parseCron(text: string): Observable<{ cron: string }> {
     return this.http.post<{ cron: string }>(`${this.api}/schedules/parse-cron`, { text });

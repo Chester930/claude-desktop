@@ -791,7 +791,7 @@
                 
                 <!-- 對話框專屬代理人選擇器 -->
                 <div class="panel-agent-selector" (click)="$event.stopPropagation()" style="display: inline-flex; align-items: center; margin-right: 6px; margin-left: 2px;">
-                  <select [value]="tab.selectedAgent || ''" [disabled]="!!tab.selectedAgent" (change)="changeTabAgent(tab.id, $any($event.target).value)" style="background: #111; border: 1px solid #333; color: #d4a853; font-size: 11px; padding: 2px 6px; border-radius: 4px; outline: none; cursor: pointer; font-family: inherit;">
+                  <select [value]="tab.selectedAgent || ''" [disabled]="!!tab.teamId" (change)="changeTabAgent(tab.id, $any($event.target).value)" style="background: #111; border: 1px solid #333; color: #d4a853; font-size: 11px; padding: 2px 6px; border-radius: 4px; outline: none; cursor: pointer; font-family: inherit;">
                     <option value="" [selected]="!tab.selectedAgent">🤖 無代理人</option>
                     @for (a of dropdownAgents(); track a.id) {
                       <option [value]="a.id" [selected]="a.id === tab.selectedAgent">🤖 {{ a.name }}</option>
@@ -1265,7 +1265,8 @@
                   <div class="card-header-row">
                     <span class="card-name">{{ t.name }}</span>
                     <div class="agent-action-btns">
-                      <button class="agent-activate-btn" style="background:#28a745;color:white;" (click)="selectTeamLeader(t)" title="發任務給此 Team（與組長對話）">▶ 發任務</button>
+                      <button class="agent-activate-btn" style="background:#28a745;color:white;" (click)="selectTeamLeader(t)" title="與組長對話（組長以 Team 身份指引任務）">💬 組長對話</button>
+                      <button class="agent-activate-btn" style="background:#6366f1;color:white;" (click)="activateTeam(t)" title="啟動 Team Run（所有成員依序執行任務）">▶ Team Run</button>
                       <button class="agent-edit-btn" (click)="openTeamEditor(t)" title="編輯 Team">✎</button>
                     </div>
                   </div>
@@ -1490,7 +1491,17 @@
                   <button class="btn-primary schedule-add-btn" (click)="addSchedule()"
                     [disabled]="!newSchedulePrompt.trim() || !newScheduleCron.trim() || isNaturalLanguage(newScheduleCron) || aiParsing()" style="flex-shrink: 0;">新增</button>
                 </div>
-                <div class="cron-presets">
+                <div class="delivery-row" style="display: flex; gap: 6px; width: 100%; margin-top: 6px; align-items: center;">
+                  <span style="font-size: 11px; color: #888; white-space: nowrap;">📢 結果推送：</span>
+                  <select [(ngModel)]="newScheduleChannel" class="schedule-select" style="background: #1a1a1a; color: #eee; border: 1px solid #444; padding: 4px 8px; border-radius: 6px; font-size: 11px; height: 30px;">
+                    <option value="">🚫 不推送</option>
+                    <option value="line">💬 LINE</option>
+                  </select>
+                  @if (newScheduleChannel === 'line') {
+                    <input [(ngModel)]="newScheduleTo" placeholder="LINE 接收者 ID (User 或 Group ID)" class="schedule-input" style="flex: 1; min-width: 0; height: 30px; font-size: 11px; padding: 4px 8px;">
+                  }
+                </div>
+                <div class="cron-presets" style="margin-top: 6px;">
                   @for (p of CRON_PRESETS; track p.value) {
                     <button class="cron-preset-btn" (click)="newScheduleCron = p.value" [title]="p.value">{{ p.label }}</button>
                   }
@@ -1513,7 +1524,12 @@
                     <div class="card-desc" style="margin-top: 4px; font-size: 11.5px; color: #aaa;">
                       執行週期：<span style="color: #eee; font-weight: bold;">{{ translateCron(sc.cron) }}</span>
                     </div>
-                    <div class="schedule-status" [class.active]="sc.enabled">
+                    @if (sc.delivery && sc.delivery.channel) {
+                      <div class="card-desc" style="margin-top: 2px; font-size: 11px; color: #889;">
+                        📢 推送：<span style="color: #6366f1; font-weight: 500;">{{ sc.delivery.channel.toUpperCase() }}</span> ({{ sc.delivery.to || '未指定' }})
+                      </div>
+                    }
+                    <div class="schedule-status" [class.active]="sc.enabled" style="margin-top: 4px;">
                       {{ sc.enabled ? '✓ 啟用中' : '✗ 已停用' }}
                       @if (sc.last_run) { · 上次：{{ sc.last_run | date:'MM/dd HH:mm' }} }
                     </div>
