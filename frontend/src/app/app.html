@@ -1570,16 +1570,6 @@
                   <button class="btn-primary schedule-add-btn" (click)="addSchedule()"
                     [disabled]="!newSchedulePrompt.trim() || !newScheduleCron.trim() || isNaturalLanguage(newScheduleCron) || aiParsing()" style="flex-shrink: 0;">新增</button>
                 </div>
-                <div class="delivery-row" style="display: flex; gap: 6px; width: 100%; margin-top: 6px; align-items: center;">
-                  <span style="font-size: 11px; color: #888; white-space: nowrap;">📢 結果推送：</span>
-                  <select [(ngModel)]="newScheduleChannel" class="schedule-select" style="background: #1a1a1a; color: #eee; border: 1px solid #444; padding: 4px 8px; border-radius: 6px; font-size: 11px; height: 30px;">
-                    <option value="">🚫 不推送</option>
-                    <option value="line">💬 LINE</option>
-                  </select>
-                  @if (newScheduleChannel === 'line') {
-                    <input [(ngModel)]="newScheduleTo" placeholder="LINE 接收者 ID (User 或 Group ID)" class="schedule-input" style="flex: 1; min-width: 0; height: 30px; font-size: 11px; padding: 4px 8px;">
-                  }
-                </div>
                 <div class="cron-presets" style="margin-top: 6px;">
                   @for (p of CRON_PRESETS; track p.value) {
                     <button class="cron-preset-btn" (click)="newScheduleCron = p.value" [title]="p.value">{{ p.label }}</button>

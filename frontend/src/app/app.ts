@@ -385,8 +385,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // Schedule form
   newSchedulePrompt = '';
   newScheduleCron = '';
-  newScheduleChannel = '';
-  newScheduleTo = '';
 
   // Token usage + cost
   tokenUsage = signal<{ input: number; output: number; cost: number } | null>(null);
@@ -2784,12 +2782,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   addSchedule() {
     if (!this.newSchedulePrompt.trim() || !this.newScheduleCron.trim()) return;
-    const delivery = this.newScheduleChannel ? { channel: this.newScheduleChannel, to: this.newScheduleTo } : undefined;
-    this.claude.addSchedule(this.newSchedulePrompt, this.newScheduleCron, delivery).subscribe(() => {
+    this.claude.addSchedule(this.newSchedulePrompt, this.newScheduleCron).subscribe(() => {
       this.newSchedulePrompt = '';
       this.newScheduleCron = '';
-      this.newScheduleChannel = '';
-      this.newScheduleTo = '';
       this.claude.getSchedules().subscribe(s => this.schedules.set(s));
     });
   }
