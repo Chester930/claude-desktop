@@ -1,4 +1,4 @@
-ㄛˇ# Dependencies
+# Dependencies
 node_modules/
 frontend/node_modules/
 
@@ -35,6 +35,18 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Runtime / local data
+*.db
+*.db-journal
+
+# Test artifacts
+frontend/test-results/
+tests/__pycache__/
+tests/*.pyc
+
+# Local Claude permissions (personal, not for version control)
+.claude/settings.local.json
 
 # Personal / local overrides — 個人設定、連結、私有腳本，不進版控
 *.local

@@ -30,12 +30,19 @@ export interface ChatMessage {
   time?: string;
   startTime?: number;
   cost?: number;
+  teamRun?: TeamRun;
+  agentId?: string;
 }
 
 export interface TeamMember { agent: string; role: string; }
-export interface Team { id: string; name: string; description: string; members: TeamMember[]; }
+export interface Team { id: string; name: string; description: string; leader?: string; members: TeamMember[]; }
 export interface TeamRunStep {
-  agent: string; role: string; status: 'pending' | 'running' | 'done' | 'error'; output: string;
+  agent: string;
+  role: string;
+  status: 'pending' | 'running' | 'done' | 'error' | 'pending_permission';
+  output: string;
+  requestId?: string;
+  command?: string;
 }
 export interface TeamRun {
   id: string; team_id: string; name: string; task: string;
@@ -49,6 +56,7 @@ export interface Schedule {
   cron: string;
   enabled: boolean;
   last_run?: string;
+  delivery?: { channel: string; to: string };
 }
 
 export interface FileItem {
@@ -68,6 +76,7 @@ export interface ChatTab {
   sessionSkills: string[];  // 一次性：本對話框有效
   sessionMcps: string[];    // 一次性：本對話框有效
   projectDir: string;       // 建立時繼承 workDir，送出第一則訊息後視為鎖定
+  teamId?: string;          // 綁定的團隊 ID，若有則為與組長對話情境
 }
 
 @Injectable({ providedIn: 'root' })
@@ -217,8 +226,8 @@ export class ClaudeService {
   }
 
   getSchedules(): Observable<Schedule[]> { return this.http.get<Schedule[]>(`${this.api}/schedules`); }
-  addSchedule(prompt: string, cron: string): Observable<any> {
-    return this.http.post(`${this.api}/schedules`, { prompt, cron });
+  addSchedule(prompt: string, cron: string, delivery?: { channel: string; to: string }): Observable<any> {
+    return this.http.post(`${this.api}/schedules`, { prompt, cron, delivery });
   }
   parseCron(text: string): Observable<{ cron: string }> {
     return this.http.post<{ cron: string }>(`${this.api}/schedules/parse-cron`, { text });
@@ -423,7 +432,8 @@ export class ClaudeService {
     onDone: () => void,
     onError: (e: any) => void,
     attachments: string[] = [],
-    cwdOverride?: string        // 對話欄鎖定的目錄，優先於 settings.workDir
+    cwdOverride?: string,        // 對話欄鎖定的目錄，優先於 settings.workDir
+    teamId?: string
   ): () => void {
     const controller = new AbortController();
     const s = this.settings.get();
@@ -434,6 +444,56 @@ export class ClaudeService {
       body: JSON.stringify({
         message,
         agent,
+        client_id: this.clientId,
+        cwd: cwdOverride || s.workDir || undefined,
+        claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
+        attachments,
+        model: s.model,
+        effort: s.effort,
+        permission_mode: s.permissionMode,
+        team_id: teamId,
+      }),
+    })
+      .then(async (res) => {
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() ?? '';
+          for (const part of parts) {
+            const line = part.replace(/^data: /, '').trim();
+            if (!line) continue;
+            try { onEvent(JSON.parse(line)); } catch {}
+          }
+        }
+        onDone();
+      })
+      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
+    return () => controller.abort();
+  }
+
+  streamTeamChat(
+    message: string,
+    teamId: string,
+    onEvent: (ev: any) => void,
+    onDone: () => void,
+    onError: (e: any) => void,
+    attachments: string[] = [],
+    cwdOverride?: string
+  ): () => void {
+    const controller = new AbortController();
+    const s = this.settings.get();
+    fetch(`${this.api}/team/chat`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        team_id: teamId,
         client_id: this.clientId,
         cwd: cwdOverride || s.workDir || undefined,
         claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
@@ -463,5 +523,55 @@ export class ClaudeService {
       })
       .catch(e => { if (e?.name !== 'AbortError') onError(e); });
     return () => controller.abort();
+  }
+
+  executeTeamTask(
+    teamId: string,
+    projectPath: string,
+    task: string,
+    onEvent: (ev: any) => void,
+    onDone: () => void,
+    onError: (e: any) => void
+  ): () => void {
+    const controller = new AbortController();
+    const s = this.settings.get();
+    fetch(`${this.api}/team/execute`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        team_id: teamId,
+        project_path: projectPath,
+        task,
+        claude_bin: s.claudeBin !== 'claude' ? s.claudeBin : undefined,
+        model: s.model,
+        effort: s.effort,
+        permission_mode: s.permissionMode,
+      }),
+    })
+      .then(async (res) => {
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() ?? '';
+          for (const part of parts) {
+            const line = part.replace(/^data: /, '').trim();
+            if (!line) continue;
+            try { onEvent(JSON.parse(line)); } catch {}
+          }
+        }
+        onDone();
+      })
+      .catch(e => { if (e?.name !== 'AbortError') onError(e); });
+    return () => controller.abort();
+  }
+
+  authorizeTeamTask(requestId: string, decision: 'approve' | 'reject'): Observable<any> {
+    return this.http.post(`${this.api}/team/authorize`, { request_id: requestId, decision });
   }
 }

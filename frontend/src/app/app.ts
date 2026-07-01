@@ -515,7 +515,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return this.chatTabs().find(t => t.id === this.activeChatId());
   }
 
-  private makeTab(label = '新對話', projectDir?: string): ChatTab {
+  private makeTab(label = '新對話', projectDir?: string, teamId?: string): ChatTab {
     return {
       id: `tab-${Date.now()}`,
       clientId: `client-${Date.now()}`,
@@ -527,6 +527,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       sessionSkills: [],
       sessionMcps: [],
       projectDir: projectDir ?? this.settings.get().workDir,
+      teamId,
     };
   }
 
@@ -1561,14 +1562,63 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const srv = this.mcpServers().find(s => s.name === name || s.id === name);
       if (srv && srv.status !== 'running') this.startMcp(srv.name);
     });
-    // 注入 --agent 旗標到當前對話欄
-    const tab = this.chatTabs().find(t => t.id === this.activeChatId());
-    if (tab) {
-      this.chatTabs.update(tabs => tabs.map(t =>
-        t.id === tab.id ? { ...t, selectedAgent: agent.id } : t
-      ));
-      this.selectedAgent.set(agent.id);
+
+    // 儲存當前 active tab 的狀態，避免狀態流失
+    this.saveCurrentTab();
+
+    const agentName = agent.name || agent.id;
+    const tabLabel = `與 ${agentName} 對話`;
+
+    // 檢查是否已經有現成的 chat tab 的 selectedAgent 是這個 Agent，且為個人對話 (無 teamId)
+    const existingTab = this.chatTabs().find(tab => tab.selectedAgent === agent.id && !tab.teamId);
+
+    if (existingTab) {
+      // 如果有，切換到該對話分頁
+      this.switchChatTab(existingTab.id);
+    } else {
+      const activeId = this.activeChatId();
+      const activeTabObj = this.chatTabs().find(x => x.id === activeId);
+      const activeTabIsEmpty = activeTabObj && (!activeTabObj.messages || activeTabObj.messages.length === 0);
+
+      // 如果沒有，看目前 tab 數量是否小於 4
+      if (this.chatTabs().length < 4) {
+        // 建立新對話分頁
+        const tab = this.makeTab(tabLabel);
+        tab.selectedAgent = agent.id;
+        
+        if (activeTabIsEmpty) {
+          // 如果原本對話沒有內容，在添加 Agent 對話的同時，移除(關閉)原本的空對話 Tab
+          this.chatTabs.update(tabs => [...tabs.filter(x => x.id !== activeId), tab]);
+        } else {
+          this.chatTabs.update(tabs => [...tabs, tab]);
+        }
+        
+        // 延遲切換，確保 chatTabs 陣列已更新，並完整同步 Agent 與狀態
+        setTimeout(() => {
+          this.switchChatTab(tab.id);
+        }, 0);
+      } else {
+        // 如果已經 4 個分頁了，就將當前 active tab 的 agent 切換成該 Agent（清除 teamId 以免衝突）
+        if (activeId) {
+          this.chatTabs.update(tabs => tabs.map(tab =>
+            tab.id === activeId ? { ...tab, selectedAgent: agent.id, label: tabLabel, teamId: undefined } : tab
+          ));
+          this.selectedAgent.set(agent.id);
+        } else {
+          // 沒有 activeId 的話就使用第一個 tab
+          const firstTab = this.chatTabs()[0];
+          this.chatTabs.update(tabs => tabs.map(tab =>
+            tab.id === firstTab.id ? { ...tab, selectedAgent: agent.id, label: tabLabel, teamId: undefined } : tab
+          ));
+          this.switchChatTab(firstTab.id);
+        }
+      }
     }
+
+    // 自動讓輸入框獲取焦點，方便對話
+    setTimeout(() => {
+      this.inputRef?.nativeElement?.focus();
+    }, 100);
   }
 
   agentEditorToggleList(field: 'skills' | 'memory' | 'mcp' | 'output_memory', value: string) {
@@ -1648,9 +1698,40 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.teamEditorOpen.set(true);
   }
 
-  saveTeamEditor() {
+  getAgentName(id: string): string {
+    const a = this.dropdownAgents().find(x => x.id === id);
+    return a ? a.name : id;
+  }
+
+  onTeamLeaderChange(val: string) {
     const d = this.teamEditorData();
+    const members = d.members ?? [];
+    if (members.length === 0 && val) {
+      this.teamEditorData.set({
+        ...d,
+        leader: val,
+        members: [{ agent: val, role: '組長' }]
+      });
+    } else {
+      this.teamEditorData.set({
+        ...d,
+        leader: val
+      });
+    }
+  }
+
+  saveTeamEditor() {
+    const d = { ...this.teamEditorData() };
     if (!d.name?.trim()) return;
+
+    // 確保組長只能是成員之一。如果沒有設定組長，或該組長不在成員名單中，預設為第一個成員
+    const members = d.members ?? [];
+    const memberIds = members.map(m => m.agent).filter(Boolean);
+
+    if (!d.leader || !memberIds.includes(d.leader)) {
+      d.leader = memberIds.length > 0 ? memberIds[0] : '';
+    }
+
     const obs = this.teamEditorIsNew()
       ? this.claude.createTeam(d)
       : this.claude.updateTeam(d.id!, d);
@@ -1679,6 +1760,77 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   activateTeam(team: Team) {
     this.openTeamRun(team);
+  }
+
+  selectTeamLeader(t: Team) {
+    // 組長優先用 t.leader，空時 fallback 到第一個成員
+    const leaderId = t.leader || (t.members[0]?.agent ?? '');
+    if (!leaderId) {
+      alert(`此團隊 "${t.name}" 尚未設定組長且無成員！`);
+      return;
+    }
+
+    const leaderAgent = this.dropdownAgents().find(a => a.id === leaderId);
+    if (!leaderAgent) {
+      alert(`找不到組長代理人 "${leaderId}"，請確認該代理人已建立！`);
+      return;
+    }
+
+    // 1. 儲存當前 active tab 的狀態，避免狀態流失
+    this.saveCurrentTab();
+
+    const leaderName = leaderAgent.name || leaderId;
+    const tabLabel = `👥 團隊對話 (${t.name})`;
+
+    // 2. 檢查是否已經有現成的 chat tab 綁定了該團隊的組長對話
+    const existingTab = this.chatTabs().find(tab => tab.selectedAgent === leaderId && tab.teamId === t.id);
+
+    if (existingTab) {
+      // 如果有，切換到該對話分頁
+      this.switchChatTab(existingTab.id);
+    } else {
+      const activeId = this.activeChatId();
+      const activeTabObj = this.chatTabs().find(x => x.id === activeId);
+      const activeTabIsEmpty = activeTabObj && (!activeTabObj.messages || activeTabObj.messages.length === 0);
+
+      // 如果沒有，看目前 tab 數量是否小於 4
+      if (this.chatTabs().length < 4) {
+        // 建立新對話分頁，傳入團隊 ID 進行綁定
+        const tab = this.makeTab(tabLabel, undefined, t.id);
+        tab.selectedAgent = leaderId;
+
+        if (activeTabIsEmpty) {
+          // 如果原本對話沒有內容，在添加組長對話的同時，移除(關閉)原本的空對話 Tab
+          this.chatTabs.update(tabs => [...tabs.filter(x => x.id !== activeId), tab]);
+        } else {
+          this.chatTabs.update(tabs => [...tabs, tab]);
+        }
+
+        // 延遲切換，確保 chatTabs 陣列已更新，並完整同步 Agent 與狀態
+        setTimeout(() => {
+          this.switchChatTab(tab.id);
+        }, 0);
+      } else {
+        // 已經 4 個分頁：覆蓋當前 active tab，同時正確設置 teamId
+        if (activeId) {
+          this.chatTabs.update(tabs => tabs.map(tab =>
+            tab.id === activeId ? { ...tab, selectedAgent: leaderId, label: tabLabel, teamId: t.id } : tab
+          ));
+          this.selectedAgent.set(leaderId);
+        } else {
+          const firstTab = this.chatTabs()[0];
+          this.chatTabs.update(tabs => tabs.map(tab =>
+            tab.id === firstTab.id ? { ...tab, selectedAgent: leaderId, label: tabLabel, teamId: t.id } : tab
+          ));
+          this.switchChatTab(firstTab.id);
+        }
+      }
+    }
+
+    // 3. 自動讓輸入框獲取焦點，方便對話
+    setTimeout(() => {
+      this.inputRef?.nativeElement?.focus();
+    }, 100);
   }
 
   // ── Team Run (Phase 3) ────────────────────────────────────────────────────
@@ -1740,6 +1892,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         steps[ev.step] = { ...steps[ev.step], status: 'done' };
       } else if (ev.type === 'done') {
         return { ...st, status: 'done', steps, summary: ev.summary ?? '' };
+      } else if (ev.type === 'cancelled') {
+        return { ...st, status: 'cancelled', steps };
       } else if (ev.type === 'error') {
         return { ...st, status: 'error', steps };
       }
@@ -1751,6 +1905,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const st = this.teamRunState();
     if (st?.id) this.claude.cancelTeamRun(st.id).subscribe();
     if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
+    // 立即更新 UI 狀態，不等 SSE 回應
     this.teamRunState.update(s => s ? { ...s, status: 'cancelled' } : s);
   }
 
@@ -1891,12 +2046,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // 清空某個對話欄的訊息
   clearTab(tabId: string, e: Event) {
     e.stopPropagation();
+    const tab = this.chatTabs().find(t => t.id === tabId);
+    const msgCount = tab?.messages?.length ?? 0;
+    if (msgCount > 0 && !confirm(`確定要清空此對話嗎？（${msgCount} 則訊息將被刪除，此操作無法復原）`)) {
+      return;
+    }
     this.chatTabs.update(tabs => tabs.map(t =>
-      t.id === tabId ? { ...t, messages: [], label: '新對話' } : t
+      t.id === tabId ? { ...t, messages: [], label: '新對話', selectedAgent: '', teamId: undefined } : t
     ));
     if (tabId === this.activeChatId()) {
       this.messages.set([]);
       this.tokenUsage.set(null);
+      this.selectedAgent.set('');
     }
   }
 
@@ -2732,8 +2893,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const attachments = this.attachedFiles().map(f => f.path);
     this.attachedFiles.set([]);
 
-    // T11 — 若 tab 還是預設名稱，用第一條訊息更新
     const curTab = this.activeChat;
+    if (curTab && curTab.teamId) {
+      this.submitTeamMessage(text, attachments);
+      return;
+    }
+
+    // T11 — 若 tab 還是預設名稱，用第一條訊息更新
     if (curTab && curTab.label === '新對話') {
       const id = this.activeChatId();
       this.chatTabs.update(tabs => tabs.map(t => t.id === id ? { ...t, label: text.slice(0, 20) } : t));
@@ -2856,9 +3022,307 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     } else {
       this.stopFn = this.claude.streamChat(
         text, this.selectedAgent(), onEvent, onDone, onError, attachments,
-        this.activeChat?.projectDir  // 對話欄鎖定的目錄
+        this.activeChat?.projectDir,  // 對話欄鎖定的目錄
+        this.activeChat?.teamId       // 綁定的團隊 ID
       );
     }
+  }
+
+  submitTeamMessage(text: string, attachments: string[]) {
+    const curTab = this.activeChat;
+    if (!curTab || !curTab.teamId) return;
+
+    const team = this.teams().find(t => t.id === curTab.teamId);
+    const teamName = team ? team.name : 'Auto Team';
+    const now = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+
+    // 1. 新增 User 訊息
+    const displayText = text + (attachments.length ? ` 📎×${attachments.length}` : '');
+    this.messages.update(m => [...m, { role: 'user', text: displayText, time: now }]);
+    this.shouldScroll = true;
+
+    // 2. 啟動團隊討論
+    let createdProjectPath = '';
+    
+    const stopTeamChat = this.claude.streamTeamChat(
+      text,
+      curTab.teamId,
+      (ev) => {
+        if (ev.type === 'agent_start') {
+          const agentName = ev.agent;
+          const msg: ChatMessage = {
+            role: 'assistant',
+            agentId: agentName,
+            text: '',
+            isStreaming: true,
+            time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
+          };
+          this.messages.update(m => [...m, msg]);
+          this.shouldScroll = true;
+        } else if (ev.type === 'text') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            for (let i = copy.length - 1; i >= 0; i--) {
+              if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
+                copy[i] = { ...copy[i], text: copy[i].text + ev.text };
+                break;
+              }
+            }
+            return copy;
+          });
+          this.shouldScroll = true;
+        } else if (ev.type === 'agent_done') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            for (let i = copy.length - 1; i >= 0; i--) {
+              if (copy[i].role === 'assistant' && copy[i].agentId === ev.agent) {
+                copy[i] = { ...copy[i], isStreaming: false };
+                break;
+              }
+            }
+            return copy;
+          });
+          this.shouldScroll = true;
+        } else if (ev.type === 'project_created') {
+          createdProjectPath = ev.project_path;
+          this.messages.update(m => [...m, {
+            role: 'system',
+            text: `📁 專案資料夾 "${ev.project_name}" 建立成功。路徑: ${ev.project_path}`,
+            time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })
+          }]);
+          const activeId = this.activeChatId();
+          this.chatTabs.update(tabs => tabs.map(t => t.id === activeId ? { ...t, projectDir: ev.project_path } : t));
+          this.shouldScroll = true;
+        } else if (ev.type === 'error') {
+          this.messages.update(m => [...m, { role: 'error', text: ev.text }]);
+          this.isStreaming.set(false);
+          this.shouldScroll = true;
+        }
+      },
+      () => {
+        this.stopFn = null;
+        this.isStreaming.set(false);
+        this.reload();
+        
+        if (createdProjectPath) {
+          this.executeTeamCodePhase(curTab.teamId!, createdProjectPath, text);
+        } else {
+          this.inputRef?.nativeElement?.focus();
+        }
+      },
+      (err) => {
+        console.error('team chat error', err);
+        this.isStreaming.set(false);
+        this.stopFn = null;
+        this.messages.update(m => [...m, { role: 'error', text: `團隊討論異常斷開: ${err}` }]);
+      },
+      attachments,
+      curTab.projectDir
+    );
+
+    this.stopFn = () => {
+      stopTeamChat();
+      this.isStreaming.set(false);
+      this.stopFn = null;
+      this.messages.update(msgs => msgs.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
+    };
+  }
+
+  executeTeamCodePhase(teamId: string, projectPath: string, task: string) {
+    const team = this.teams().find(t => t.id === teamId);
+    const teamName = team ? team.name : 'Auto Team';
+    const now = new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+
+    const teamRun: TeamRun = {
+      id: 'executing',
+      team_id: teamId,
+      name: teamName,
+      task: task,
+      status: 'running',
+      steps: team ? team.members.map(m => ({ agent: m.agent, role: m.role, status: 'pending', output: '' })) : [],
+      summary: ''
+    };
+
+    const execMsg: ChatMessage = {
+      role: 'assistant',
+      text: '🤖 各 Agent 啟動 Claude Code 進行實作中...',
+      isStreaming: true,
+      time: now,
+      teamRun
+    };
+    this.messages.update(m => [...m, execMsg]);
+    this.shouldScroll = true;
+    this.isStreaming.set(true);
+
+    const stopExec = this.claude.executeTeamTask(
+      teamId,
+      projectPath,
+      task,
+      (ev) => {
+        if (ev.type === 'exec_start') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              const tr = { ...lastMsg.teamRun };
+              const steps = tr.steps.map(s => s.agent === ev.agent ? { ...s, status: 'running' as const } : s);
+              copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+            }
+            return copy;
+          });
+        } else if (ev.type === 'exec_text') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              const tr = { ...lastMsg.teamRun };
+              const steps = tr.steps.map(s => s.agent === ev.agent ? { ...s, output: s.output + ev.text } : s);
+              copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+            }
+            return copy;
+          });
+          this.shouldScroll = true;
+        } else if (ev.type === 'exec_done') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              const tr = { ...lastMsg.teamRun };
+              const steps = tr.steps.map(s => s.agent === ev.agent ? { ...s, status: 'done' as const } : s);
+              copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+            }
+            return copy;
+          });
+        } else if (ev.type === 'permission_request') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              const tr = { ...lastMsg.teamRun };
+              const steps = tr.steps.map(s => s.agent === ev.agent ? {
+                ...s,
+                status: 'pending_permission' as const,
+                requestId: ev.request_id,
+                command: ev.command
+              } : s);
+              copy[lastIdx] = { ...lastMsg, teamRun: { ...tr, steps } };
+            }
+            return copy;
+          });
+          this.shouldScroll = true;
+        } else if (ev.type === 'done') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              copy[lastIdx] = {
+                ...lastMsg,
+                text: '✓ 協同實作全部完成！所有產出已存入專案目錄。',
+                isStreaming: false,
+                teamRun: { ...lastMsg.teamRun!, status: 'done' }
+              };
+            }
+            return copy;
+          });
+          this.isStreaming.set(false);
+          this.stopFn = null;
+          this.reload();
+          setTimeout(() => this.scrollToBottom(), 100);
+        } else if (ev.type === 'error') {
+          this.messages.update(msgs => {
+            const copy = [...msgs];
+            const lastIdx = copy.length - 1;
+            const lastMsg = copy[lastIdx];
+            if (lastMsg && lastMsg.teamRun) {
+              copy[lastIdx] = {
+                ...lastMsg,
+                text: `⚠ 執行出錯: ${ev.text}`,
+                isStreaming: false,
+                teamRun: { ...lastMsg.teamRun!, status: 'error' }
+              };
+            }
+            return copy;
+          });
+          this.isStreaming.set(false);
+          this.stopFn = null;
+        }
+      },
+      () => {
+        this.isStreaming.set(false);
+        this.stopFn = null;
+      },
+      (err) => {
+        console.error('exec error', err);
+        this.isStreaming.set(false);
+        this.stopFn = null;
+        this.messages.update(msgs => {
+          const copy = [...msgs];
+          const lastIdx = copy.length - 1;
+          const lastMsg = copy[lastIdx];
+          if (lastMsg && lastMsg.teamRun) {
+            copy[lastIdx] = {
+              ...lastMsg,
+              text: `⚠ 執行異常中斷: ${err}`,
+              isStreaming: false,
+              teamRun: { ...lastMsg.teamRun!, status: 'error' }
+            };
+          }
+          return copy;
+        });
+      }
+    );
+
+    this.stopFn = () => {
+      stopExec();
+      this.isStreaming.set(false);
+      this.stopFn = null;
+      this.messages.update(msgs => {
+        const copy = [...msgs];
+        const lastIdx = copy.length - 1;
+        const lastMsg = copy[lastIdx];
+        if (lastMsg && lastMsg.teamRun) {
+          copy[lastIdx] = {
+            ...lastMsg,
+            text: `⏹ 實作已被使用者停止。`,
+            isStreaming: false,
+            teamRun: { ...lastMsg.teamRun!, status: 'cancelled' }
+          };
+        }
+        return copy;
+      });
+    };
+  }
+
+  handleUserAuthorize(requestId: string, agent: string, decision: 'approve' | 'reject') {
+    this.claude.authorizeTeamTask(requestId, decision).subscribe({
+      next: () => {
+        this.messages.update(msgs => {
+          const copy = [...msgs];
+          for (let i = copy.length - 1; i >= 0; i--) {
+            const msg = copy[i];
+            if (msg.teamRun) {
+              const steps = msg.teamRun.steps.map(s =>
+                s.requestId === requestId ? {
+                  ...s,
+                  status: (decision === 'approve' ? 'running' as const : 'error' as const)
+                } : s
+              );
+              copy[i] = { ...msg, teamRun: { ...msg.teamRun, steps } };
+              break;
+            }
+          }
+          return copy;
+        });
+      },
+      error: (e) => {
+        alert(`授權請求發送失敗: ${e.message ?? e}`);
+      }
+    });
   }
 
   onInput() {
@@ -3272,13 +3736,25 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   loadSession(s: Session) {
-    // 目前 active tab 沒有任何訊息 → 直接取代（不另開新欄）
-    const activeHasMessages = (this.activeChat?.messages.length ?? 0) > 0;
-    if (activeHasMessages && this.chatTabs().length < 4) {
-      this.addChatTab();
-    } else {
+    const activeIsEmpty = (this.activeChat?.messages?.length ?? 0) === 0;
+
+    if (activeIsEmpty) {
+      // 如果當前 activeChat 是空白的，直接在當前 activeChat 中載入
+      // 同時，將其他空白 Tab 都關閉
+      const currentActiveId = this.activeChatId();
+      this.chatTabs.update(tabs => tabs.filter(t => t.id === currentActiveId || (t.messages?.length ?? 0) > 0));
       this.saveCurrentTab();
+    } else {
+      // 如果當前 activeChat 有內容，我們必須開一個新 Tab 來載入歷史對話
+      // 同時在開新 Tab 之前，將所有空白的 Tab 都關閉
+      this.chatTabs.update(tabs => tabs.filter(t => (t.messages?.length ?? 0) > 0));
+      if (this.chatTabs().length < 4) {
+        this.addChatTab();
+      } else {
+        this.saveCurrentTab();
+      }
     }
+
     const id = this.activeChatId();
     this.chatTabs.update(tabs => tabs.map(t =>
       t.id === id ? { ...t, label: s.title.slice(0, 20) } : t
@@ -3345,7 +3821,24 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   changeTabAgent(tabId: string, agentId: string) {
-    this.chatTabs.update(tabs => tabs.map(t => t.id === tabId ? { ...t, selectedAgent: agentId } : t));
+    this.chatTabs.update(tabs => tabs.map(t => {
+      if (t.id === tabId) {
+        let label = t.label;
+        const currentAgentName = t.selectedAgent ? (this.agents().find(a => a.id === t.selectedAgent)?.name ?? t.selectedAgent) : '';
+        const isDefaultOrAgentLabel = !t.label || t.label === '新對話' || (currentAgentName && t.label === currentAgentName);
+
+        if (isDefaultOrAgentLabel) {
+          if (agentId) {
+            const newAgentObj = this.agents().find(a => a.id === agentId);
+            label = newAgentObj ? newAgentObj.name : agentId;
+          } else {
+            label = '新對話';
+          }
+        }
+        return { ...t, selectedAgent: agentId, label };
+      }
+      return t;
+    }));
     if (tabId === this.activeChatId()) {
       this.selectedAgent.set(agentId);
     }

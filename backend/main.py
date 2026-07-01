@@ -289,6 +289,7 @@ active_sessions: dict[str, str] = {}   # client_id -> claude session_id
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
 _mcp_logs:       dict[str, list[str]] = {}                   # mcp name -> log lines
+pending_permissions: dict[str, dict] = {}                    # request_id -> dict with process, event, etc.
 
 # Usage API 快取（5 分鐘）
 _usage_cache: dict = {"data": None, "expires": 0.0}
@@ -615,14 +616,39 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     model        = data.get("model", "")
     effort       = data.get("effort", "")
     permission_mode = data.get("permission_mode", "")
+    team_id      = data.get("team_id", "")
 
     claude_bin = bin_override if bin_override else CLAUDE_BIN
     cwd        = cwd_override if (cwd_override and Path(cwd_override).is_dir()) else str(Path.home())
 
+    team_info = None
+    if team_id:
+        f_team = TEAMS_DIR / f"{team_id}.yaml"
+        if f_team.exists():
+            try:
+                team_info = _team_dict(f_team)
+            except Exception:
+                pass
+
     soul = get_concatenated_soul()
     full_message = f"[System Persona]\n{soul}\n\n{message}" if soul else message
 
-    mem_ctx = build_memory_context(agent, cwd)
+    if team_id and team_info:
+        all_members = [m["agent"] for m in team_info.get("members", [])]
+        mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd)
+        
+        team_name = team_info.get("name", team_id)
+        members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in team_info.get("members", [])])
+        team_prompt = (
+            f"[團隊組長身分指引]\n"
+            f"你現在是團隊「{team_name}」的組長（Team Leader）。\n"
+            f"你的團隊成員如下：\n{members_str}\n"
+            f"當使用者交辦任務時，請以團隊組長的角色進行回覆與規畫。你可以運用其他組員的專長來協助引導對話與思考。\n\n"
+        )
+        full_message = team_prompt + full_message
+    else:
+        mem_ctx = build_memory_context(agent, cwd)
+
     if mem_ctx:
         full_message = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{full_message}"
 
@@ -696,6 +722,497 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
         await response.write(f"data: {payload}\n\n".encode())
 
     return response
+
+
+async def handle_team_chat(request: web.Request) -> web.StreamResponse:
+    data      = await request.json()
+    message      = data.get("message", "")
+    client_id    = data.get("client_id", "default")
+    team_id      = data.get("team_id", "")
+    cwd_override = data.get("cwd", "")
+    bin_override = data.get("claude_bin", "")
+    attachments  = data.get("attachments", [])
+    model        = data.get("model", "")
+    effort       = data.get("effort", "")
+    permission_mode = data.get("permission_mode", "")
+
+    claude_bin = bin_override if bin_override else CLAUDE_BIN
+    cwd        = cwd_override if (cwd_override and Path(cwd_override).is_dir()) else str(Path.home())
+
+    team_info = None
+    if team_id:
+        f_team = TEAMS_DIR / f"{team_id}.yaml"
+        if f_team.exists():
+            try:
+                team_info = _team_dict(f_team)
+            except Exception:
+                pass
+
+    if not team_info:
+        # fallback to minimal JSON error response
+        response = web.StreamResponse(headers={
+            "Content-Type":    "text/event-stream",
+            "Cache-Control":   "no-cache",
+            "X-Accel-Buffering": "no",
+        })
+        await response.prepare(request)
+        payload = json.dumps({"type": "error", "text": "team not found or invalid"})
+        await response.write(f"data: {payload}\n\n".encode())
+        await response.write(b'data: {"type":"done"}\n\n')
+        return response
+
+    members = team_info.get("members", [])
+    if not members:
+        response = web.StreamResponse(headers={
+            "Content-Type":    "text/event-stream",
+            "Cache-Control":   "no-cache",
+            "X-Accel-Buffering": "no",
+        })
+        await response.prepare(request)
+        payload = json.dumps({"type": "error", "text": "team has no members"})
+        await response.write(f"data: {payload}\n\n".encode())
+        await response.write(b'data: {"type":"done"}\n\n')
+        return response
+    
+    leader_agent_id = team_info.get("leader", "") or members[0]["agent"]
+    member_agent_ids = [m["agent"] for m in members]
+
+    response = web.StreamResponse(headers={
+        "Content-Type":    "text/event-stream",
+        "Cache-Control":   "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+    await response.prepare(request)
+
+    async def run_single_agent(agent_id: str, prompt_text: str, is_leader: bool) -> tuple[str, str]:
+        all_members_list = [m["agent"] for m in members]
+        mem_ctx = build_team_memory_context(team_id, all_members_list, agent_id, cwd)
+        
+        team_name = team_info.get("name", team_id)
+        members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in members])
+        
+        if is_leader:
+            persona_prompt = (
+                f"[團隊組長身分指引]\n"
+                f"你現在是團隊「{team_name}」的組長（Team Leader）代號 @{agent_id}。\n"
+                f"你的團隊成員如下：\n{members_str}\n"
+                f"你的職責是協調整個團隊。當使用者交辦任務時：\n"
+                f"1. 請先在回覆中與相關成員對話以討論方案。如果你需要某位成員發言，請在你的回覆中明確 @成員代號（例如 @{members[0]['agent']} 你的想法是什麼？）。\n"
+                f"2. 討論完畢且有了明確的實作規劃後，請在你的回覆中加入 `[CREATE_PROJECT: 專案名稱]` 這個標籤（其中 專案名稱 請使用小寫英文底線，如 `python_spider`），系統會自動為此建立目錄並進行後續的多 Agent 分工協作執行。\n"
+                f"3. 請注意，你在發言中只能 @ 成員列表中的人，不要 @ 不存在的成員。每一次回覆最多只 @ 一位成員提問討論。\n\n"
+            )
+        else:
+            persona_prompt = (
+                f"[團隊成員身分指引]\n"
+                f"你現在是團隊「{team_name}」的成員，代號 @{agent_id}。\n"
+                f"你的團隊成員如下：\n{members_str}\n"
+                f"你的組長為 @{leader_agent_id}。現在組長（或團隊）向你提問，請針對提問以你的角色進行回覆，給出專業的意見與討論。請回覆得簡短而專業，不需要 @ 其他人。\n\n"
+            )
+
+        full_prompt = persona_prompt
+        if mem_ctx:
+            full_prompt = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{full_prompt}"
+        
+        full_prompt = f"{full_prompt}\n\n任務/討論歷史：\n{prompt_text}"
+
+        soul = get_concatenated_soul()
+        if soul:
+            full_prompt = f"[System Persona]\n{soul}\n\n{full_prompt}"
+
+        agent_file = AGENTS_DIR / f"{agent_id}.md"
+        if agent_file.exists():
+            try:
+                text = agent_file.read_text(encoding="utf-8")
+                body = text
+                if text.startswith("---"):
+                    parts = text.split("---", 2)
+                    if len(parts) >= 3:
+                        body = parts[2].strip()
+                if body:
+                    full_prompt = f"[代理人定義：{agent_id}]\n{body}\n\n---\n\n{full_prompt}"
+            except Exception:
+                pass
+
+        cmd = [claude_bin, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]
+        if model and model not in ("sonnet", ""):
+            cmd += ["--model", model]
+        if effort and effort != "medium":
+            cmd += ["--effort", effort]
+        if permission_mode and permission_mode not in ("default", ""):
+            cmd += ["--permission-mode", permission_mode]
+        for att in attachments:
+            if Path(att).exists():
+                cmd += ["--input-file", att]
+        
+        session_key = f"{client_id}_{agent_id}"
+        if session_key in active_sessions:
+            cmd += ["--resume", active_sessions[session_key]]
+
+        await response.write(f"data: {json.dumps({'type': 'agent_start', 'agent': agent_id})}\n\n".encode())
+
+        env = {**os.environ}
+        api_key = _resolve_api_key()
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            stdin=asyncio.subprocess.DEVNULL,
+            cwd=cwd,
+            env=env,
+        )
+        active_procs[client_id] = proc
+
+        collected_text = []
+        new_session_id = ""
+
+        try:
+            async for line in proc.stdout:
+                raw = line.decode("utf-8", errors="replace").strip()
+                if not raw:
+                    continue
+                try:
+                    event = json.loads(raw)
+                    if event.get("type") == "result" and "session_id" in event:
+                        new_session_id = event["session_id"]
+                        active_sessions[session_key] = new_session_id
+                    
+                    if event.get("type") == "assistant" and event.get("message", {}).get("content"):
+                        for block in event["message"]["content"]:
+                            if block.get("type") == "text":
+                                collected_text.append(block["text"])
+                                await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
+                    elif event.get("type") == "text":
+                        collected_text.append(event.get("text", ""))
+                        await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
+                except json.JSONDecodeError:
+                    collected_text.append(raw)
+                    await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': raw})}\n\n".encode())
+            
+            await proc.wait()
+        finally:
+            active_procs.pop(client_id, None)
+
+        await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
+        return "".join(collected_text), new_session_id
+
+    try:
+        discussion_history = f"使用者：{message}\n"
+        
+        current_agent = leader_agent_id
+        is_leader = True
+        
+        for loop_idx in range(10):
+            agent_output, sid = await run_single_agent(current_agent, discussion_history, is_leader)
+            discussion_history += f"@{current_agent}：{agent_output}\n"
+
+            if is_leader:
+                import re
+                proj_match = re.search(r"\[CREATE_PROJECT:\s*([a-zA-Z0-9_-]+)\]", agent_output)
+                if proj_match:
+                    project_name = proj_match.group(1).strip()
+                    proj_dir = Path(cwd) / project_name
+                    try:
+                        proj_dir.mkdir(parents=True, exist_ok=True)
+                        await response.write(f"data: {json.dumps({'type': 'project_created', 'project_name': project_name, 'project_path': str(proj_dir)})}\n\n".encode())
+                    except Exception as ex:
+                        err_text = f"\n[專案目錄建立失敗: {ex}]\n"
+                        await response.write(f"data: {json.dumps({'type': 'text', 'agent': leader_agent_id, 'text': err_text})}\n\n".encode())
+
+                approve_match = re.search(r"\[APPROVE:\s*([a-zA-Z0-9_-]+)\]", agent_output)
+                if approve_match:
+                    req_id = approve_match.group(1).strip()
+                    if req_id in pending_permissions:
+                        record = pending_permissions[req_id]
+                        record["decision"] = "approve"
+                        record["event"].set()
+                        text_val = f"\n[組長自動授權：已同意 @{record['agent']} 的操作]\n"
+                        await response.write(f"data: {json.dumps({'type': 'text', 'agent': leader_agent_id, 'text': text_val})}\n\n".encode())
+            
+            import re
+            next_agent = None
+            if is_leader:
+                matches = re.findall(r"@([a-zA-Z0-9_-]+)", agent_output)
+                for m_id in matches:
+                    if m_id in member_agent_ids and m_id != leader_agent_id:
+                        next_agent = m_id
+                        break
+            
+            if next_agent:
+                current_agent = next_agent
+                is_leader = False
+                discussion_history += f"\n系統通知：@{leader_agent_id} 請 @{next_agent} 發表意見。\n"
+            else:
+                if not is_leader:
+                    current_agent = leader_agent_id
+                    is_leader = True
+                    discussion_history += f"\n系統通知：@{current_agent} 請繼續彙整討論並給出結論。\n"
+                else:
+                    break
+        
+        await response.write(b'data: {"type":"done"}\n\n')
+    except Exception as e:
+        payload = json.dumps({"type": "error", "text": str(e)})
+        await response.write(f"data: {payload}\n\n".encode())
+
+    return response
+
+
+def launch_windows_terminal_monitor(project_path: str, members: list):
+    if not members:
+        return
+    
+    parts = []
+    first_agent = members[0]["agent"]
+    parts.append(
+        f'wt -d "{project_path}" powershell -NoExit -Command "'
+        f'Clear-Host; '
+        f'Write-Host \">>> @{first_agent} 監控中...\" -ForegroundColor Magenta; '
+        f'Get-Content -Path .agent_{first_agent}.log -Wait -Tail 20"'
+    )
+    
+    for i, m in enumerate(members[1:], start=1):
+        agent_id = m["agent"]
+        split_flag = "-V" if i % 2 == 1 else "-H"
+        color = "Green" if i % 3 == 1 else "Cyan" if i % 3 == 2 else "Yellow"
+        parts.append(
+            f'split-pane {split_flag} -d "{project_path}" powershell -NoExit -Command "'
+            f'Clear-Host; '
+            f'Write-Host \">>> @{agent_id} 監控中...\" -ForegroundColor {color}; '
+            f'Get-Content -Path .agent_{agent_id}.log -Wait -Tail 20"'
+        )
+    
+    full_cmd = " ; ".join(parts)
+    try:
+        import subprocess
+        subprocess.Popen(full_cmd, shell=True)
+    except Exception as e:
+        print(f"[wt launch error] {e}")
+
+
+async def handle_team_execute(request: web.Request) -> web.StreamResponse:
+    data         = await request.json()
+    team_id      = data.get("team_id", "")
+    project_path = data.get("project_path", "")
+    task         = data.get("task", "")
+    bin_override = data.get("claude_bin", "")
+    model        = data.get("model", "")
+    effort       = data.get("effort", "")
+    permission_mode = data.get("permission_mode", "")
+
+    claude_bin = bin_override if bin_override else CLAUDE_BIN
+
+    if not project_path or not Path(project_path).is_dir():
+        response = web.StreamResponse(headers={
+            "Content-Type":    "text/event-stream",
+            "Cache-Control":   "no-cache",
+            "X-Accel-Buffering": "no",
+        })
+        await response.prepare(request)
+        payload = json.dumps({"type": "error", "text": f"invalid project path: {project_path}"})
+        await response.write(f"data: {payload}\n\n".encode())
+        await response.write(b'data: {"type":"done"}\n\n')
+        return response
+
+    team_info = None
+    if team_id:
+        f_team = TEAMS_DIR / f"{team_id}.yaml"
+        if f_team.exists():
+            try:
+                team_info = _team_dict(f_team)
+            except Exception:
+                pass
+
+    if not team_info:
+        response = web.StreamResponse(headers={
+            "Content-Type":    "text/event-stream",
+            "Cache-Control":   "no-cache",
+            "X-Accel-Buffering": "no",
+        })
+        await response.prepare(request)
+        payload = json.dumps({"type": "error", "text": "team not found"})
+        await response.write(f"data: {payload}\n\n".encode())
+        await response.write(b'data: {"type":"done"}\n\n')
+        return response
+
+    members = team_info.get("members", [])
+    if not members:
+        response = web.StreamResponse(headers={
+            "Content-Type":    "text/event-stream",
+            "Cache-Control":   "no-cache",
+            "X-Accel-Buffering": "no",
+        })
+        await response.prepare(request)
+        payload = json.dumps({"type": "error", "text": "team has no members"})
+        await response.write(f"data: {payload}\n\n".encode())
+        await response.write(b'data: {"type":"done"}\n\n')
+        return response
+
+    response = web.StreamResponse(headers={
+        "Content-Type":    "text/event-stream",
+        "Cache-Control":   "no-cache",
+        "X-Accel-Buffering": "no",
+    })
+    await response.prepare(request)
+
+    async def run_agent_executor(agent_id: str, role: str):
+        agent_file = AGENTS_DIR / f"{agent_id}.md"
+        agent_body = ""
+        if agent_file.exists():
+            try:
+                text = agent_file.read_text(encoding="utf-8")
+                agent_body = text
+                if text.startswith("---"):
+                    parts = text.split("---", 2)
+                    agent_body = parts[2].strip() if len(parts) >= 3 else text
+            except Exception:
+                pass
+
+        prompt = (
+            f"你現在在專案目錄 {project_path} 下執行任務。\n"
+            f"你是團隊成員 @{agent_id}，你的職責是「{role}」。\n"
+            f"以下是團隊需要共同完成的專案實作任務：\n{task}\n"
+            f"請以你個人的職責，獨立對此專案目錄下的代碼進行修改、創建或測試，以達成任務要求。有任何產出請直接在此目錄中創建。請使用工具執行，並將你的執行過程簡要回報。\n"
+        )
+        if agent_body:
+            prompt = f"[你的代理人特徵與能力]\n{agent_body}\n\n---\n\n{prompt}"
+
+        soul = get_concatenated_soul()
+        if soul:
+            prompt = f"[System Persona]\n{soul}\n\n{prompt}"
+
+        cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
+        if model and model not in ("sonnet", ""):
+            cmd += ["--model", model]
+        if effort and effort != "medium":
+            cmd += ["--effort", effort]
+        if permission_mode and permission_mode not in ("default", ""):
+            cmd += ["--permission-mode", permission_mode]
+
+        env = {**os.environ}
+        api_key = _resolve_api_key()
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+
+        await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.PIPE,
+                cwd=project_path,
+                env=env,
+            )
+            log_file = Path(project_path) / f".agent_{agent_id}.log"
+            try:
+                log_file.write_text("", encoding="utf-8")
+            except Exception:
+                pass
+
+            async for line in proc.stdout:
+                raw = line.decode("utf-8", errors="replace").strip()
+                if not raw:
+                    continue
+
+                try:
+                    with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+                        f.write(raw + "\n")
+                except Exception:
+                    pass
+
+                is_perm_req = False
+                command_to_show = ""
+
+                try:
+                    event = json.loads(raw)
+                    if event.get("type") == "permission_request":
+                        is_perm_req = True
+                        command_to_show = event.get("command") or event.get("description") or "敏感操作"
+                    elif event.get("type") == "tool_use" and event.get("requires_approval"):
+                        is_perm_req = True
+                        command_to_show = f"呼叫工具 {event.get('name')}"
+                except json.JSONDecodeError:
+                    pass
+
+                raw_lower = raw.lower()
+                if ("do you want to" in raw_lower or "permission required" in raw_lower or "allow" in raw_lower) and ("[y/n]" in raw_lower or "y/n" in raw_lower or "?" in raw_lower):
+                    is_perm_req = True
+                    command_to_show = raw
+
+                if is_perm_req:
+                    req_id = uuid.uuid4().hex[:8]
+                    evt = asyncio.Event()
+                    
+                    pending_permissions[req_id] = {
+                        "process": proc,
+                        "agent": agent_id,
+                        "command": command_to_show,
+                        "event": evt,
+                        "decision": None
+                    }
+
+                    await response.write(f"data: {json.dumps({'type': 'permission_request', 'agent': agent_id, 'request_id': req_id, 'command': command_to_show})}\n\n".encode())
+                    
+                    await evt.wait()
+
+                    decision = pending_permissions[req_id]["decision"]
+                    if decision == "approve":
+                        proc.stdin.write(b"y\n")
+                        await proc.stdin.drain()
+                    else:
+                        proc.stdin.write(b"n\n")
+                        await proc.stdin.drain()
+
+                    pending_permissions.pop(req_id, None)
+                    continue
+
+                try:
+                    event = json.loads(raw)
+                    if event.get("type") == "assistant" and event.get("message", {}).get("content"):
+                        for block in event["message"]["content"]:
+                            if block.get("type") == "text":
+                                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
+                    elif event.get("type") == "text":
+                        await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
+                except json.JSONDecodeError:
+                    await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': raw})}\n\n".encode())
+            
+            await proc.wait()
+        except Exception as e:
+            await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': f'[Error: {e}]'})}\n\n".encode())
+
+        await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
+
+    # 自動彈出已依照團隊人數拆分 Pane 的 Windows Terminal 監控視窗
+    try:
+        launch_windows_terminal_monitor(project_path, members)
+    except Exception:
+        pass
+
+    tasks = [run_agent_executor(m["agent"], m["role"]) for m in members]
+    await asyncio.gather(*tasks)
+
+    await response.write(b'data: {"type":"done"}\n\n')
+    return response
+
+
+async def handle_team_authorize(request: web.Request) -> web.Response:
+    data       = await request.json()
+    request_id = data.get("request_id", "")
+    decision   = data.get("decision", "")
+
+    if not request_id or request_id not in pending_permissions:
+        return web.json_response({"error": "invalid or expired request_id"}, status=404)
+
+    record = pending_permissions[request_id]
+    record["decision"] = decision
+    record["event"].set()
+
+    return web.json_response({"ok": True})
 
 
 async def handle_sessions(request: web.Request) -> web.Response:
@@ -996,15 +1513,47 @@ def _desc_from_skill_dir(skill_dir: Path) -> str:
 def _parse_yaml_list(lines: list, start: int):
     """Parse indented YAML list starting at index. Returns (items, next_index)."""
     items, i = [], start
+    current_item = None
+    base_indent = None
+    
     while i < len(lines):
-        s = lines[i].lstrip()
-        if s.startswith("- "):
-            items.append(s[2:].strip().strip("\"'"))
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             i += 1
-        elif lines[i].strip() == "":
+            continue
+            
+        indent = len(line) - len(line.lstrip())
+        
+        m_list_item = _re.match(r'^\s*-\s+(.*)', line)
+        if m_list_item:
+            if base_indent is None:
+                base_indent = indent
+                
+            if current_item is not None:
+                items.append(current_item)
+                current_item = None
+                
+            rest = m_list_item.group(1).strip()
+            m_kv = _re.match(r'^([\w][\w-]*):\s*(.*)', rest)
+            if m_kv:
+                k, v = m_kv.group(1), m_kv.group(2).strip().strip("\"'")
+                current_item = {k: v}
+            else:
+                items.append(rest.strip("\"'"))
             i += 1
         else:
-            break
+            m_kv = _re.match(r'^\s*([\w][\w-]*):\s*(.*)', line)
+            if current_item is not None and m_kv and base_indent is not None and indent > base_indent:
+                k, v = m_kv.group(1), m_kv.group(2).strip().strip("\"'")
+                current_item[k] = v
+                i += 1
+            else:
+                break
+                
+    if current_item is not None:
+        items.append(current_item)
+        
     return items, i
 
 
@@ -1460,10 +2009,14 @@ def _team_dict(f: Path) -> dict:
             members.append({"agent": m.get("agent", ""), "role": m.get("role", "")})
         elif isinstance(m, str):
             members.append({"agent": m, "role": ""})
+    
+    # 預設首個成員為組長
+    default_leader = members[0]["agent"] if members else ""
     return {
         "id":          f.stem,
         "name":        raw.get("name", f.stem),
         "description": raw.get("description", ""),
+        "leader":      raw.get("leader", "") or default_leader,
         "members":     members,
     }
 
@@ -1499,6 +2052,7 @@ async def handle_team_post(request: web.Request) -> web.Response:
     _write_team_yaml(f, {
         "name": raw or tid,
         "description": data.get("description", ""),
+        "leader": data.get("leader", ""),
         "members": data.get("members", []),
     })
     return web.json_response({"ok": True, "id": tid})
@@ -1514,6 +2068,7 @@ async def handle_team_put(request: web.Request) -> web.Response:
     payload = {
         "name":        data.get("name", current["name"]),
         "description": data.get("description", current["description"]),
+        "leader":      data.get("leader", current.get("leader", "")),
         "members":     data.get("members", current["members"]),
     }
     _write_team_yaml(f, payload)
@@ -1530,11 +2085,10 @@ async def handle_team_delete(request: web.Request) -> web.Response:
 
 # ── Phase 3: Multi-Agent Sequential Execution ─────────────────────────────────
 
-import uuid as _uuid
-
 _team_runs:   dict[str, dict] = {}
 _team_events: dict[str, list] = {}
 _team_queues: dict[str, list] = {}
+_team_run_processes: dict[str, asyncio.subprocess.Process] = {}
 
 
 def _tr_emit(run_id: str, event: dict) -> None:
@@ -1577,8 +2131,12 @@ async def _agent_run_capture(
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
 
+    if _team_runs.get(run_id, {}).get("status") == "cancelled":
+        return "[Team Run 已取消]"
+
     safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
     output_parts: list[str] = []
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1588,7 +2146,16 @@ async def _agent_run_capture(
             cwd=safe_cwd,
             env=env,
         )
+        _team_run_processes[run_id] = proc
+
         async for line in proc.stdout:
+            if _team_runs.get(run_id, {}).get("status") == "cancelled":
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                break
+
             raw = line.decode("utf-8", errors="replace").strip()
             if not raw:
                 continue
@@ -1611,6 +2178,8 @@ async def _agent_run_capture(
         err = f"\n[Error running {agent_id}: {e}]\n"
         output_parts.append(err)
         _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": err})
+    finally:
+        _team_run_processes.pop(run_id, None)
 
     return "".join(output_parts)
 
@@ -1688,6 +2257,7 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
 
     if run.get("status") != "cancelled":
         run["status"] = "done"
+        run["_finished_at"] = time.time()
         summary_parts = [
             f"### {s['agent']}（{s['role']}）\n\n{s['output']}" for s in steps
         ]
@@ -1697,8 +2267,7 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         # Team Run 完成後自動更新 team project memory
         if team_id and cwd:
             slug = _encode_slug(cwd)
-            import datetime
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             proj_summary = (
                 f"# Team Run 記錄 — {timestamp}\n\n"
                 f"## 任務\n\n{task}\n\n"
@@ -1707,6 +2276,9 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
                 f"\n\n## 執行摘要\n\n{run['summary'][:1800]}"
             )
             _write_md(_team_memory_dir(team_id) / "projects" / f"{slug}.md", proj_summary)
+    else:
+        # cancelled
+        run["_finished_at"] = time.time()
 
 
 async def handle_team_run_post(request: web.Request) -> web.Response:
@@ -1731,7 +2303,7 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
     if not team.get("members"):
         return web.json_response({"error": "team has no members"}, status=400)
 
-    run_id = _uuid.uuid4().hex[:8]
+    run_id = uuid.uuid4().hex[:8]
     _team_runs[run_id] = {
         "id":      run_id,
         "team_id": team.get("id", team_id),
@@ -1776,7 +2348,7 @@ async def handle_team_run_stream(request: web.Request) -> web.StreamResponse:
 
     for ev in _team_events.get(run_id, []):
         await response.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
-        if ev.get("type") in ("done", "error"):
+        if ev.get("type") in ("done", "error", "cancelled"):
             _team_queues[run_id].remove(q)
             return response
 
@@ -1788,7 +2360,7 @@ async def handle_team_run_stream(request: web.Request) -> web.StreamResponse:
                 await response.write(b'data: {"type":"ping"}\n\n')
                 continue
             await response.write(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
-            if ev.get("type") in ("done", "error"):
+            if ev.get("type") in ("done", "error", "cancelled"):
                 break
     finally:
         queues = _team_queues.get(run_id, [])
@@ -1803,7 +2375,13 @@ async def handle_team_run_cancel(request: web.Request) -> web.Response:
     run = _team_runs.get(run_id)
     if run:
         run["status"] = "cancelled"
-        _tr_emit(run_id, {"type": "error", "text": "cancelled"})
+        _tr_emit(run_id, {"type": "cancelled", "text": "cancelled"})
+        proc = _team_run_processes.get(run_id)
+        if proc:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
     return web.json_response({"ok": True})
 
 
@@ -2160,7 +2738,18 @@ async def handle_schedules_post(request: web.Request) -> web.Response:
     cron = await _natural_to_cron(cron)
     
     schedules = load_schedules()
-    entry = {"id": str(uuid.uuid4()), "prompt": prompt, "cron": cron, "enabled": True}
+    entry = {
+        "id": str(uuid.uuid4()),
+        "prompt": prompt,
+        "cron": cron,
+        "enabled": True
+    }
+    delivery = data.get("delivery")
+    if delivery and isinstance(delivery, dict):
+        entry["delivery"] = {
+            "channel": delivery.get("channel", "").strip(),
+            "to": delivery.get("to", "").strip()
+        }
     schedules.append(entry)
     save_schedules(schedules)
     return web.json_response(entry)
@@ -2876,7 +3465,6 @@ async def _line_run_claude(user_message: str) -> str:
     try:
         proc = await asyncio.create_subprocess_exec(
             CLAUDE_BIN, "-p", prompt, "--output-format", "json",
-            "--dangerously-skip-permissions",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
@@ -2988,10 +3576,105 @@ async def handle_config_put(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "slug": cfg.get("projectDir", "")})
 
 
+def _init_presets() -> None:
+    """如果 CLAUDE_HOME 下的 skills/agents/teams 目錄中沒有對應的 preset，就從專案 preset 目錄複製過去。
+    同時將預設的 MCP 伺服器設定合併到 ~/.claude/claude.json 中。"""
+    # 測試環境不執行
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return
+
+    try:
+        presets_dir = Path(__file__).parent / "presets"
+        if not presets_dir.exists():
+            _log(f"Presets directory not found at: {presets_dir}")
+            return
+
+        # 確保 CLAUDE_HOME 底下的目標目錄存在
+        AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+        SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        TEAMS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # 1. 複製 skills
+        p_skills = presets_dir / "skills"
+        if p_skills.exists():
+            for src in p_skills.iterdir():
+                dest = SKILLS_DIR / src.name
+                if not dest.exists():
+                    if src.is_dir():
+                        shutil.copytree(src, dest)
+                    else:
+                        shutil.copy2(src, dest)
+                    _log(f"Copied preset skill: {src.name} -> {dest}")
+
+        # 2. 複製 agents
+        p_agents = presets_dir / "agents"
+        if p_agents.exists():
+            for src in p_agents.iterdir():
+                dest = AGENTS_DIR / src.name
+                if not dest.exists():
+                    if src.is_dir():
+                        shutil.copytree(src, dest)
+                    else:
+                        shutil.copy2(src, dest)
+                    _log(f"Copied preset agent: {src.name} -> {dest}")
+
+        # 3. 複製 teams
+        p_teams = presets_dir / "teams"
+        if p_teams.exists():
+            for src in p_teams.iterdir():
+                dest = TEAMS_DIR / src.name
+                if not dest.exists():
+                    shutil.copy2(src, dest)
+                    _log(f"Copied preset team: {src.name} -> {dest}")
+
+        # 4. 合併 MCP servers (claude.json)
+        p_claude_json = presets_dir / "claude.json"
+        if p_claude_json.exists():
+            dest_claude_json = CLAUDE_HOME / "claude.json"
+            
+            # 讀取 preset mcpServers
+            try:
+                preset_data = json.loads(p_claude_json.read_text(encoding="utf-8"))
+            except Exception as e:
+                preset_data = {}
+                _log(f"Error parsing preset claude.json: {e}")
+
+            preset_mcp = preset_data.get("mcpServers", {})
+            if preset_mcp:
+                # 讀取使用者現有的 claude.json
+                user_data = {}
+                if dest_claude_json.exists():
+                    try:
+                        user_data = json.loads(dest_claude_json.read_text(encoding="utf-8"))
+                    except Exception as e:
+                        _log(f"Error parsing user claude.json, resetting: {e}")
+                
+                if not isinstance(user_data, dict):
+                    user_data = {}
+                if "mcpServers" not in user_data or not isinstance(user_data["mcpServers"], dict):
+                    user_data["mcpServers"] = {}
+
+                # 合併
+                changed = False
+                for k, v in preset_mcp.items():
+                    if k not in user_data["mcpServers"]:
+                        user_data["mcpServers"][k] = v
+                        changed = True
+                        _log(f"Added preset MCP server: {k}")
+
+                if changed:
+                    CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
+                    dest_claude_json.write_text(json.dumps(user_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    except Exception as e:
+        _log(f"Error initializing presets: {e}")
+
+
 def build_app() -> web.Application:
     _init_db()
     _migrate_db()
     _backfill_project_paths()
+    _init_presets()
     app = web.Application()
 
     cors = aiohttp_cors.setup(app, defaults={
@@ -3008,6 +3691,9 @@ def build_app() -> web.Application:
     for method, path, handler in [
         ("GET",    "/api/usage",           handle_usage),
         ("POST",   "/api/chat",           handle_chat),
+        ("POST",   "/api/team/chat",      handle_team_chat),
+        ("POST",   "/api/team/execute",   handle_team_execute),
+        ("POST",   "/api/team/authorize", handle_team_authorize),
         ("POST",   "/api/chat/stop",      handle_chat_stop),
         ("GET",    "/api/backup",          handle_backup),
         ("POST",   "/api/restore",         handle_restore),
@@ -3137,7 +3823,9 @@ async def _send_line_message(to: str, text: str) -> None:
         print("[schedule] lineChannelAccessToken not set in claude-desktop-config.json")
         return
     if not to:
-        print("[schedule] LINE recipient (to) is empty")
+        to = _load_config().get("lineAdminUserId", "").strip()
+    if not to:
+        print("[schedule] LINE recipient (to) is empty and lineAdminUserId is not set")
         return
     url = "https://api.line.me/v2/bot/message/push"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -3157,12 +3845,18 @@ async def _send_line_message(to: str, text: str) -> None:
 
 async def run_schedule_prompt(schedule: dict) -> None:
     prompt = schedule["prompt"] if isinstance(schedule, dict) else schedule
-    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"]
+    # 移除 --dangerously-skip-permissions 旗標以支援 Docker 容器安全執行
+    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json"]
+    env = os.environ.copy()
+    key = _resolve_api_key()
+    if key:
+        env["ANTHROPIC_API_KEY"] = key
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
             cwd=str(Path.home()),
         )
         stdout, _ = await proc.communicate()
@@ -3173,18 +3867,39 @@ async def run_schedule_prompt(schedule: dict) -> None:
         except Exception:
             pass
         print(f"[schedule] Prompt finished, result length: {len(result_text)}")
-        if isinstance(schedule, dict):
-            delivery = schedule.get("delivery", {})
-            if delivery.get("channel") == "line" and result_text:
-                await _send_line_message(delivery.get("to", ""), result_text)
+        if result_text:
+            # 依使用者需求，預設直接推送至 LINE Admin 帳號
+            to = _load_config().get("lineAdminUserId", "").strip()
+            await _send_line_message(to, result_text)
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
+
+
+
+
+async def _gc_team_runs() -> None:
+    """每 30 分鐘清除超過 2 小時的 completed/cancelled team runs，防止記憶體洩漏"""
+    while True:
+        await asyncio.sleep(1800)  # 30 min
+        cutoff = time.time() - 7200  # 2 hours
+        stale = [
+            rid for rid, run in list(_team_runs.items())
+            if run.get("status") in ("done", "cancelled", "error")
+            and run.get("_finished_at", cutoff + 1) < cutoff
+        ]
+        for rid in stale:
+            _team_runs.pop(rid, None)
+            _team_events.pop(rid, None)
+            _team_queues.pop(rid, None)
+        if stale:
+            _log(f"[gc] Cleaned {len(stale)} stale team runs")
 
 
 async def on_startup(app: web.Application) -> None:
     global _tg_task
     _log(f"Backend started. Claude: {CLAUDE_BIN}")
     asyncio.create_task(run_schedule_runner())
+    asyncio.create_task(_gc_team_runs())  # 定期清除舊 team runs
     # Auto-start Telegram bot if configured
     tg_cfg = _load_tg_config()
     _tg_state.update({"token": tg_cfg.get("token",""), "enabled": tg_cfg.get("enabled", False)})
