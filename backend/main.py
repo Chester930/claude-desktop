@@ -3717,7 +3717,7 @@ def build_app() -> web.Application:
     _migrate_db()
     _backfill_project_paths()
     _init_presets()
-    app = web.Application()
+    app = web.Application(client_max_size=_UPLOAD_MAX_BYTES + 1024)
 
     cors = aiohttp_cors.setup(app, defaults={
         "*": aiohttp_cors.ResourceOptions(
