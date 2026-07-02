@@ -1,7 +1,7 @@
 # Claude 桌面版 — 計畫任務書（進版交接用）
 
-> **快照時間**：2026-07-02 15:28 (UTC+8)
-> **當前分支**：`master` @ [1226962](file:///c:/Users/mycena/claude-desktop)
+> **快照時間**：2026-07-02 15:39 (UTC+8)
+> **當前分支**：`master` @ 最新（含 P1/P2 後端修補）
 > **用途**：換機續做用的完整進度記錄
 
 ---
@@ -19,116 +19,93 @@
 
 ---
 
-## 二、已完成工作總覽
+## 二、後端 API 完成狀態
 
-### 2.1 近兩日 commits（7/1 ~ 7/2，共 16 筆）
+### P1 — Agent Mapping（後端）
 
-| Commit | 類別 | 說明 |
-|--------|------|------|
-| `1226962` | **feat** | ⭐ **Part A：persistent claude-agent-sdk connections for team chat** — 在 `handle_team_chat` 中引入 `session_pool.py`，改為長駐 SDK 連線，不再每次重新 spawn `claude -p` 子程序 |
-| `c1cc24d` | feat(ui) | Team 編輯器加入 `execution_mode` 欄位（sequential / parallel） |
-| `ae1e2b9` | feat(team) | `active_sessions` 新增過期清除機制 |
-| `4ecd2ff` | fix(team) | Windows Terminal monitor 只在原生 Windows 啟動 |
-| `e5d85bb` | perf | 移除 soul-sync 的死代碼副作用，檔案讀取改為並行 |
-| `ea26eca` | fix(team) | 過濾掉 claude CLI 的診斷雜訊（影響 inter-agent context） |
-| `cc512a1` | fix(team) | `execution_mode` 從未被讀取導致 sequential 模式失效 |
-| `d44cfd3` | feat(ui) | Skill 編輯器的 description 改為可編輯 + 自動換行 |
-| `6f615c5` | feat(ui) | Agent 編輯器新增 description textarea |
-| `f2315e9` | fix(ui) | Team 編輯器 description 欄位自動換行 |
-| `bf595bc` | feat(soul) | 恢復 4 個手寫 preset agents 的原始 souls |
-| `52314f2` | fix(soul) | Soul 改為 1:1 對應 Agent（不再全域串接） |
-| `5d77b46` | fix(team) | 持久化 `active_sessions`，阻止無限制 context 累積 |
-| `d489a30` | merge | 合併遠端 master |
-| `53a7598` | feat | 後端 session 管理 + 排程 + multi-layer memory context builder |
-| `14be0c1` | feat | Claude service + 前端 team/session 管理基礎架構 |
+| 項目 | 狀態 | Handler | 備註 |
+|------|------|---------|------|
+| P1-B1：解析 agent frontmatter (skills/memory/mcp/soul/output_memory) | ✅ **已完成** | `_agent_dict()` | `soul` 欄位已修正：讀 frontmatter，fallback 到 agent id |
+| P1-B2：`GET /api/agents/:id` | ✅ **已完成** | `handle_agent_get` | 回傳 `_agent_dict()` 的完整結構 |
+| P1-B3：`PUT /api/agents/:id` | ✅ **已完成** | `handle_agent_put` | 更新 name/description/soul/skills/memory/mcp/output_memory/tools |
+| P1-M1：`POST /api/agents` | ✅ **已完成** | `handle_agent_post` | 建立空白 `.md` 模板，含完整 frontmatter |
+| P1-M2：`DELETE /api/agents/:id` | ✅ **已完成** | `handle_agent_delete` | 刪除 agent `.md` 檔 |
+| P1-S1：解析 skill frontmatter (mcp/memory/output_memory) | ✅ **已完成** | `_skill_dict_from_file/dir()` | 支援 `.md` 檔案和 dir 兩種格式 |
+| P1-S2：`GET /api/skills/:id` | ✅ **已完成** | `handle_skill_get` | 支援 file/dir 兩種 skill 格式 |
+| P1-S3：`PUT /api/skills/:id` | ✅ **已完成** | `handle_skill_put` | 更新 description/mcp/memory/output_memory |
 
-### 2.2 Part A — Session Pool 遷移（最重要的架構改動）
+### P2 — Teams 定義（後端）
 
-**目標**：把 Team Chat 的每次對話從「spawn 新 `claude -p` 子程序 → --resume 重建 context」改為「複用長駐 SDK 連線」。
+| 項目 | 狀態 | Handler | 備註 |
+|------|------|---------|------|
+| P2-B1：`GET /api/teams` | ✅ **已完成** | `handle_teams` | 讀取 `~/.claude/teams/*.yaml` |
+| P2-B1：`POST /api/teams` | ✅ **已完成** | `handle_team_post` | 建立新 team YAML |
+| P2-B1：`GET /api/teams/:id` | ✅ **已完成** | `handle_team_get` | 回傳 team 完整資訊 |
+| P2-B1：`PUT /api/teams/:id` | ✅ **已完成** | `handle_team_put` | 更新 team YAML |
+| P2-B1：`DELETE /api/teams/:id` | ✅ **已完成** | `handle_team_delete` | 刪除 team YAML |
+| P2-B2：member input_memory/output_memory 解析與寫入 | ✅ **已完成**（本次修補）| `_team_dict()` + `_execute_team_run()` | per-member memory routing 完整實作 |
 
-**已完成的遷移點**：
-- ✅ `handle_team_chat` → `run_single_agent` 已改為使用 `SessionPool`
-- ✅ 新增 [session_pool.py](file:///c:/Users/mycena/claude-desktop/backend/session_pool.py)（30 分鐘 idle evict、key-based 連線池）
-- ✅ fallback 機制：SDK 不可用或出錯時，退回 legacy 子程序模式
-- ✅ `GET /api/status` 新增 `pool_size` 欄位供外部驗證
-- ✅ 實測驗證：同一 client_id 的重複 request 不會增長 pool size
+### Phase 3（序列執行 + SSE 串流）
 
-**尚未遷移的兩個點**（Part A 後續）：
-- ❌ `handle_chat`（單一 Agent 對話主路徑）— 風險較高
-- ❌ `handle_team_execute`（工具使用 + 互動式權限核准）— 涉及 `can_use_tool` callback
-
-### 2.3 Part B — Agent Teams 調查結論
-
-> [!IMPORTANT]
-> **重大發現**：`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` 在 `-p` 非互動模式下 **不會** 觸發 Agent Teams。`~/.claude/teams/` 底下沒有產生新的 session 目錄。結論：**Agent Teams 目前無法透過 headless 架構驅動**。
+| 項目 | 狀態 | 備註 |
+|------|------|------|
+| `POST /api/team/run` | ✅ **已完成** | `handle_team_run_post` |
+| `GET /api/team/run/:id` | ✅ **已完成** | `handle_team_run_get` |
+| `GET /api/team/run/:id/stream` | ✅ **已完成** | SSE 串流，含 ping keepalive |
+| `DELETE /api/team/run/:id` | ✅ **已完成** | Cancel + evict |
+| `POST /api/hr/dispatch` | ✅ **已完成** | HR Agent JSON plan |
 
 ---
 
-## 三、未提交的變更（⚠️ 換機前必須處理）
+## 三、本次修補內容（2026-07-02 15:39）
 
-> [!CAUTION]
-> 目前有 **2 個檔案已修改但未 commit**，換機前務必 commit 或 stash push 後 push 到 remote。
+### Fix 1：`_agent_dict` — soul 欄位讀 frontmatter
 
+```diff
+- "soul": aid,   # 以前硬編碼為 agent id，前端啟動 Agent 時切換 Soul 永遠找不到正確的 soul
++ soul_val = fm.get("soul", "") or aid
++ "soul": soul_val,
 ```
-modified:   backend/main.py          (560 行差異：+369 / -194)
-modified:   backend/session_pool.py  (+3 行：新增 keys() 方法)
+
+### Fix 2：`_team_dict` — members 解析補上 input_memory/output_memory
+
+```diff
+- members.append({"agent": m.get("agent"), "role": m.get("role")})
++ members.append({
++     "agent":         m.get("agent", ""),
++     "role":          m.get("role", ""),
++     "input_memory":  m.get("input_memory", []),  # P2-B2
++     "output_memory": m.get("output_memory", []),  # P2-B2
++ })
 ```
 
-### 未提交變更的內容摘要
+### Fix 3：`_execute_team_run` — memory 中繼使用 per-member 宣告
 
-#### [main.py](file:///c:/Users/mycena/claude-desktop/backend/main.py) — `handle_team_execute` 遷移到 pooled 模式
-
-這是 **Part A 的第三個遷移點**（`handle_team_execute`），主要改動：
-
-1. **新增 `_pooled_exec()` 內部函式**：透過 `session_pool` 送出 query，重用長駐連線
-2. **`can_use_tool` callback 實作**：權限核准改為透過 `PermissionResultAllow` / `PermissionResultDeny` 而非 subprocess stdin 寫入
-3. **串流輸出**：pooled 模式下以 `AssistantMessage` / `TextBlock` / `ResultMessage` 接收 SSE 事件
-4. **fallback 路徑**：pooled 失敗時 evict 並退回 `_legacy_exec`
-5. **stop 路由加入 pool evict**：`handle_chat_stop` 新增清除相關 pool key 的邏輯
-
-#### [session_pool.py](file:///c:/Users/mycena/claude-desktop/backend/session_pool.py) — 新增 `keys()` 方法
-
-```python
-def keys(self) -> list[str]:
-    return list(self._clients.keys())
+```diff
+- read_keys = agent_info.get("memory", [])   # 只讀 agent 自身的 memory
++ step_input_keys  = step.get("input_memory",  []) or agent_info.get("memory", [])
++ step_output_keys = step.get("output_memory", []) or agent_info.get("output_memory", [])
 ```
+> 優先使用 Team YAML 裡 per-member 宣告，fallback 到 Agent frontmatter 的 memory 設定。
+
+### Fix 4：`_write_team_yaml` fallback — 序列化 nested list
+
+修正了 PyYAML 不可用時，member 的 `input_memory`/`output_memory` list 欄位會被直接 `str()` 成 Python list 格式的問題。
+
+### Fix 5：`handle_team_run_post` — steps 帶入 input/output_memory
+
+Team run 的 steps 現在會複製 member 的 `input_memory`/`output_memory`，讓 `_execute_team_run` 能正確路由。
+
+---
+
+## 四、未提交的進行中工作（Part A）
 
 > [!WARNING]
-> 這些變更尚未經過實測（因為 hit session limit）。換機後首要任務是驗證此遷移。
+> `handle_team_execute` 的 pooled SDK 遷移已 commit（`c3584bb`），但**尚未驗證**。
 
----
-
-## 四、換機操作步驟
-
-### 4.1 在舊電腦上（離開前做）
-
-```bash
-cd claude-desktop
-
-# 方案 A：直接 commit（推薦）
-git add backend/main.py backend/session_pool.py
-git commit -m "wip(team): migrate handle_team_execute to pooled SDK connections (untested)"
-git push origin master
-
-# 方案 B：stash 推送（如果不想留 WIP commit）
-git stash push -m "Part A: handle_team_execute pooled migration (untested)"
-# stash 無法 push 到 remote，需改用 commit 方式
-```
-
-### 4.2 在新電腦上
-
-```bash
-git clone https://github.com/Chester930/claude-desktop.git
-cd claude-desktop
-
-# 安裝依賴
-pip install -r backend/requirements.txt
-cd frontend && npm install && npm run build && cd ..
-npm install
-
-# 如果用了 stash（不推薦）
-# git stash pop
-```
+換機後第一步：
+1. 啟動 Team → 觸發工具使用 → 確認 `can_use_tool` callback 正常
+2. 確認 `handle_chat_stop` 的 pool evict 有效
 
 ---
 
@@ -136,87 +113,97 @@ npm install
 
 ### 🔴 P0 — 立即要做（Part A 收尾）
 
-- [ ] **驗證 `handle_team_execute` 的 pooled 遷移**（未提交的 main.py 變更）
-  - 啟動 Team → 觸發工具使用 → 確認 `can_use_tool` callback 正確收到權限請求
-  - 確認 SSE 串流輸出正常
-  - 確認 fallback 路徑可用
-  - 確認 `handle_chat_stop` 的 pool evict 有效
+- [ ] **驗證 `handle_team_execute` pooled 遷移**
+- [ ] **遷移 `handle_chat`**（Part A 最後一個遷移點，風險最高）
 
-- [ ] **遷移 `handle_chat`**（Part A 第二個遷移點）
-  - 這是單一 Agent 的主對話路徑，風險最高
-  - 需要處理：file attachments、system prompt injection、streaming
-  - 建議策略：先 pooled，失敗退回 legacy
+### 🟡 P1 — 前端部分（全部 `[ ]` 尚未開始）
 
-### 🟡 P1 — 短期（ROADMAP Phase 1 — Agent Mapping）
+後端 API 已 ready，前端可以直接接：
 
-Phase 1 共 24 個項目，全部 `[ ]` 尚未開始，詳見 [ROADMAP.md](file:///c:/Users/mycena/claude-desktop/ROADMAP.md) 第 221-309 行。
+- [ ] **P1-F1**：Agent 卡片顯示連結摘要（Soul｜Skills N｜MCP N｜Mem N）
+- [ ] **P1-F2**：「啟動 Agent」按鈕：注入 `--agent <name>` + 切換 Soul + 高亮 Skills + 啟動 MCPs + 勾選 Memory
+- [ ] **P1-F3**：Agent 詳細面板（展開查看 / 編輯連結）
+- [ ] **P1-F4**：Skills 頁籤：已連結的 skill 顯示 `● agent` 標記
+- [ ] **P1-F5**：Memory 頁籤：agent 關聯的 key 自動勾入上下文
+- [ ] **P1-F6**：MCP 頁籤：agent 需要的 MCP 顯示「此 Agent 需要」提示
+- [ ] **P1-M3~M9**：Agent 編輯器 Modal（完整 CRUD UI）
+- [ ] **P1-S4~S9**：Skill 編輯器 Modal（MCP/Memory 多選 UI）
 
-重點項目：
-- [ ] P1-B1：解析 agent frontmatter 的 `skills / memory / mcp / soul / output_memory`
-- [ ] P1-F2：「啟動 Agent」按鈕的一鍵切換行為
-- [ ] P1-M3~M8：Agent 編輯器 Modal
+### 🟢 P2 — Teams 前端 UI
 
-### 🟢 P2 — 中期（Phase 2-3 — Teams + Multi-Agent 執行）
+後端 API 已全 ready，前端可以直接接：
 
-- [ ] P2：Teams UI 管理（CRUD、拖曳排序）
-- [ ] P3：Multi-Agent 序列流水線（後端子程序管理 + 任務狀態 DB）
-
-### 🔵 P3 — 長期（Phase 4 — HR Agent 自動組隊）
-
-- [ ] P4：HR Agent orchestrator + 動態 Team 組建
+- [ ] **P2-F1**：右側面板新增 Teams 頁籤
+- [ ] **P2-F2**：Teams 列表（卡片：名稱、成員數、描述）
+- [ ] **P2-F3**：Team 建立 / 編輯 UI（成員排序、per-member memory 設定）
+- [ ] **P2-F4**：「發任務給 Team」入口
+- [ ] **P2-F5**：任務執行進度面板（SSE 串流已就緒）
 
 ---
 
 ## 六、已知問題與技術債
 
-| # | 類別 | 問題 | 備註 |
-|---|------|------|------|
-| 1 | 架構 | `main.py` 已達 4216 行 / 176KB | 急需拆分模組（routes、services、models） |
-| 2 | 限制 | Agent Teams 無法 headless 驅動 | Part B 結論，需等 Anthropic 支援或找替代方案 |
-| 3 | 測試 | `handle_team_execute` pooled 遷移未經實測 | 換機後第一優先 |
-| 4 | 依賴 | `claude-agent-sdk` 為選用依賴 | 需要 fallback 測試覆蓋 |
-| 5 | UI | Agent/Skill/Team 編輯器已有 description 欄位，但 frontmatter 解析尚未完整 | Phase 1 範圍 |
+| # | 類別 | 問題 |
+|---|------|------|
+| 1 | 架構 | `main.py` 已達 4200+ 行，急需模組化 |
+| 2 | 限制 | Agent Teams 無法 headless 驅動（Part B 結論） |
+| 3 | 測試 | `handle_team_execute` pooled 遷移未實測 |
 
 ---
 
-## 七、專案檔案結構速查
+## 七、換機操作步驟
 
-```
-claude-desktop/
-├── electron/              # Electron 主程序 + preload
-├── frontend/              # Angular 22 前端
-│   └── src/app/
-│       ├── app.ts         # 主元件
-│       ├── app.html       # 模板
-│       ├── app.scss       # 深色主題樣式
-│       ├── claude.service.ts  # API client
-│       └── markdown.pipe.ts   # Markdown 渲染 pipe
-├── backend/
-│   ├── main.py            # ⚠️ 所有 API routes（4216 行，待拆分）
-│   ├── session_pool.py    # SDK 連線池（Part A 新增）
-│   ├── database.py        # SQLite + FTS5
-│   ├── watcher.py         # 檔案變更監控
-│   └── presets/           # 預設 agents/skills/souls
-├── tests/                 # Pytest 測試
-├── ROADMAP.md             # Phase 1-4 路線圖（48 項目）
-├── docker-compose.yml     # Docker 服務編排
-├── start.bat / start.sh   # 一鍵啟動腳本
-└── .claude/               # Claude Code 工作區設定
+### 在新電腦上
+
+```bash
+git clone https://github.com/Chester930/claude-desktop.git
+cd claude-desktop
+
+# 安裝依賴
+pip install -r backend/requirements.txt
+pip install claude-agent-sdk   # Part A pooled SDK 需要
+
+cd frontend && npm install && npm run build && cd ..
+npm install
+
+# 啟動（開發模式）
+.\start.bat --dev
 ```
 
----
+### 開發環境需求
 
-## 八、開發環境需求
-
-| 工具 | 版本 | 備註 |
-|------|------|------|
-| Node.js | ≥ 22.22.3 | 前端建置 + Electron |
-| Python | ≥ 3.10 | 後端 |
-| Claude CLI | 最新版 | `npm i -g @anthropic-ai/claude-code` |
-| claude-agent-sdk | 最新版 | `pip install claude-agent-sdk`（選用，Part A 需要） |
-| Docker Desktop | 最新版 | 測試 LINE Bot 時需要 |
+| 工具 | 版本 |
+|------|------|
+| Node.js | ≥ 22.22.3 |
+| Python | ≥ 3.10 |
+| Claude CLI | 最新版 |
+| claude-agent-sdk | 最新版（選用） |
 
 ---
+
+## 八、後端 API 速查
+
+| 方法 | 路徑 | Handler | 狀態 |
+|------|------|---------|------|
+| GET | `/api/agents` | `handle_agents` | ✅ |
+| POST | `/api/agents` | `handle_agent_post` | ✅ |
+| GET | `/api/agents/:id` | `handle_agent_get` | ✅ |
+| PUT | `/api/agents/:id` | `handle_agent_put` | ✅ |
+| DELETE | `/api/agents/:id` | `handle_agent_delete` | ✅ |
+| GET | `/api/agents/registry` | `handle_agents_registry` | ✅ |
+| GET | `/api/skills` | `handle_skills` | ✅ |
+| GET | `/api/skills/:id` | `handle_skill_get` | ✅ |
+| PUT | `/api/skills/:id` | `handle_skill_put` | ✅ |
+| GET | `/api/teams` | `handle_teams` | ✅ |
+| POST | `/api/teams` | `handle_team_post` | ✅ |
+| GET | `/api/teams/:id` | `handle_team_get` | ✅ |
+| PUT | `/api/teams/:id` | `handle_team_put` | ✅ |
+| DELETE | `/api/teams/:id` | `handle_team_delete` | ✅ |
+| POST | `/api/team/run` | `handle_team_run_post` | ✅ |
+| GET | `/api/team/run/:id` | `handle_team_run_get` | ✅ |
+| GET | `/api/team/run/:id/stream` | `handle_team_run_stream` | ✅ SSE |
+| DELETE | `/api/team/run/:id` | `handle_team_run_cancel` | ✅ |
+| POST | `/api/hr/dispatch` | `handle_hr_dispatch` | ✅ |
 
 > [!TIP]
-> **快速恢復開發**：clone → 安裝依賴 → `.\start.bat --dev` → 驗證 pooled migration → 繼續 Phase 1。
+> 後端已就緒，接下來的工作幾乎全在前端 Angular。換機後直接開 `frontend/src/app/` 就可以開始。

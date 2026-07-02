@@ -1817,11 +1817,16 @@ def _agent_dict(f: Path) -> dict:
     aid = f.stem
     fm = _parse_full_frontmatter(f)
 
+    # P1-B1: soul reads from frontmatter; fallback to agent id for backward compat
+    soul_val = fm.get("soul", "")
+    if not soul_val or not isinstance(soul_val, str):
+        soul_val = aid
+
     return {
         "id":            aid,
         "name":          fm.get("name", aid),
         "description":   fm.get("description", _desc_from_md_file(f)),
-        "soul":          aid,
+        "soul":          soul_val,
         "skills":        fm.get("skills", []) if isinstance(fm.get("skills"), list) else [],
         "memory":        fm.get("memory", []) if isinstance(fm.get("memory"), list) else [],
         "mcp":           fm.get("mcp", [])    if isinstance(fm.get("mcp"), list)    else [],
@@ -2152,7 +2157,13 @@ def _write_team_yaml(path: Path, data: dict) -> None:
         import yaml as _yaml
         path.write_text(_yaml.dump(data, allow_unicode=True, default_flow_style=False), encoding="utf-8")
     except Exception:
-        lines = []
+        # Manual YAML fallback – handles nested dicts whose values may be lists
+        def _val_str(v) -> str:
+            if isinstance(v, list):
+                return "[" + ", ".join(str(x) for x in v) + "]"
+            return str(v)
+
+        lines: list[str] = []
         for key, val in data.items():
             if isinstance(val, list):
                 if val:
@@ -2162,7 +2173,7 @@ def _write_team_yaml(path: Path, data: dict) -> None:
                             first = True
                             for k, v in item.items():
                                 prefix = "  - " if first else "    "
-                                lines.append(f"{prefix}{k}: {v}")
+                                lines.append(f"{prefix}{k}: {_val_str(v)}")
                                 first = False
                         else:
                             lines.append(f"  - {item}")
@@ -2182,10 +2193,18 @@ def _team_dict(f: Path) -> dict:
     members = []
     for m in members_raw:
         if isinstance(m, dict):
-            members.append({"agent": m.get("agent", ""), "role": m.get("role", "")})
+            # P2-B2: preserve input_memory / output_memory per member
+            mem_in  = m.get("input_memory", [])
+            mem_out = m.get("output_memory", [])
+            members.append({
+                "agent":         m.get("agent", ""),
+                "role":          m.get("role", ""),
+                "input_memory":  mem_in  if isinstance(mem_in,  list) else [],
+                "output_memory": mem_out if isinstance(mem_out, list) else [],
+            })
         elif isinstance(m, str):
-            members.append({"agent": m, "role": ""})
-    
+            members.append({"agent": m, "role": "", "input_memory": [], "output_memory": []})
+
     # 預設首個成員為組長
     default_leader = members[0]["agent"] if members else ""
     return {
@@ -2400,11 +2419,14 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         # 分層 team memory 注入
         mem_ctx = build_team_memory_context(team_id, all_member_ids, agent_id, cwd)
 
-        # 舊式 KV memory（向下相容，保留原有 memory 欄位讀取）
-        legacy_memory: list[str] = []
-        read_keys = agent_info.get("memory", [])
+        # P2-B2: per-member input_memory keys (from team YAML) take precedence;
+        # fallback to agent-level memory keys (from agent frontmatter)
         mem_dir = _memory_dir()
-        for key in read_keys:
+        step_input_keys  = step.get("input_memory",  []) or agent_info.get("memory", [])
+        step_output_keys = step.get("output_memory", []) or agent_info.get("output_memory", [])
+
+        legacy_memory: list[str] = []
+        for key in step_input_keys:
             key_file = mem_dir / f"{key}.md"
             if key_file.exists():
                 try:
@@ -2435,11 +2457,10 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         prev_output = output
         _tr_emit(run_id, {"type": "step_done", "step": i})
 
-        # 舊式 KV output_memory（向下相容）
-        write_keys = agent_info.get("output_memory", [])
-        if write_keys:
+        # P2-B2: write output to per-member output_memory keys
+        if step_output_keys:
             mem_dir.mkdir(parents=True, exist_ok=True)
-            for key in write_keys:
+            for key in step_output_keys:
                 try:
                     (mem_dir / f"{key}.md").write_text(output, encoding="utf-8")
                 except Exception:
@@ -2503,7 +2524,15 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
         "task":    task,
         "status":  "running",
         "steps": [
-            {"agent": m["agent"], "role": m["role"], "status": "pending", "output": ""}
+            {
+                "agent":         m["agent"],
+                "role":          m["role"],
+                # P2-B2: carry per-member memory routing into run state
+                "input_memory":  m.get("input_memory",  []) if isinstance(m, dict) else [],
+                "output_memory": m.get("output_memory", []) if isinstance(m, dict) else [],
+                "status":        "pending",
+                "output":        "",
+            }
             for m in team["members"]
         ],
         "summary": "",
