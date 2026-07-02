@@ -109,6 +109,8 @@ def _parse_yaml_list(lines: list, start: int):
             m_kv = _re.match(r'^([\w][\w-]*):\s*(.*)', rest)
             if m_kv:
                 k, v = m_kv.group(1), m_kv.group(2).strip().strip("\"'")
+                if v.startswith("[") and v.endswith("]"):
+                    v = [x.strip().strip("\"'") for x in v[1:-1].split(",") if x.strip()]
                 current_item = {k: v}
             else:
                 items.append(rest.strip("\"'"))
@@ -117,6 +119,8 @@ def _parse_yaml_list(lines: list, start: int):
             m_kv = _re.match(r'^\s*([\w][\w-]*):\s*(.*)', line)
             if current_item is not None and m_kv and base_indent is not None and indent > base_indent:
                 k, v = m_kv.group(1), m_kv.group(2).strip().strip("\"'")
+                if v.startswith("[") and v.endswith("]"):
+                    v = [x.strip().strip("\"'") for x in v[1:-1].split(",") if x.strip()]
                 current_item[k] = v
                 i += 1
             else:
