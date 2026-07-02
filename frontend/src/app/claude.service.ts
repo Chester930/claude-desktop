@@ -41,7 +41,12 @@ export interface ChatMessage {
   hasExecuted?: boolean;
 }
 
-export interface TeamMember { agent: string; role: string; }
+export interface TeamMember {
+  agent: string;
+  role: string;
+  input_memory?: string[];   // P2-B2: per-member memory keys to read
+  output_memory?: string[];  // P2-B2: per-member memory keys to write
+}
 export interface Team { id: string; name: string; description: string; leader?: string; members: TeamMember[]; execution_mode?: 'parallel' | 'sequential'; }
 export interface TeamRunStep {
   agent: string;
