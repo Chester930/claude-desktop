@@ -1559,23 +1559,6 @@ def _agent_dict(f: Path) -> dict:
     aid = f.stem
     fm = _parse_full_frontmatter(f)
 
-    # 確保每個 Agent 都有對應的 soul 檔案，沒有就自動建立空白檔案
-    soul_file = SOULS_DIR / f"{aid}.md"
-    if not soul_file.exists():
-        try:
-            SOULS_DIR.mkdir(parents=True, exist_ok=True)
-            soul_file.write_text("", encoding="utf-8")
-        except Exception:
-            pass
-
-    # 確保 Agent frontmatter 中的 soul 屬性有設定且為 aid
-    if not fm.get("soul") or fm.get("soul") != aid:
-        fm["soul"] = aid
-        try:
-            _write_frontmatter(f, fm)
-        except Exception:
-            pass
-
     return {
         "id":            aid,
         "name":          fm.get("name", aid),
@@ -1591,31 +1574,36 @@ def _agent_dict(f: Path) -> dict:
 
 # ── Agent CRUD ────────────────────────────────────────────────────────────────
 
+async def _agent_dict_safe(f: Path) -> "dict | None":
+    try:
+        return await asyncio.to_thread(_agent_dict, f)
+    except Exception:
+        return None
+
+
 async def handle_agents(request: web.Request) -> web.Response:
     agents = []
     if AGENTS_DIR.exists():
-        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
-            try:
-                agents.append(_agent_dict(f))
-            except Exception:
-                pass
+        files = sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower())
+        results = await asyncio.gather(*[_agent_dict_safe(f) for f in files])
+        agents = [d for d in results if d is not None]
     return web.json_response(agents)
 
 
 async def handle_agents_registry(request: web.Request) -> web.Response:
     registry = []
     if AGENTS_DIR.exists():
-        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
-            try:
-                d = _agent_dict(f)
-                registry.append({
-                    "id": f.stem,
-                    "name": d.get("name", f.stem),
-                    "description": d.get("description", ""),
-                    "skills": d.get("skills", [])
-                })
-            except Exception:
-                pass
+        files = sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower())
+        results = await asyncio.gather(*[_agent_dict_safe(f) for f in files])
+        for f, d in zip(files, results):
+            if d is None:
+                continue
+            registry.append({
+                "id": f.stem,
+                "name": d.get("name", f.stem),
+                "description": d.get("description", ""),
+                "skills": d.get("skills", [])
+            })
     return web.json_response(registry)
 
 
