@@ -378,3 +378,27 @@ def _team_dict(f: Path) -> dict:
         "members":        members,
         "execution_mode": raw.get("execution_mode", "parallel"),
     }
+
+
+def safe_kill_process(proc) -> None:
+    """Safely kill a process and its process tree, especially on Windows."""
+    if proc is None:
+        return
+    import platform
+    import subprocess
+    try:
+        if platform.system() == "Windows":
+            # Forcefully terminate the process and all child processes it spawned
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=0x08000000, # CREATE_NO_WINDOW
+            )
+        else:
+            proc.kill()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass

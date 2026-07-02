@@ -19,7 +19,7 @@ from pathlib import Path
 from aiohttp import web
 
 # Helpers and DB imports
-from helpers import _team_dict, _write_team_yaml, _agent_dict
+from helpers import _team_dict, _write_team_yaml, _agent_dict, safe_kill_process
 from database import (
     _memory_dir,
     _team_memory_dir,
@@ -153,10 +153,7 @@ async def _agent_run_capture(
 
         async for line in proc.stdout:
             if _team_runs.get(run_id, {}).get("status") == "cancelled":
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+                safe_kill_process(proc)
                 break
 
             raw = line.decode("utf-8", errors="replace").strip()
@@ -473,10 +470,7 @@ async def handle_team_run_cancel(request: web.Request) -> web.Response:
         _tr_emit(run_id, {"type": "cancelled", "text": "cancelled"})
         proc = _team_run_processes.get(run_id)
         if proc:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            safe_kill_process(proc)
     return web.json_response({"ok": True})
 
 

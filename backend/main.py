@@ -139,7 +139,7 @@ _usage_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
-from helpers import _read_agent_body, _team_dict
+from helpers import _read_agent_body, _team_dict, safe_kill_process
 
 _CLI_NOISE_PATTERNS = ("no stdin data received",)
 
@@ -584,10 +584,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
         finally:
             active_procs.pop(client_id, None)
             if proc and proc.returncode is None:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+                safe_kill_process(proc)
 
     try:
         if use_pool:
@@ -1212,10 +1209,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             finally:
                 active_procs.pop(proc_key, None)
                 if proc and proc.returncode is None:
-                    try:
-                        proc.terminate()
-                    except Exception:
-                        pass
+                    safe_kill_process(proc)
 
             await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
             return "".join(collected_output)
@@ -1527,10 +1521,7 @@ async def handle_chat_stop(request: web.Request) -> web.Response:
         for k in keys_to_kill:
             proc = active_procs.pop(k, None)
             if proc:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                safe_kill_process(proc)
 
         if HAS_AGENT_SDK and _team_pool is not None:
             pool_keys_to_evict = [
@@ -2481,8 +2472,7 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
         else:
             proc = _mcp_procs.pop(name, None)
             if proc:
-                try: proc.kill()
-                except Exception: pass
+                safe_kill_process(proc)
 
     # ── START / RESTART phase 2: launch ──────────────────────────────────────
     if action in ("start", "restart"):
@@ -2674,10 +2664,7 @@ async def _tg_run_claude(prompt: str) -> str:
         return f"[Error: {e}]"
     finally:
         if proc and proc.returncode is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            safe_kill_process(proc)
 
 async def _telegram_poll() -> None:
     cfg  = _tg_state
@@ -3122,17 +3109,11 @@ def build_app() -> web.Application:
         for k in list(active_procs.keys()):
             proc = active_procs.pop(k, None)
             if proc:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                safe_kill_process(proc)
         for name in list(_mcp_procs.keys()):
             proc = _mcp_procs.pop(name, None)
             if proc:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                safe_kill_process(proc)
 
         if HAS_AGENT_SDK and _team_pool is not None:
             try:
@@ -3245,10 +3226,7 @@ async def run_schedule_prompt(schedule: dict) -> None:
     except asyncio.TimeoutError:
         print(f"[schedule] Prompt timed out after {_SCHEDULE_TIMEOUT}s")
         if proc and proc.returncode is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            safe_kill_process(proc)
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
 
