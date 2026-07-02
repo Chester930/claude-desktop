@@ -2298,6 +2298,12 @@
           <label class="editor-label">名稱
             <input class="editor-input" [value]="agentEditorData().name || ''" (input)="agentEditorData.set({...agentEditorData(), name: $any($event.target).value})" [disabled]="!agentEditorIsNew()" placeholder="my-agent">
           </label>
+          <label class="editor-label">說明
+            <textarea class="editor-input editor-textarea" rows="3"
+              [value]="agentEditorData().description || ''"
+              (input)="agentEditorData.set({...agentEditorData(), description: $any($event.target).value})"
+              placeholder="這個 Agent 的用途"></textarea>
+          </label>
           <label class="editor-label">靈魂人格設定 (Soul Persona)
             <textarea class="memory-editor"
               [(ngModel)]="agentEditorSoulContent"
