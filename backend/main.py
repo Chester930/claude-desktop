@@ -27,6 +27,7 @@ except ImportError:
     import backend.database as _db_mod
 
 import sys
+import platform
 
 import types
 
@@ -809,6 +810,10 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
 
 def launch_windows_terminal_monitor(project_path: str, members: list):
     if not members:
+        return
+    # wt/powershell only exist on native Windows -- this backend usually runs inside
+    # a Linux Docker container (dev mode), where the command below fails every call.
+    if platform.system() != "Windows":
         return
     
     # 修正 1：先預建所有 log 檔案，防止 PowerShell Get-Content -Wait 因為檔案不存在而報錯
