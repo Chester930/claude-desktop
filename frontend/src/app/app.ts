@@ -278,9 +278,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return '● 運行中 · 已啟用';
   }
 
-  startMcp(name: string) { this.claude.startMcp(name).subscribe(); }
-  stopMcp(name: string) { this.claude.stopMcp(name).subscribe(); }
-  restartMcp(name: string) { this.claude.restartMcp(name).subscribe(); }
+  startMcp(name: string) { this.claude.startMcp(name).subscribe({ error: (e) => this.showToast(`MCP 啟動失敗: ${e.message ?? e}`, 'error') }); }
+  stopMcp(name: string) { this.claude.stopMcp(name).subscribe({ error: (e) => this.showToast(`MCP 停止失敗: ${e.message ?? e}`, 'error') }); }
+  restartMcp(name: string) { this.claude.restartMcp(name).subscribe({ error: (e) => this.showToast(`MCP 重啟失敗: ${e.message ?? e}`, 'error') }); }
 
   private saveAgentSkillsMap() {
     localStorage.setItem('claude_desktop_agent_skills', JSON.stringify(this.agentSkillsMap()));
@@ -617,13 +617,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private doCloseTab(tabId: string) {
-    const idx = this.chatTabs().findIndex(t => t.id === tabId);
+    const tabs = this.chatTabs();
+    const idx = tabs.findIndex(t => t.id === tabId);
     const isActive = tabId === this.activeChatId();
+    const next = tabs[idx > 0 ? idx - 1 : 1];
     this.chatTabs.update(t => t.filter(x => x.id !== tabId));
-    if (isActive) {
-      const next = this.chatTabs()[Math.max(0, idx - 1)];
-      if (next) this.switchChatTab(next.id);
-    }
+    if (isActive && next) this.switchChatTab(next.id);
   }
 
   // ── 畫布：網格比例與拖放 ──────────────────────────────────
@@ -1244,7 +1243,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   stopStreaming() {
     if (this.stopFn) { this.stopFn(); this.stopFn = null; }
-    this.claude.stopChat().subscribe();
+    this.claude.stopChat(this.activeChat?.clientId).subscribe();
     this.isStreaming.set(false);
     this.messages.update(msgs => {
       const copy = [...msgs];
@@ -1557,7 +1556,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   deleteAgent(id: string) {
-    this.claude.deleteAgent(id).subscribe({ next: () => this.claude.getAgents().subscribe(a => this.agents.set(a)) });
+    this.claude.deleteAgent(id).subscribe({
+      next: () => this.claude.getAgents().subscribe(a => this.agents.set(a)),
+      error: (e) => this.showToast(`刪除 Agent 失敗: ${e.message ?? e}`, 'error'),
+    });
   }
 
   activateAgent(agent: Agent) {
@@ -1667,7 +1669,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   saveSkillEditor() {
     const d = this.skillEditorData();
     if (!d.id) return;
-    this.claude.updateSkill(d.id, { mcp: d.mcp, memory: d.memory, output_memory: d.output_memory })
+    this.claude.updateSkill(d.id, { description: d.description, mcp: d.mcp, memory: d.memory, output_memory: d.output_memory })
       .subscribe({ next: () => { this.skillEditorOpen.set(false); this.claude.getSkills().subscribe(s => this.skills.set(s)); } });
   }
 
@@ -1705,7 +1707,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.teamEditorData.set({ ...team, members: team.members.map(m => ({ ...m })) });
       this.teamEditorIsNew.set(false);
     } else {
-      this.teamEditorData.set({ name: '', description: '', members: [] });
+      this.teamEditorData.set({ name: '', description: '', members: [], execution_mode: 'parallel' });
       this.teamEditorIsNew.set(true);
     }
     this.teamEditorOpen.set(true);
@@ -1863,6 +1865,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const team = this.teamRunTarget();
     const task = this.teamRunTask().trim();
     if (!team || !task) return;
+    // 取消並清理上一個尚未結束的 SSE 連線
+    if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
     this.teamRunLoading.set(true);
     this.expandedOutputs.set([]);
 
@@ -1882,8 +1886,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this._teamRunStopFn = this.claude.streamTeamRun(
           runId,
           (ev) => this._handleTeamRunEvent(ev),
-          () => {},
-          (e) => { console.error('team run error', e); }
+          () => { this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'done' } : s); },
+          (e) => { console.error('team run error', e); this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'error' } : s); }
         );
       },
       error: () => this.teamRunLoading.set(false),
@@ -1921,6 +1925,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   closeTeamRun() {
+    const st = this.teamRunState();
+    if (st?.id && st.status === 'running') this.claude.cancelTeamRun(st.id).subscribe();
     if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
     this.teamRunOpen.set(false);
   }
@@ -2014,6 +2020,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const task = this.inputText.trim();
     if (!plan || !task) return;
 
+    if (this._teamRunStopFn) { this._teamRunStopFn(); this._teamRunStopFn = null; }
     this.hrPlanOpen.set(false);
     this.teamRunTarget.set({
       id: '',
@@ -2042,8 +2049,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this._teamRunStopFn = this.claude.streamTeamRun(
           runId,
           (ev) => this._handleTeamRunEvent(ev),
-          () => {},
-          (e) => { console.error('team run error', e); }
+          () => { this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'done' } : s); },
+          (e) => { console.error('team run error', e); this.teamRunState.update(s => s?.status === 'running' ? { ...s, status: 'error' } : s); }
         );
       },
       error: (err) => {
@@ -2062,6 +2069,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (msgCount > 0 && !confirm(`確定要清空此對話嗎？（${msgCount} 則訊息將被刪除，此操作無法復原）`)) {
       return;
     }
+    // 呼叫後端清除該 Tab 的 Session 快取，防止重啟對話時又 resume 舊歷史
+    this.claude.clearChat(tab?.clientId).subscribe();
+
     this.chatTabs.update(tabs => tabs.map(t =>
       t.id === tabId ? { ...t, messages: [], label: '新對話', selectedAgent: '', teamId: undefined } : t
     ));
@@ -2615,7 +2625,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (eAPI?.onUpdateReady) eAPI.onUpdateReady(() => { this.updateReady.set(true); this.updateProgress.set(100); });
   }
 
-  ngOnDestroy() { clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); clearInterval(this.usageTimer); }
+  ngOnDestroy() {
+    clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); clearInterval(this.usageTimer);
+    this.stopFn?.(); this._teamRunStopFn?.();
+  }
 
   // T03 — Ctrl+V 截圖貼上
   @HostListener('paste', ['$event'])
@@ -2793,28 +2806,30 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   addSchedule() {
     if (!this.newSchedulePrompt.trim() || !this.newScheduleCron.trim()) return;
-    this.claude.addSchedule(this.newSchedulePrompt, this.newScheduleCron).subscribe(() => {
-      this.newSchedulePrompt = '';
-      this.newScheduleCron = '';
-      this.claude.getSchedules().subscribe(s => this.schedules.set(s));
+    this.claude.addSchedule(this.newSchedulePrompt, this.newScheduleCron).subscribe({
+      next: () => { this.newSchedulePrompt = ''; this.newScheduleCron = ''; this.claude.getSchedules().subscribe(s => this.schedules.set(s)); },
+      error: (e) => this.showToast(`新增排程失敗: ${e.message ?? e}`, 'error'),
     });
   }
 
   deleteSchedule(id: string) {
-    this.claude.deleteSchedule(id).subscribe(() => {
-      this.claude.getSchedules().subscribe(s => this.schedules.set(s));
+    this.claude.deleteSchedule(id).subscribe({
+      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
+      error: (e) => this.showToast(`刪除排程失敗: ${e.message ?? e}`, 'error'),
     });
   }
 
   toggleSchedule(id: string, enabled: boolean) {
-    this.claude.toggleSchedule(id, !enabled).subscribe(() => {
-      this.claude.getSchedules().subscribe(s => this.schedules.set(s));
+    this.claude.toggleSchedule(id, !enabled).subscribe({
+      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
+      error: (e) => this.showToast(`更新排程失敗: ${e.message ?? e}`, 'error'),
     });
   }
 
   runScheduleNow(id: string) {
-    this.claude.runSchedule(id).subscribe(() => {
-      this.claude.getSchedules().subscribe(s => this.schedules.set(s));
+    this.claude.runSchedule(id).subscribe({
+      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
+      error: (e) => this.showToast(`執行排程失敗: ${e.message ?? e}`, 'error'),
     });
   }
 
@@ -3034,7 +3049,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.stopFn = this.claude.streamChat(
         text, this.selectedAgent(), onEvent, onDone, onError, attachments,
         this.activeChat?.projectDir,  // 對話欄鎖定的目錄
-        this.activeChat?.teamId       // 綁定的團隊 ID
+        this.activeChat?.teamId,      // 綁定的團隊 ID
+        this.activeChat?.clientId     // 傳遞 Tab 的 clientId，解決多 Tab 衝突
       );
     }
   }
@@ -3053,7 +3069,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.shouldScroll = true;
 
     // 2. 啟動團隊討論
-    let createdProjectPath = '';
+    let createdProjectMeta: any = null;
     
     const stopTeamChat = this.claude.streamTeamChat(
       text,
@@ -3095,7 +3111,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           });
           this.shouldScroll = true;
         } else if (ev.type === 'project_created') {
-          createdProjectPath = ev.project_path;
+          createdProjectMeta = {
+            teamId: curTab.teamId!,
+            projectName: ev.project_name,
+            projectPath: ev.project_path,
+            task: text
+          };
           this.messages.update(m => [...m, {
             role: 'system',
             text: `📁 專案資料夾 "${ev.project_name}" 建立成功。路徑: ${ev.project_path}`,
@@ -3115,11 +3136,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.isStreaming.set(false);
         this.reload();
         
-        if (createdProjectPath) {
-          this.executeTeamCodePhase(curTab.teamId!, createdProjectPath, text);
-        } else {
-          this.inputRef?.nativeElement?.focus();
+        if (createdProjectMeta) {
+          this.messages.update(m => [...m, {
+            role: 'system',
+            text: `📋 專案計畫已就緒，資料夾："${createdProjectMeta.projectName}"，是否同意並啟動團隊執行？`,
+            time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
+            pendingExec: createdProjectMeta
+          }]);
         }
+        this.inputRef?.nativeElement?.focus();
+        this.shouldScroll = true;
       },
       (err) => {
         console.error('team chat error', err);
@@ -3128,7 +3154,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.messages.update(m => [...m, { role: 'error', text: `團隊討論異常斷開: ${err}` }]);
       },
       attachments,
-      curTab.projectDir
+      curTab.projectDir,
+      curTab.clientId
     );
 
     this.stopFn = () => {
@@ -3137,6 +3164,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.stopFn = null;
       this.messages.update(msgs => msgs.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
     };
+  }
+
+  approveAndExecuteTeam(msg: ChatMessage, index: number) {
+    if (msg.pendingExec) {
+      msg.hasExecuted = true;
+      this.executeTeamCodePhase(msg.pendingExec.teamId, msg.pendingExec.projectPath, msg.pendingExec.task);
+    }
   }
 
   executeTeamCodePhase(teamId: string, projectPath: string, task: string) {
@@ -3285,7 +3319,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
           }
           return copy;
         });
-      }
+      },
+      this.activeChat?.clientId
     );
 
     this.stopFn = () => {
@@ -3331,7 +3366,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         });
       },
       error: (e) => {
-        alert(`授權請求發送失敗: ${e.message ?? e}`);
+        this.showToast(`授權請求發送失敗: ${e.message ?? e}`, 'error');
       }
     });
   }
@@ -3703,38 +3738,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         mcpType, port,
         dockerized: mcpType === 'docker',
         tools,
-      });
-    }
-
-    // Demo Docker MCP servers (shown when no real ones configured)
-    if (!servers.some(s => s.name.includes('Docker MySQL Sync'))) {
-      servers.push({
-        id: 'docker-mysql-sync',
-        name: 'Docker MySQL Sync (Custom)',
-        url: 'docker://mysql-sync-agent:latest/mcp',
-        status: 'Connected',
-        authorized: true,
-        description: 'Custom dockerized database sync MCP server, runs inside an isolated container.',
-        mcpType: 'docker',
-        dockerized: true,
-        dockerImage: 'mysql-sync-agent:latest',
-        port: '3306',
-        tools: this.MCP_TOOLS_MAP['Docker MySQL Sync (Custom)']
-      });
-    }
-    if (!servers.some(s => s.name.includes('N8N Automation'))) {
-      servers.push({
-        id: 'n8n-automation',
-        name: 'N8N Automation (Custom)',
-        url: 'docker://n8nio/n8n:latest/webhook',
-        status: 'Connected',
-        authorized: true,
-        description: 'Custom N8N nodes workflow execution trigger. Communicates with visual automated flow charts.',
-        mcpType: 'docker',
-        dockerized: true,
-        dockerImage: 'n8nio/n8n:latest',
-        port: '5678',
-        tools: this.MCP_TOOLS_MAP['N8N Automation (Custom)']
       });
     }
 

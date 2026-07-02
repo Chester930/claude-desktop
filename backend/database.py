@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import asyncio
 from datetime import datetime
@@ -40,6 +41,24 @@ def update_paths(value: Path):
     SESSION_NAMES_FILE = value / "session_names.json"
     SOUL_FILE = value / "soul.md"
     SOULS_DIR = value / "souls"
+
+def _safe_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    """原子寫入檔案，避免寫入中途崩潰時造成設定檔損毀"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp")
+    try:
+        tmp_path.write_text(content, encoding=encoding)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            path.write_text(content, encoding=encoding)
+        except Exception:
+            pass
+    finally:
+        if tmp_path.exists():
+            try: tmp_path.unlink()
+            except Exception: pass
+
 
 def _all_session_files() -> list[Path]:
     """Yield all *.jsonl session files across every project slug directory."""
@@ -107,7 +126,7 @@ def _read_md(path: Path) -> str | None:
 
 def _write_md(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    _safe_write_text(path, content)
 
 def _load_config() -> dict:
     if CONFIG_FILE.exists():
@@ -118,7 +137,7 @@ def _load_config() -> dict:
     return {}
 
 def _save_config(cfg: dict) -> None:
-    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    _safe_write_text(CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 # ── SQLite session index ──────────────────────────────────────────────────────
 _INDEX_DB = CLAUDE_HOME / "claude-desktop-index.db"
@@ -314,8 +333,7 @@ def _load_local_mcp_cfg() -> dict:
     return {}
 
 def _save_local_mcp_cfg(cfg: dict) -> None:
-    LOCAL_MCP_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    LOCAL_MCP_CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    _safe_write_text(LOCAL_MCP_CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 def _analyze_mcp_entry(name: str) -> dict:
     """Read ~/.claude/claude.json and return type + metadata for one MCP."""

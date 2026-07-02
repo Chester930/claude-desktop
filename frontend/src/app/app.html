@@ -819,7 +819,21 @@
                   @for (msg of messages(); track $index) {
                     <div class="msg" [class]="'msg-' + msg.role">
                       @if (msg.role === 'system') {
-                        <div class="bubble system-bubble">{{ msg.text }}</div>
+                        <div class="bubble system-bubble" style="display: flex; flex-direction: column; gap: 8px;">
+                          <div>{{ msg.text }}</div>
+                          @if (msg.pendingExec && !msg.hasExecuted) {
+                            <div class="system-action-row" style="margin-top: 4px; display: flex; gap: 8px;">
+                              <button class="btn-primary" style="font-size: 11px; padding: 4px 12px; border-radius: 6px; display: inline-flex; align-items: center; gap: 4px;" (click)="approveAndExecuteTeam(msg, $index)">
+                                🚀 同意並啟動團隊執行
+                              </button>
+                            </div>
+                          }
+                          @else if (msg.pendingExec && msg.hasExecuted) {
+                            <div style="font-size: 11px; color: #888; font-style: italic; display: flex; align-items: center; gap: 4px; margin-top: 4px;">
+                              <span>✓ 已授權並啟動執行</span>
+                            </div>
+                          }
+                        </div>
                       }
                       @if (msg.role === 'user') {
                         <span class="msg-avatar user-avatar" aria-hidden="true">你</span>
@@ -2284,6 +2298,12 @@
           <label class="editor-label">名稱
             <input class="editor-input" [value]="agentEditorData().name || ''" (input)="agentEditorData.set({...agentEditorData(), name: $any($event.target).value})" [disabled]="!agentEditorIsNew()" placeholder="my-agent">
           </label>
+          <label class="editor-label">說明
+            <textarea class="editor-input editor-textarea" rows="3"
+              [value]="agentEditorData().description || ''"
+              (input)="agentEditorData.set({...agentEditorData(), description: $any($event.target).value})"
+              placeholder="這個 Agent 的用途"></textarea>
+          </label>
           <label class="editor-label">靈魂人格設定 (Soul Persona)
             <textarea class="memory-editor"
               [(ngModel)]="agentEditorSoulContent"
@@ -2369,8 +2389,11 @@
       </div>
       <div class="editor-modal-body">
         <div class="editor-section">
-          <div class="editor-section-title">說明（唯讀）</div>
-          <p style="color:#888;font-size:12px;margin:0;">{{ skillEditorData().description || '（無說明）' }}</p>
+          <div class="editor-section-title">說明</div>
+          <textarea class="editor-input editor-textarea" rows="3"
+            [value]="skillEditorData().description || ''"
+            (input)="skillEditorData.set({...skillEditorData(), description: $any($event.target).value})"
+            placeholder="這個 Skill 的用途"></textarea>
         </div>
         <!-- MCPs -->
         <div class="editor-section">
@@ -2442,10 +2465,10 @@
               placeholder="fullstack-dev">
           </label>
           <label class="editor-label">說明
-            <input class="editor-input"
+            <textarea class="editor-input editor-textarea" rows="3"
               [value]="teamEditorData().description || ''"
               (input)="teamEditorData.set({...teamEditorData(), description: $any($event.target).value})"
-              placeholder="這個 Team 的用途">
+              placeholder="這個 Team 的用途"></textarea>
           </label>
           <label class="editor-label">組長 (Leader)
             <select class="memory-project-select"
@@ -2463,6 +2486,14 @@
                   }
                 }
               }
+            </select>
+          </label>
+          <label class="editor-label">執行模式 (Execution Mode)
+            <select class="memory-project-select"
+              [value]="teamEditorData().execution_mode || 'parallel'"
+              (change)="teamEditorData.set({...teamEditorData(), execution_mode: $any($event.target).value})">
+              <option value="parallel">並行（成員同時執行，互不依賴）</option>
+              <option value="sequential">序列（依序執行，前一位產出會傳給下一位）</option>
             </select>
           </label>
         </div>

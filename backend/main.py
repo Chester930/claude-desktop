@@ -22,11 +22,23 @@ except ImportError:
     HAS_CRONITER = False
 
 try:
+    from claude_agent_sdk import (
+        ClaudeSDKClient, ClaudeAgentOptions,
+        AssistantMessage, ResultMessage, TextBlock, UserMessage,
+        PermissionResultAllow, PermissionResultDeny,
+    )
+    from session_pool import SessionPool
+    HAS_AGENT_SDK = True
+except ImportError:
+    HAS_AGENT_SDK = False
+
+try:
     import database as _db_mod
 except ImportError:
     import backend.database as _db_mod
 
 import sys
+import platform
 
 import types
 
@@ -64,8 +76,60 @@ for _k in dir(_db_mod):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-active_sessions: dict[str, str] = {}   # client_id -> claude session_id
+_SESSIONS_FILE = CLAUDE_HOME / "active_sessions.json"
+_SESSIONS_META_FILE = CLAUDE_HOME / "active_sessions_meta.json"
+_SESSION_MAX_AGE = 7 * 24 * 3600
+
+class _PersistentSessions(dict):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._touched = {}
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        self._touched[k] = time.time()
+        self._prune()
+        self._save()
+
+    def pop(self, k, default=None):
+        result = super().pop(k, default)
+        self._touched.pop(k, None)
+        self._save()
+        return result
+
+    def _prune(self):
+        now = time.time()
+        stale = [k for k in list(self.keys()) if now - self._touched.get(k, now) > _SESSION_MAX_AGE]
+        for k in stale:
+            super().pop(k, None)
+            self._touched.pop(k, None)
+
+    def _save(self):
+        try:
+            _safe_write_text(_SESSIONS_FILE, json.dumps(dict(self), ensure_ascii=False))
+            _safe_write_text(_SESSIONS_META_FILE, json.dumps(self._touched, ensure_ascii=False))
+        except Exception:
+            pass
+
+active_sessions: dict[str, str] = _PersistentSessions()   # client_id -> claude session_id
+if _SESSIONS_FILE.exists():
+    try:
+        active_sessions.update(json.loads(_SESSIONS_FILE.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+if _SESSIONS_META_FILE.exists():
+    try:
+        active_sessions._touched.update(json.loads(_SESSIONS_META_FILE.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+_now = time.time()
+for _k in active_sessions.keys():
+    active_sessions._touched.setdefault(_k, _now)
+active_sessions._prune()
+
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
+
+_team_pool = SessionPool() if HAS_AGENT_SDK else None  # persistent ClaudeSDKClient pool for team chat/execute
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
 _mcp_logs:       dict[str, list[str]] = {}                   # mcp name -> log lines
 pending_permissions: dict[str, dict] = {}                    # request_id -> dict with process, event, etc.
@@ -75,6 +139,22 @@ _usage_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
+def _read_agent_body(agent_file: "Path") -> str:
+    """讀取 agent .md 的 body（跳過 YAML frontmatter）。"""
+    try:
+        text = agent_file.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            return parts[2].strip() if len(parts) >= 3 else text
+        return text.strip()
+    except Exception:
+        return ""
+
+_CLI_NOISE_PATTERNS = ("no stdin data received",)
+
+def _is_cli_noise(raw: str) -> bool:
+    low = raw.lower()
+    return any(p in low for p in _CLI_NOISE_PATTERNS)
 
 def load_session_names() -> dict:
     if SESSION_NAMES_FILE.exists():
@@ -83,8 +163,7 @@ def load_session_names() -> dict:
     return {}
 
 def save_session_names(names: dict) -> None:
-    SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SESSION_NAMES_FILE.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+    _safe_write_text(SESSION_NAMES_FILE, json.dumps(names, ensure_ascii=False, indent=2))
 
 def migrate_soul():
     if not SOULS_DIR.exists():
@@ -95,17 +174,15 @@ def migrate_soul():
             except Exception:
                 pass
 
-def get_concatenated_soul() -> str:
-    migrate_soul()
-    parts = []
-    for f in sorted(SOULS_DIR.glob("*.md")):
-        try:
-            content = f.read_text(encoding="utf-8").strip()
-            if content:
-                parts.append(f"## Section: {f.stem}\n{content}")
-        except Exception:
-            pass
-    return "\n\n".join(parts)
+def get_agent_soul(agent_id: str) -> str:
+    """Soul 與 Agent 為 1:1：只回傳該 agent 專屬的 soul 內容；沒有指定 agent 就不注入任何 soul。"""
+    if not agent_id:
+        return ""
+    f = SOULS_DIR / f"{agent_id}.md"
+    try:
+        return f.read_text(encoding="utf-8").strip() if f.exists() else ""
+    except Exception:
+        return ""
 
 
 def load_schedules() -> list:
@@ -117,8 +194,7 @@ def load_schedules() -> list:
     return []
 
 def save_schedules(data: list) -> None:
-    SCHEDULES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SCHEDULES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _safe_write_text(SCHEDULES_FILE, json.dumps(data, ensure_ascii=False, indent=2))
 
 async def _natural_to_cron(natural_text: str) -> str:
     import re
@@ -273,12 +349,19 @@ def build_team_memory_context(
     all_member_ids: list[str],
     current_agent_id: str,
     cwd: str,
+    members_meta: "list[dict] | None" = None,
 ) -> str:
     """
     組裝 Team Run 的記憶 context（每位成員各自收到）。
     注入順序：
-      User → Team Shared → Team Project → 所有成員 Identity（互知）
-      → 當前成員 Agent Project → Project Internal
+      User → Team Shared → Team Project
+      → 當前成員完整 Identity（只注入自己）
+      → 其他成員摘要（名稱+職責，不載入 identity.md）
+      → 當前成員 Agent Project
+
+    優化：原本注入「所有成員 identity.md」（多人 × ~2K token），
+    改為只注入當前 agent 的完整 identity，其他人僅列名稱與職責，
+    降低每次呼叫的 context 大小。
     """
     slug = _encode_slug(cwd) if cwd else ""
     sections: list[str] = []
@@ -296,14 +379,26 @@ def build_team_memory_context(
         if team_proj:
             sections.append(f"[Team Project Memory — {team_id} / {slug}]\n{team_proj}")
 
-    member_identities = []
-    for mid in all_member_ids:
-        identity = _read_md(_agent_memory_dir(mid) / "identity.md")
-        if identity:
-            label = "（你）" if mid == current_agent_id else ""
-            member_identities.append(f"#### {mid}{label}\n{identity}")
-    if member_identities:
-        sections.append("[Team Members — 成員背景與專長]\n" + "\n\n".join(member_identities))
+    # 當前 agent 的完整 identity
+    if current_agent_id:
+        self_identity = _read_md(_agent_memory_dir(current_agent_id) / "identity.md")
+        if self_identity:
+            sections.append(f"[你的背景與身分 — {current_agent_id}]\n{self_identity}")
+
+    # 其他成員：只列名稱+職責（不讀 identity.md，大幅降低 token）
+    peer_lines: list[str] = []
+    if members_meta:
+        for m in members_meta:
+            mid = m.get("agent", "")
+            role = m.get("role", "")
+            if mid and mid != current_agent_id:
+                peer_lines.append(f"- @{mid}（{role}）")
+    else:
+        for mid in all_member_ids:
+            if mid != current_agent_id:
+                peer_lines.append(f"- @{mid}")
+    if peer_lines:
+        sections.append("[Team 成員]\n" + "\n".join(peer_lines))
 
     if current_agent_id and slug:
         agent_proj = _read_md(_agent_memory_dir(current_agent_id) / "projects" / f"{slug}.md")
@@ -341,54 +436,44 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             except Exception:
                 pass
 
-    soul = get_concatenated_soul()
-    full_message = f"[System Persona]\n{soul}\n\n{message}" if soul else message
+    def _build_full_message() -> str:
+        """組裝首 Turn 用的完整 prompt（soul + team + memory + agent def）。"""
+        soul = get_agent_soul(agent)
+        fm = f"[System Persona]\n{soul}\n\n{message}" if soul else message
 
-    if team_id and team_info:
-        all_members = [m["agent"] for m in team_info.get("members", [])]
-        mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd)
-        
-        team_name = team_info.get("name", team_id)
-        members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in team_info.get("members", [])])
-        team_prompt = (
-            f"[團隊組長身分指引]\n"
-            f"你現在是團隊「{team_name}」的組長（Team Leader）。\n"
-            f"你的團隊成員如下：\n{members_str}\n"
-            f"當使用者交辦任務時，請以團隊組長的角色進行回覆與規畫。你可以運用其他組員的專長來協助引導對話與思考。\n\n"
-        )
-        full_message = team_prompt + full_message
-    else:
-        mem_ctx = build_memory_context(agent, cwd)
+        if team_id and team_info:
+            all_members = [m["agent"] for m in team_info.get("members", [])]
+            mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd, members_meta=team_info.get("members", []))
+            team_name = team_info.get("name", team_id)
+            members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in team_info.get("members", [])])
+            team_prompt = (
+                f"[團隊組長身分指引]\n"
+                f"你現在是團隊「{team_name}」的組長（Team Leader）。\n"
+                f"你的團隊成員如下：\n{members_str}\n"
+                f"當使用者交辦任務時，請以團隊組長的角色進行回覆與規畫。你可以運用其他組員的專長來協助引導對話與思考。\n\n"
+            )
+            fm = team_prompt + fm
+        else:
+            mem_ctx = build_memory_context(agent, cwd)
 
-    if mem_ctx:
-        full_message = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{full_message}"
+        if mem_ctx:
+            fm = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{fm}"
 
-    cmd = [claude_bin, "-p", full_message, "--output-format", "stream-json", "--verbose"]
-    if model and model not in ("sonnet", ""):
-        cmd += ["--model", model]
-    if effort and effort != "medium":
-        cmd += ["--effort", effort]
-    if permission_mode and permission_mode not in ("default", ""):
-        cmd += ["--permission-mode", permission_mode]
-    for att in attachments:
-        if Path(att).exists():
-            cmd += ["--input-file", att]
-    if agent:
-        agent_file = AGENTS_DIR / f"{agent}.md"
-        if agent_file.exists():
-            try:
-                text = agent_file.read_text(encoding="utf-8")
-                body = text
-                if text.startswith("---"):
-                    parts = text.split("---", 2)
-                    if len(parts) >= 3:
-                        body = parts[2].strip()
-                if body:
-                    full_message = f"[代理人：{agent}]\n{body}\n\n---\n\n{full_message}"
-            except Exception:
-                pass
-    if client_id in active_sessions:
-        cmd += ["--resume", active_sessions[client_id]]
+        if agent:
+            agent_file = AGENTS_DIR / f"{agent}.md"
+            if agent_file.exists():
+                try:
+                    text = agent_file.read_text(encoding="utf-8")
+                    body = text
+                    if text.startswith("---"):
+                        parts = text.split("---", 2)
+                        if len(parts) >= 3:
+                            body = parts[2].strip()
+                    if body:
+                        fm = f"[代理人：{agent}]\n{body}\n\n---\n\n{fm}"
+                except Exception:
+                    pass
+        return fm
 
     response = web.StreamResponse(headers={
         "Content-Type":    "text/event-stream",
@@ -397,40 +482,142 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     })
     await response.prepare(request)
 
+    has_persisted = client_id in active_sessions
+    in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(client_id)
+    use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
+
+    async def _run_pooled(prompt_to_send: str, resume_target: "str | None") -> None:
+        in_pool = _team_pool.has(client_id)
+        opts = None
+        if not in_pool:
+            env = {**os.environ}
+            api_key = _resolve_api_key()
+            if api_key:
+                env["ANTHROPIC_API_KEY"] = api_key
+            opts = ClaudeAgentOptions(
+                cwd=cwd,
+                env=env,
+                model=(model if model and model not in ("sonnet", "") else None),
+                effort=(effort if effort and effort != "medium" else None),
+                permission_mode=(permission_mode if permission_mode and permission_mode not in ("default", "") else None),
+                resume=resume_target,
+            )
+
+        client = await _team_pool.get_or_create(client_id, opts)
+        try:
+            await client.query(prompt_to_send)
+            async for message_obj in client.receive_response():
+                if isinstance(message_obj, AssistantMessage):
+                    text_blocks = [b.text for b in message_obj.content if isinstance(b, TextBlock)]
+                    if text_blocks:
+                        env_msg = {"type": "assistant", "message": {"content": [{"type": "text", "text": t} for t in text_blocks]}}
+                        await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
+                    for b in message_obj.content:
+                        if type(b).__name__ == "ToolUseBlock":
+                            env_msg = {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
+                            await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
+                elif isinstance(message_obj, UserMessage):
+                    content = message_obj.content if isinstance(message_obj.content, list) else []
+                    result_blocks = [b for b in content if type(b).__name__ == "ToolResultBlock"]
+                    if result_blocks:
+                        env_msg = {
+                            "type": "user",
+                            "message": {"content": [
+                                {"type": "tool_result", "tool_use_id": b.tool_use_id, "content": b.content}
+                                for b in result_blocks
+                            ]}
+                        }
+                        await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
+                elif isinstance(message_obj, ResultMessage):
+                    active_sessions[client_id] = message_obj.session_id
+                    usage = message_obj.usage or {}
+                    env_msg = {
+                        "type": "result",
+                        "total_cost_usd": message_obj.total_cost_usd or 0,
+                        "usage": {
+                            "input_tokens": usage.get("input_tokens", 0) if isinstance(usage, dict) else 0,
+                            "output_tokens": usage.get("output_tokens", 0) if isinstance(usage, dict) else 0,
+                        },
+                    }
+                    await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
+        except Exception:
+            await _team_pool.evict(client_id)
+            raise
+
+    async def _run_legacy(full_message: str) -> None:
+        cmd = [claude_bin, "-p", full_message, "--output-format", "stream-json", "--verbose"]
+        if model and model not in ("sonnet", ""):
+            cmd += ["--model", model]
+        if effort and effort != "medium":
+            cmd += ["--effort", effort]
+        if permission_mode and permission_mode not in ("default", ""):
+            cmd += ["--permission-mode", permission_mode]
+        for att in attachments:
+            if Path(att).exists():
+                cmd += ["--input-file", att]
+        if client_id in active_sessions:
+            cmd += ["--resume", active_sessions[client_id]]
+
+        proc = None
+        try:
+            env = {**os.environ}
+            api_key = _resolve_api_key()
+            if api_key:
+                env["ANTHROPIC_API_KEY"] = api_key
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+                cwd=cwd,
+                env=env,
+            )
+            active_procs[client_id] = proc
+
+            async for line in proc.stdout:
+                raw = line.decode("utf-8", errors="replace").strip()
+                if not raw:
+                    continue
+                if _is_cli_noise(raw):
+                    continue
+                try:
+                    event = json.loads(raw)
+                    if event.get("type") == "result" and "session_id" in event:
+                        active_sessions[client_id] = event["session_id"]
+                    await response.write(f"data: {raw}\n\n".encode())
+                except json.JSONDecodeError:
+                    payload = json.dumps({"type": "text", "text": raw})
+                    await response.write(f"data: {payload}\n\n".encode())
+
+            await proc.wait()
+        finally:
+            active_procs.pop(client_id, None)
+            if proc and proc.returncode is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+
     try:
-        env = {**os.environ}
-        api_key = _resolve_api_key()
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-            cwd=cwd,
-            env=env,
-        )
-        active_procs[client_id] = proc
-
-        async for line in proc.stdout:
-            raw = line.decode("utf-8", errors="replace").strip()
-            if not raw:
-                continue
+        if use_pool:
+            needs_full_rebuild = not (in_pool_now or has_persisted)
+            prompt_to_send = _build_full_message() if needs_full_rebuild else message
+            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(client_id)
             try:
-                event = json.loads(raw)
-                if event.get("type") == "result" and "session_id" in event:
-                    active_sessions[client_id] = event["session_id"]
-                await response.write(f"data: {raw}\n\n".encode())
-            except json.JSONDecodeError:
-                payload = json.dumps({"type": "text", "text": raw})
-                await response.write(f"data: {payload}\n\n".encode())
-
-        await proc.wait()
-        active_procs.pop(client_id, None)
+                await _run_pooled(prompt_to_send, resume_target)
+            except Exception:
+                active_sessions.pop(client_id, None)
+                await _run_legacy(_build_full_message())
+        else:
+            full_message = message if client_id in active_sessions else _build_full_message()
+            await _run_legacy(full_message)
         await response.write(b'data: {"type":"done"}\n\n')
     except Exception as e:
-        payload = json.dumps({"type": "error", "text": str(e)})
-        await response.write(f"data: {payload}\n\n".encode())
+        try:
+            payload = json.dumps({"type": "error", "text": str(e)})
+            await response.write(f"data: {payload}\n\n".encode())
+        except Exception:
+            pass
 
     return response
 
@@ -495,132 +682,229 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
     })
     await response.prepare(request)
 
-    async def run_single_agent(agent_id: str, prompt_text: str, is_leader: bool) -> tuple[str, str]:
-        all_members_list = [m["agent"] for m in members]
-        mem_ctx = build_team_memory_context(team_id, all_members_list, agent_id, cwd)
-        
-        team_name = team_info.get("name", team_id)
-        members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in members])
-        
-        if is_leader:
-            persona_prompt = (
-                f"[團隊組長身分指引]\n"
-                f"你現在是團隊「{team_name}」的組長（Team Leader）代號 @{agent_id}。\n"
-                f"你的團隊成員如下：\n{members_str}\n"
-                f"你的職責是協調整個團隊。當使用者交辦任務時：\n"
-                f"1. 請先在回覆中與相關成員對話以討論方案。如果你需要某位成員發言，請在你的回覆中明確 @成員代號（例如 @{members[0]['agent']} 你的想法是什麼？）。\n"
-                f"2. 討論完畢且有了明確的實作規劃後，請在你的回覆中加入 `[CREATE_PROJECT: 專案名稱]` 這個標籤（其中 專案名稱 請使用小寫英文底線，如 `python_spider`），系統會自動為此建立目錄並進行後續的多 Agent 分工協作執行。\n"
-                f"3. 請注意，你在發言中只能 @ 成員列表中的人，不要 @ 不存在的成員。每一次回覆最多只 @ 一位成員提問討論。\n\n"
-            )
-        else:
-            persona_prompt = (
-                f"[團隊成員身分指引]\n"
-                f"你現在是團隊「{team_name}」的成員，代號 @{agent_id}。\n"
-                f"你的團隊成員如下：\n{members_str}\n"
-                f"你的組長為 @{leader_agent_id}。現在組長（或團隊）向你提問，請針對提問以你的角色進行回覆，給出專業的意見與討論。請回覆得簡短而專業，不需要 @ 其他人。\n\n"
-            )
-
-        full_prompt = persona_prompt
-        if mem_ctx:
-            full_prompt = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{full_prompt}"
-        
-        full_prompt = f"{full_prompt}\n\n任務/討論歷史：\n{prompt_text}"
-
-        soul = get_concatenated_soul()
-        if soul:
-            full_prompt = f"[System Persona]\n{soul}\n\n{full_prompt}"
-
-        agent_file = AGENTS_DIR / f"{agent_id}.md"
-        if agent_file.exists():
-            try:
-                text = agent_file.read_text(encoding="utf-8")
-                body = text
-                if text.startswith("---"):
-                    parts = text.split("---", 2)
-                    if len(parts) >= 3:
-                        body = parts[2].strip()
-                if body:
-                    full_prompt = f"[代理人定義：{agent_id}]\n{body}\n\n---\n\n{full_prompt}"
-            except Exception:
-                pass
-
-        cmd = [claude_bin, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]
-        if model and model not in ("sonnet", ""):
-            cmd += ["--model", model]
-        if effort and effort != "medium":
-            cmd += ["--effort", effort]
-        if permission_mode and permission_mode not in ("default", ""):
-            cmd += ["--permission-mode", permission_mode]
-        for att in attachments:
-            if Path(att).exists():
-                cmd += ["--input-file", att]
-        
+    async def run_single_agent(
+        agent_id: str,
+        prompt_text: str,
+        is_leader: bool,
+        is_first_turn: bool = True,
+    ) -> tuple[str, str]:
+        """
+        呼叫單一 agent。優先透過 session_pool 重用長駐連線（不重開 subprocess）；
+        沒有 SDK 或帶附件時退回舊的一次性 subprocess + --resume 模式。
+        """
         session_key = f"{client_id}_{agent_id}"
-        if session_key in active_sessions:
-            cmd += ["--resume", active_sessions[session_key]]
 
-        await response.write(f"data: {json.dumps({'type': 'agent_start', 'agent': agent_id})}\n\n".encode())
-
-        env = {**os.environ}
-        api_key = _resolve_api_key()
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-            cwd=cwd,
-            env=env,
-        )
-        active_procs[client_id] = proc
-
-        collected_text = []
-        new_session_id = ""
-
-        try:
-            async for line in proc.stdout:
-                raw = line.decode("utf-8", errors="replace").strip()
-                if not raw:
-                    continue
-                try:
-                    event = json.loads(raw)
-                    if event.get("type") == "result" and "session_id" in event:
-                        new_session_id = event["session_id"]
-                        active_sessions[session_key] = new_session_id
-                    
-                    if event.get("type") == "assistant" and event.get("message", {}).get("content"):
-                        for block in event["message"]["content"]:
-                            if block.get("type") == "text":
-                                collected_text.append(block["text"])
-                                await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
-                    elif event.get("type") == "text":
-                        collected_text.append(event.get("text", ""))
-                        await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
-                except json.JSONDecodeError:
-                    collected_text.append(raw)
-                    await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': raw})}\n\n".encode())
-            
-            await proc.wait()
-        finally:
-            active_procs.pop(client_id, None)
-
-        await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
-        return "".join(collected_text), new_session_id
-
-    try:
-        discussion_history = f"使用者：{message}\n"
-        
-        current_agent = leader_agent_id
-        is_leader = True
-        
-        for loop_idx in range(10):
-            agent_output, sid = await run_single_agent(current_agent, discussion_history, is_leader)
-            discussion_history += f"@{current_agent}：{agent_output}\n"
+        def _build_full_prompt(hist: str) -> str:
+            """組裝首 Turn 用的完整 prompt。"""
+            all_members_list = [m["agent"] for m in members]
+            mem_ctx = build_team_memory_context(
+                team_id, all_members_list, agent_id, cwd,
+                members_meta=members,
+            )
+            team_name   = team_info.get("name", team_id)
+            members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in members])
 
             if is_leader:
-                import re
+                persona = (
+                    f"[團隊組長身分指引]\n"
+                    f"你現在是團隊「{team_name}」的組長（Team Leader）代號 @{agent_id}。\n"
+                    f"你的團隊成員如下：\n{members_str}\n"
+                    f"你的職責是協調整個團隊。當使用者交辦任務時：\n"
+                    f"1. 請先在回覆中與相關成員對話以討論方案。如果你需要某位成員發言，請在你的回覆中明確 @成員代號（例如 @{members[0]['agent']} 你的想法是什麼？）。\n"
+                    f"2. 討論完畢且有了明確的實作規劃後，請在你的回覆中加入 `[CREATE_PROJECT: 專案名稱]` 這個標籤（其中 專案名稱 請使用小寫英文底線，如 `python_spider`），系統會自動為此建立目錄並進行後續的多 Agent 分工協作執行。\n"
+                    f"3. 請注意，你在發言中只能 @ 成員列表中的人，不要 @ 不存在的成員。每一次回覆最多只 @ 一位成員提問討論。\n\n"
+                )
+            else:
+                persona = (
+                    f"[團隊成員身分指引]\n"
+                    f"你現在是團隊「{team_name}」的成員，代號 @{agent_id}。\n"
+                    f"你的團隊成員如下：\n{members_str}\n"
+                    f"你的組長為 @{leader_agent_id}。現在組長（或團隊）向你提問，請針對提問以你的角色進行回覆，給出專業的意見與討論。請回覆得簡短而專業，不需要 @ 其他人。\n\n"
+                )
+
+            fp = persona
+            if mem_ctx:
+                fp = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{fp}"
+            fp = f"{fp}\n\n任務/討論歷史：\n{hist}"
+
+            soul = get_agent_soul(agent_id)
+            if soul:
+                fp = f"[System Persona]\n{soul}\n\n{fp}"
+
+            agent_file_path = AGENTS_DIR / f"{agent_id}.md"
+            if agent_file_path.exists():
+                body = _read_agent_body(agent_file_path)
+                if body:
+                    fp = f"[代理人定義：{agent_id}]\n{body}\n\n---\n\n{fp}"
+            return fp
+
+        async def _exec_cmd(fp: str, resume_sid: "str | None") -> tuple[list[str], str, bool]:
+            """執行 claude CLI（舊模式，一次性 subprocess），回傳 (collected_text, new_session_id, resume_failed)。"""
+            cmd = [claude_bin, "-p", fp, "--output-format", "stream-json", "--verbose"]
+            if model and model not in ("sonnet", ""):
+                cmd += ["--model", model]
+            if effort and effort != "medium":
+                cmd += ["--effort", effort]
+            if permission_mode and permission_mode not in ("default", ""):
+                cmd += ["--permission-mode", permission_mode]
+            for att in attachments:
+                if Path(att).exists():
+                    cmd += ["--input-file", att]
+            if resume_sid:
+                cmd += ["--resume", resume_sid]
+
+            await response.write(f"data: {json.dumps({'type': 'agent_start', 'agent': agent_id})}\n\n".encode())
+
+            env = {**os.environ}
+            api_key = _resolve_api_key()
+            if api_key:
+                env["ANTHROPIC_API_KEY"] = api_key
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+                cwd=cwd,
+                env=env,
+            )
+            active_procs[client_id] = proc
+
+            collected: list[str] = []
+            new_sid   = ""
+            resume_failed = False
+
+            try:
+                async for line in proc.stdout:
+                    raw = line.decode("utf-8", errors="replace").strip()
+                    if not raw:
+                        continue
+                    if _is_cli_noise(raw):
+                        continue
+                    if resume_sid and (
+                        "session not found" in raw.lower()
+                        or "invalid session" in raw.lower()
+                        or "no such session" in raw.lower()
+                    ):
+                        resume_failed = True
+                    try:
+                        event = json.loads(raw)
+                        if event.get("type") == "result" and "session_id" in event:
+                            new_sid = event["session_id"]
+                            active_sessions[session_key] = new_sid
+                        if event.get("type") == "assistant" and event.get("message", {}).get("content"):
+                            for block in event["message"]["content"]:
+                                if block.get("type") == "text":
+                                    collected.append(block["text"])
+                                    await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
+                        elif event.get("type") == "text":
+                            collected.append(event.get("text", ""))
+                            await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
+                    except json.JSONDecodeError:
+                        collected.append(raw)
+                        await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': raw})}\n\n".encode())
+                await proc.wait()
+            finally:
+                active_procs.pop(client_id, None)
+
+            await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
+            return collected, new_sid, resume_failed
+
+        async def _exec_pooled(prompt_to_send: str, resume_target: "str | None") -> tuple[list[str], str]:
+            """透過 session_pool 送出，重用長駐連線（不重開 subprocess）。連線斷開/resume 失敗會拋出供外層 fallback。"""
+            await response.write(f"data: {json.dumps({'type': 'agent_start', 'agent': agent_id})}\n\n".encode())
+
+            in_pool = _team_pool.has(session_key)
+            opts = None
+            if not in_pool:
+                env = {**os.environ}
+                api_key = _resolve_api_key()
+                if api_key:
+                    env["ANTHROPIC_API_KEY"] = api_key
+                opts = ClaudeAgentOptions(
+                    cwd=cwd,
+                    env=env,
+                    model=(model if model and model not in ("sonnet", "") else None),
+                    effort=(effort if effort and effort != "medium" else None),
+                    permission_mode=(permission_mode if permission_mode and permission_mode not in ("default", "") else None),
+                    resume=resume_target,
+                )
+
+            client = await _team_pool.get_or_create(session_key, opts)
+            collected: list[str] = []
+            new_sid = ""
+            try:
+                await client.query(prompt_to_send)
+                async for message in client.receive_response():
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                collected.append(block.text)
+                                await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': block.text})}\n\n".encode())
+                    elif isinstance(message, ResultMessage):
+                        new_sid = message.session_id
+                        active_sessions[session_key] = new_sid
+            except Exception:
+                await _team_pool.evict(session_key)
+                raise
+
+            await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
+            return collected, new_sid
+
+        has_persisted = session_key in active_sessions
+        in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(session_key)
+        use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
+
+        if use_pool:
+            needs_full_rebuild = not (in_pool_now or has_persisted)
+            prompt_to_send = _build_full_prompt(prompt_text) if needs_full_rebuild else prompt_text
+            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(session_key)
+            try:
+                collected_list, new_session_id = await _exec_pooled(prompt_to_send, resume_target)
+                return "".join(collected_list), new_session_id
+            except Exception:
+                active_sessions.pop(session_key, None)
+                full_fallback = _build_full_prompt(prompt_text)
+                collected_list, new_session_id, _ = await _exec_cmd(full_fallback, None)
+                return "".join(collected_list), new_session_id
+
+        if not has_persisted or is_first_turn:
+            full_prompt = _build_full_prompt(prompt_text)
+            resume_sid  = None
+        else:
+            full_prompt = prompt_text
+            resume_sid  = active_sessions.get(session_key)
+
+        collected_list, new_session_id, resume_failed = await _exec_cmd(full_prompt, resume_sid)
+        if resume_failed:
+            active_sessions.pop(session_key, None)
+            full_fallback = _build_full_prompt(prompt_text)
+            collected_list, new_session_id, _ = await _exec_cmd(full_fallback, None)
+        return "".join(collected_list), new_session_id
+
+    import re
+    try:
+        discussion_history = f"使用者：{message}\n"
+        last_increment     = discussion_history  # 每 Turn 傳給後續呼叫的增量部分
+
+        current_agent = leader_agent_id
+        is_leader     = True
+
+        for loop_idx in range(10):
+            is_first    = loop_idx == 0
+            session_key = f"{client_id}_{current_agent}"
+            has_session = session_key in active_sessions
+
+            # 後續 Turn 且有 session：只傳最新增量；否則傳完整 history
+            prompt_to_send = last_increment if (has_session and not is_first) else discussion_history
+
+            agent_output, sid = await run_single_agent(
+                current_agent, prompt_to_send, is_leader, is_first_turn=is_first
+            )
+            new_line           = f"@{current_agent}：{agent_output}\n"
+            discussion_history += new_line
+
+            if is_leader:
                 proj_match = re.search(r"\[CREATE_PROJECT:\s*([a-zA-Z0-9_-]+)\]", agent_output)
                 if proj_match:
                     project_name = proj_match.group(1).strip()
@@ -641,8 +925,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                         record["event"].set()
                         text_val = f"\n[組長自動授權：已同意 @{record['agent']} 的操作]\n"
                         await response.write(f"data: {json.dumps({'type': 'text', 'agent': leader_agent_id, 'text': text_val})}\n\n".encode())
-            
-            import re
+
             next_agent = None
             if is_leader:
                 matches = re.findall(r"@([a-zA-Z0-9_-]+)", agent_output)
@@ -650,19 +933,23 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                     if m_id in member_agent_ids and m_id != leader_agent_id:
                         next_agent = m_id
                         break
-            
+
             if next_agent:
-                current_agent = next_agent
-                is_leader = False
-                discussion_history += f"\n系統通知：@{leader_agent_id} 請 @{next_agent} 發表意見。\n"
+                current_agent   = next_agent
+                is_leader       = False
+                notify_line     = f"\n系統通知：@{leader_agent_id} 請 @{next_agent} 發表意見。\n"
+                discussion_history += notify_line
+                last_increment  = new_line + notify_line
             else:
                 if not is_leader:
-                    current_agent = leader_agent_id
-                    is_leader = True
-                    discussion_history += f"\n系統通知：@{current_agent} 請繼續彙整討論並給出結論。\n"
+                    current_agent   = leader_agent_id
+                    is_leader       = True
+                    notify_line     = f"\n系統通知：@{current_agent} 請繼續彙整討論並給出結論。\n"
+                    discussion_history += notify_line
+                    last_increment  = new_line + notify_line
                 else:
                     break
-        
+
         await response.write(b'data: {"type":"done"}\n\n')
     except Exception as e:
         payload = json.dumps({"type": "error", "text": str(e)})
@@ -674,7 +961,21 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
 def launch_windows_terminal_monitor(project_path: str, members: list):
     if not members:
         return
+    # wt/powershell only exist on native Windows -- this backend usually runs inside
+    # a Linux Docker container (dev mode), where the command below fails every call.
+    if platform.system() != "Windows":
+        return
     
+    # 修正 1：先預建所有 log 檔案，防止 PowerShell Get-Content -Wait 因為檔案不存在而報錯
+    for m in members:
+        agent_id = m["agent"]
+        log_file = Path(project_path) / f".agent_{agent_id}.log"
+        if not log_file.exists():
+            try:
+                log_file.write_text("", encoding="utf-8")
+            except Exception:
+                pass
+
     parts = []
     first_agent = members[0]["agent"]
     parts.append(
@@ -695,7 +996,8 @@ def launch_windows_terminal_monitor(project_path: str, members: list):
             f'Get-Content -Path .agent_{agent_id}.log -Wait -Tail 20"'
         )
     
-    full_cmd = " ; ".join(parts)
+    # 修正 2：用 ' ";" ' 連接，確保 shell 不會截斷指令，讓 wt 順利處理 split-pane 參數
+    full_cmd = ' ";" '.join(parts)
     try:
         import subprocess
         subprocess.Popen(full_cmd, shell=True)
@@ -705,6 +1007,7 @@ def launch_windows_terminal_monitor(project_path: str, members: list):
 
 async def handle_team_execute(request: web.Request) -> web.StreamResponse:
     data         = await request.json()
+    client_id    = data.get("client_id", "default")
     team_id      = data.get("team_id", "")
     project_path = data.get("project_path", "")
     task         = data.get("task", "")
@@ -768,135 +1071,264 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
     })
     await response.prepare(request)
 
-    async def run_agent_executor(agent_id: str, role: str):
-        agent_file = AGENTS_DIR / f"{agent_id}.md"
-        agent_body = ""
-        if agent_file.exists():
-            try:
-                text = agent_file.read_text(encoding="utf-8")
-                agent_body = text
-                if text.startswith("---"):
-                    parts = text.split("---", 2)
-                    agent_body = parts[2].strip() if len(parts) >= 3 else text
-            except Exception:
-                pass
+    async def run_agent_executor(agent_id: str, role: str, agent_task: str) -> str:
+        """
+        執行單一 agent 的任務。優先透過 session_pool 重用長駐連線（不重開 subprocess，
+        權限核准改用 SDK 的 can_use_tool callback）；沒有 SDK 時退回舊的一次性 subprocess + stdin y/n 模式。
+        """
+        exec_key = f"exec_{team_id}_{agent_id}"
+        proc_key = f"exec_{client_id}_{agent_id}"
+        log_file = Path(project_path) / f".agent_{agent_id}.log"
 
-        prompt = (
-            f"你現在在專案目錄 {project_path} 下執行任務。\n"
-            f"你是團隊成員 @{agent_id}，你的職責是「{role}」。\n"
-            f"以下是團隊需要共同完成的專案實作任務：\n{task}\n"
-            f"請以你個人的職責，獨立對此專案目錄下的代碼進行修改、創建或測試，以達成任務要求。有任何產出請直接在此目錄中創建。請使用工具執行，並將你的執行過程簡要回報。\n"
-        )
-        if agent_body:
-            prompt = f"[你的代理人特徵與能力]\n{agent_body}\n\n---\n\n{prompt}"
-
-        soul = get_concatenated_soul()
-        if soul:
-            prompt = f"[System Persona]\n{soul}\n\n{prompt}"
-
-        cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
-        if model and model not in ("sonnet", ""):
-            cmd += ["--model", model]
-        if effort and effort != "medium":
-            cmd += ["--effort", effort]
-        if permission_mode and permission_mode not in ("default", ""):
-            cmd += ["--permission-mode", permission_mode]
-
-        env = {**os.environ}
-        api_key = _resolve_api_key()
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
-
-        await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                stdin=asyncio.subprocess.PIPE,
-                cwd=project_path,
-                env=env,
+        def _build_full_exec_prompt() -> str:
+            agent_file = AGENTS_DIR / f"{agent_id}.md"
+            agent_body = _read_agent_body(agent_file) if agent_file.exists() else ""
+            prompt = (
+                f"你現在在專案目錄 {project_path} 下執行任務。\n"
+                f"你是團隊成員 @{agent_id}，你的職責是「{role}」。\n"
+                f"以下是團隊需要共同完成的專案實作任務：\n{agent_task}\n"
+                f"請以你個人的職責，獨立對此專案目錄下的代碼進行修改、創建 or 測試，以達成任務要求。"
+                f"有任何產出請直接在此目錄中創建。請使用工具執行，並將你的執行過程簡要回報。\n"
             )
-            log_file = Path(project_path) / f".agent_{agent_id}.log"
+            if agent_body:
+                prompt = f"[你的代理人特徵與能力]\n{agent_body}\n\n---\n\n{prompt}"
+            soul = get_agent_soul(agent_id)
+            if soul:
+                prompt = f"[System Persona]\n{soul}\n\n{prompt}"
+            return prompt
+
+        async def _legacy_exec(prompt: str, resume_sid: "str | None") -> str:
+            """舊模式：一次性 subprocess + stdin y/n 權限核准。"""
+            cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
+            if model and model not in ("sonnet", ""):
+                cmd += ["--model", model]
+            if effort and effort != "medium":
+                cmd += ["--effort", effort]
+            if permission_mode and permission_mode not in ("default", ""):
+                cmd += ["--permission-mode", permission_mode]
+            if resume_sid:
+                cmd += ["--resume", resume_sid]
+
+            env = {**os.environ}
+            api_key = _resolve_api_key()
+            if api_key:
+                env["ANTHROPIC_API_KEY"] = api_key
+
+            await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
+
+            collected_output: list[str] = []
+            proc = None
+
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    stdin=asyncio.subprocess.PIPE,
+                    cwd=project_path,
+                    env=env,
+                )
+                active_procs[proc_key] = proc
+
+                try:
+                    log_file.write_text("", encoding="utf-8")
+                except Exception:
+                    pass
+
+                async for line in proc.stdout:
+                    raw = line.decode("utf-8", errors="replace").strip()
+                    if not raw:
+                        continue
+                    if _is_cli_noise(raw):
+                        continue
+
+                    try:
+                        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+                            f.write(raw + "\n")
+                    except Exception:
+                        pass
+
+                    is_perm_req = False
+                    command_to_show = ""
+
+                    try:
+                        event = json.loads(raw)
+                        if event.get("type") == "permission_request":
+                            is_perm_req = True
+                            command_to_show = event.get("command") or event.get("description") or "敏感操作"
+                        elif event.get("type") == "tool_use" and event.get("requires_approval"):
+                            is_perm_req = True
+                            command_to_show = f"呼叫工具 {event.get('name')}"
+                    except json.JSONDecodeError:
+                        pass
+
+                    raw_lower = raw.lower()
+                    if ("do you want to" in raw_lower or "permission required" in raw_lower or "allow" in raw_lower) and ("[y/n]" in raw_lower or "y/n" in raw_lower or "?" in raw_lower):
+                        is_perm_req = True
+                        command_to_show = raw
+
+                    if is_perm_req:
+                        req_id = uuid.uuid4().hex[:8]
+                        evt = asyncio.Event()
+                        pending_permissions[req_id] = {
+                            "process": proc,
+                            "agent": agent_id,
+                            "command": command_to_show,
+                            "event": evt,
+                            "decision": None
+                        }
+                        await response.write(f"data: {json.dumps({'type': 'permission_request', 'agent': agent_id, 'request_id': req_id, 'command': command_to_show})}\n\n".encode())
+
+                        try:
+                            await asyncio.wait_for(evt.wait(), timeout=600.0)
+                            decision = pending_permissions[req_id]["decision"]
+                        except asyncio.TimeoutError:
+                            decision = "reject"
+                            text_val = f"\n[授權超時：自動拒絕 @{agent_id} 的操作]\n"
+                            try:
+                                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': text_val})}\n\n".encode())
+                            except Exception:
+                                pass
+
+                        if decision == "approve":
+                            proc.stdin.write(b"y\n")
+                            await proc.stdin.drain()
+                        else:
+                            proc.stdin.write(b"n\n")
+                            await proc.stdin.drain()
+                        pending_permissions.pop(req_id, None)
+                        continue
+
+                    try:
+                        event = json.loads(raw)
+                        if event.get("type") == "result" and "session_id" in event:
+                            active_sessions[exec_key] = event["session_id"]
+                        if event.get("type") == "assistant" and event.get("message", {}).get("content"):
+                            for block in event["message"]["content"]:
+                                if block.get("type") == "text":
+                                    collected_output.append(block["text"])
+                                    await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
+                        elif event.get("type") == "text":
+                            collected_output.append(event.get("text", ""))
+                            await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
+                    except json.JSONDecodeError:
+                        collected_output.append(raw)
+                        await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': raw})}\n\n".encode())
+
+                await proc.wait()
+            except Exception as e:
+                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': f'[Error: {e}]'})}\n\n".encode())
+            finally:
+                active_procs.pop(proc_key, None)
+                if proc and proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+
+            await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
+            return "".join(collected_output)
+
+        async def _pooled_exec(prompt_to_send: str, resume_target: "str | None") -> str:
+            """透過 session_pool 送出，重用長駐連線；權限核准改用 can_use_tool callback。"""
+            await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
             try:
                 log_file.write_text("", encoding="utf-8")
             except Exception:
                 pass
 
-            async for line in proc.stdout:
-                raw = line.decode("utf-8", errors="replace").strip()
-                if not raw:
-                    continue
-
+            async def can_use_tool(tool_name, tool_input, context):
+                req_id = uuid.uuid4().hex[:8]
+                evt = asyncio.Event()
+                command_to_show = f"呼叫工具 {tool_name}"
+                pending_permissions[req_id] = {
+                    "agent": agent_id,
+                    "command": command_to_show,
+                    "event": evt,
+                    "decision": None
+                }
+                await response.write(f"data: {json.dumps({'type': 'permission_request', 'agent': agent_id, 'request_id': req_id, 'command': command_to_show})}\n\n".encode())
                 try:
-                    with open(log_file, "a", encoding="utf-8", errors="replace") as f:
-                        f.write(raw + "\n")
-                except Exception:
-                    pass
-
-                is_perm_req = False
-                command_to_show = ""
-
-                try:
-                    event = json.loads(raw)
-                    if event.get("type") == "permission_request":
-                        is_perm_req = True
-                        command_to_show = event.get("command") or event.get("description") or "敏感操作"
-                    elif event.get("type") == "tool_use" and event.get("requires_approval"):
-                        is_perm_req = True
-                        command_to_show = f"呼叫工具 {event.get('name')}"
-                except json.JSONDecodeError:
-                    pass
-
-                raw_lower = raw.lower()
-                if ("do you want to" in raw_lower or "permission required" in raw_lower or "allow" in raw_lower) and ("[y/n]" in raw_lower or "y/n" in raw_lower or "?" in raw_lower):
-                    is_perm_req = True
-                    command_to_show = raw
-
-                if is_perm_req:
-                    req_id = uuid.uuid4().hex[:8]
-                    evt = asyncio.Event()
-                    
-                    pending_permissions[req_id] = {
-                        "process": proc,
-                        "agent": agent_id,
-                        "command": command_to_show,
-                        "event": evt,
-                        "decision": None
-                    }
-
-                    await response.write(f"data: {json.dumps({'type': 'permission_request', 'agent': agent_id, 'request_id': req_id, 'command': command_to_show})}\n\n".encode())
-                    
-                    await evt.wait()
-
+                    await asyncio.wait_for(evt.wait(), timeout=600.0)
                     decision = pending_permissions[req_id]["decision"]
-                    if decision == "approve":
-                        proc.stdin.write(b"y\n")
-                        await proc.stdin.drain()
-                    else:
-                        proc.stdin.write(b"n\n")
-                        await proc.stdin.drain()
+                except asyncio.TimeoutError:
+                    decision = "reject"
+                    text_val = f"\n[授權超時：自動拒絕 @{agent_id} 的操作]\n"
+                    try:
+                        await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': text_val})}\n\n".encode())
+                    except Exception:
+                        pass
+                pending_permissions.pop(req_id, None)
+                if decision == "approve":
+                    return PermissionResultAllow(updated_input=tool_input)
+                return PermissionResultDeny(message="使用者拒絕此操作")
 
-                    pending_permissions.pop(req_id, None)
-                    continue
+            in_pool = _team_pool.has(proc_key)
+            opts = None
+            if not in_pool:
+                env = {**os.environ}
+                api_key = _resolve_api_key()
+                if api_key:
+                    env["ANTHROPIC_API_KEY"] = api_key
+                opts = ClaudeAgentOptions(
+                    cwd=project_path,
+                    env=env,
+                    model=(model if model and model not in ("sonnet", "") else None),
+                    effort=(effort if effort and effort != "medium" else None),
+                    permission_mode=(permission_mode if permission_mode and permission_mode not in ("default", "") else None),
+                    resume=resume_target,
+                    can_use_tool=can_use_tool,
+                )
 
-                try:
-                    event = json.loads(raw)
-                    if event.get("type") == "assistant" and event.get("message", {}).get("content"):
-                        for block in event["message"]["content"]:
-                            if block.get("type") == "text":
-                                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
-                    elif event.get("type") == "text":
-                        await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
-                except json.JSONDecodeError:
-                    await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': raw})}\n\n".encode())
-            
-            await proc.wait()
-        except Exception as e:
-            await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': f'[Error: {e}]'})}\n\n".encode())
+            client = await _team_pool.get_or_create(proc_key, opts)
+            collected: list[str] = []
+            try:
+                await client.query(prompt_to_send)
+                async for message in client.receive_response():
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                collected.append(block.text)
+                                try:
+                                    with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+                                        f.write(block.text + "\n")
+                                except Exception:
+                                    pass
+                                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block.text})}\n\n".encode())
+                    elif isinstance(message, ResultMessage):
+                        active_sessions[exec_key] = message.session_id
+            except Exception:
+                await _team_pool.evict(proc_key)
+                raise
 
-        await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
+            await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
+            return "".join(collected)
+
+        has_persisted = exec_key in active_sessions
+        in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(proc_key)
+        use_pool = HAS_AGENT_SDK and _team_pool is not None
+
+        if use_pool:
+            needs_full_rebuild = not (in_pool_now or has_persisted)
+            if needs_full_rebuild:
+                prompt_to_send = _build_full_exec_prompt()
+            else:
+                prompt_to_send = f"請繼續完成上述任務。追加說明：\n{agent_task}"
+            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(exec_key)
+            try:
+                return await _pooled_exec(prompt_to_send, resume_target)
+            except Exception:
+                active_sessions.pop(exec_key, None)
+                return await _legacy_exec(_build_full_exec_prompt(), None)
+
+        if not has_persisted:
+            prompt = _build_full_exec_prompt()
+            resume_sid = None
+        else:
+            prompt = f"請繼續完成上述任務。追加說明：\n{agent_task}"
+            resume_sid = active_sessions.get(exec_key)
+
+        return await _legacy_exec(prompt, resume_sid)
 
     # 自動彈出已依照團隊人數拆分 Pane 的 Windows Terminal 監控視窗
     try:
@@ -904,8 +1336,21 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
     except Exception:
         pass
 
-    tasks = [run_agent_executor(m["agent"], m["role"]) for m in members]
-    await asyncio.gather(*tasks)
+    execution_mode = team_info.get("execution_mode", "parallel")
+
+    if execution_mode == "sequential":
+        # 串行模式：前一個 agent 的產出附加到下一個 agent 的 task
+        # （只傳「前一位」，不累加全部歷史——避免 token 隨成員數量呈平方成長）
+        previous_output = ""
+        for m in members:
+            agent_task = task
+            if previous_output:
+                agent_task += f"\n\n[前一位成員的產出]\n{previous_output}"
+            previous_output = await run_agent_executor(m["agent"], m["role"], agent_task)
+    else:
+        # 並行模式（預設）
+        exec_tasks = [run_agent_executor(m["agent"], m["role"], task) for m in members]
+        await asyncio.gather(*exec_tasks)
 
     await response.write(b'data: {"type":"done"}\n\n')
     return response
@@ -1082,10 +1527,41 @@ async def handle_session_rename(request: web.Request) -> web.Response:
 async def handle_chat_stop(request: web.Request) -> web.Response:
     data = await request.json()
     client_id = data.get("client_id", "")
-    proc = active_procs.pop(client_id, None)
-    if proc:
-        try: proc.kill()
-        except Exception: pass
+    if client_id:
+        # 找出所有與該 client_id 相關的進程（包括單人、Team Chat 和背景 Team Execute 專案實作的進程）
+        keys_to_kill = [
+            k for k in list(active_procs.keys())
+            if k == client_id or k.startswith(f"exec_{client_id}_") or k.startswith(f"{client_id}_")
+        ]
+        for k in keys_to_kill:
+            proc = active_procs.pop(k, None)
+            if proc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        if HAS_AGENT_SDK and _team_pool is not None:
+            pool_keys_to_evict = [
+                k for k in _team_pool.keys()
+                if k == client_id or k.startswith(f"exec_{client_id}_") or k.startswith(f"{client_id}_")
+            ]
+            for k in pool_keys_to_evict:
+                try:
+                    await _team_pool.evict(k)
+                except Exception:
+                    pass
+    return web.json_response({"ok": True})
+
+
+async def handle_chat_clear(request: web.Request) -> web.Response:
+    data = await request.json()
+    client_id = data.get("client_id", "")
+    if client_id:
+        active_sessions.pop(client_id, None)
+        for k in list(active_sessions.keys()):
+            if k.startswith(f"{client_id}_"):
+                active_sessions.pop(k, None)
     return web.json_response({"ok": True})
 
 
@@ -1363,28 +1839,16 @@ def _agent_dict(f: Path) -> dict:
     aid = f.stem
     fm = _parse_full_frontmatter(f)
 
-    # 確保每個 Agent 都有對應的 soul 檔案，沒有就自動建立空白檔案
-    soul_file = SOULS_DIR / f"{aid}.md"
-    if not soul_file.exists():
-        try:
-            SOULS_DIR.mkdir(parents=True, exist_ok=True)
-            soul_file.write_text("", encoding="utf-8")
-        except Exception:
-            pass
-
-    # 確保 Agent frontmatter 中的 soul 屬性有設定且為 aid
-    if not fm.get("soul") or fm.get("soul") != aid:
-        fm["soul"] = aid
-        try:
-            _write_frontmatter(f, fm)
-        except Exception:
-            pass
+    # P1-B1: soul reads from frontmatter; fallback to agent id for backward compat
+    soul_val = fm.get("soul", "")
+    if not soul_val or not isinstance(soul_val, str):
+        soul_val = aid
 
     return {
         "id":            aid,
         "name":          fm.get("name", aid),
         "description":   fm.get("description", _desc_from_md_file(f)),
-        "soul":          aid,
+        "soul":          soul_val,
         "skills":        fm.get("skills", []) if isinstance(fm.get("skills"), list) else [],
         "memory":        fm.get("memory", []) if isinstance(fm.get("memory"), list) else [],
         "mcp":           fm.get("mcp", [])    if isinstance(fm.get("mcp"), list)    else [],
@@ -1395,31 +1859,36 @@ def _agent_dict(f: Path) -> dict:
 
 # ── Agent CRUD ────────────────────────────────────────────────────────────────
 
+async def _agent_dict_safe(f: Path) -> "dict | None":
+    try:
+        return await asyncio.to_thread(_agent_dict, f)
+    except Exception:
+        return None
+
+
 async def handle_agents(request: web.Request) -> web.Response:
     agents = []
     if AGENTS_DIR.exists():
-        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
-            try:
-                agents.append(_agent_dict(f))
-            except Exception:
-                pass
+        files = sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower())
+        results = await asyncio.gather(*[_agent_dict_safe(f) for f in files])
+        agents = [d for d in results if d is not None]
     return web.json_response(agents)
 
 
 async def handle_agents_registry(request: web.Request) -> web.Response:
     registry = []
     if AGENTS_DIR.exists():
-        for f in sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower()):
-            try:
-                d = _agent_dict(f)
-                registry.append({
-                    "id": f.stem,
-                    "name": d.get("name", f.stem),
-                    "description": d.get("description", ""),
-                    "skills": d.get("skills", [])
-                })
-            except Exception:
-                pass
+        files = sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower())
+        results = await asyncio.gather(*[_agent_dict_safe(f) for f in files])
+        for f, d in zip(files, results):
+            if d is None:
+                continue
+            registry.append({
+                "id": f.stem,
+                "name": d.get("name", f.stem),
+                "description": d.get("description", ""),
+                "skills": d.get("skills", [])
+            })
     return web.json_response(registry)
 
 
@@ -1644,7 +2113,7 @@ async def handle_skill_put(request: web.Request) -> web.Response:
             return web.json_response({"error": "not found"}, status=404)
     data = await request.json()
     fm = _parse_full_frontmatter(f)
-    for field in ("mcp", "memory", "output_memory"):
+    for field in ("description", "mcp", "memory", "output_memory"):
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
@@ -1710,7 +2179,13 @@ def _write_team_yaml(path: Path, data: dict) -> None:
         import yaml as _yaml
         path.write_text(_yaml.dump(data, allow_unicode=True, default_flow_style=False), encoding="utf-8")
     except Exception:
-        lines = []
+        # Manual YAML fallback – handles nested dicts whose values may be lists
+        def _val_str(v) -> str:
+            if isinstance(v, list):
+                return "[" + ", ".join(str(x) for x in v) + "]"
+            return str(v)
+
+        lines: list[str] = []
         for key, val in data.items():
             if isinstance(val, list):
                 if val:
@@ -1720,7 +2195,7 @@ def _write_team_yaml(path: Path, data: dict) -> None:
                             first = True
                             for k, v in item.items():
                                 prefix = "  - " if first else "    "
-                                lines.append(f"{prefix}{k}: {v}")
+                                lines.append(f"{prefix}{k}: {_val_str(v)}")
                                 first = False
                         else:
                             lines.append(f"  - {item}")
@@ -1740,18 +2215,27 @@ def _team_dict(f: Path) -> dict:
     members = []
     for m in members_raw:
         if isinstance(m, dict):
-            members.append({"agent": m.get("agent", ""), "role": m.get("role", "")})
+            # P2-B2: preserve input_memory / output_memory per member
+            mem_in  = m.get("input_memory", [])
+            mem_out = m.get("output_memory", [])
+            members.append({
+                "agent":         m.get("agent", ""),
+                "role":          m.get("role", ""),
+                "input_memory":  mem_in  if isinstance(mem_in,  list) else [],
+                "output_memory": mem_out if isinstance(mem_out, list) else [],
+            })
         elif isinstance(m, str):
-            members.append({"agent": m, "role": ""})
-    
+            members.append({"agent": m, "role": "", "input_memory": [], "output_memory": []})
+
     # 預設首個成員為組長
     default_leader = members[0]["agent"] if members else ""
     return {
-        "id":          f.stem,
-        "name":        raw.get("name", f.stem),
-        "description": raw.get("description", ""),
-        "leader":      raw.get("leader", "") or default_leader,
-        "members":     members,
+        "id":             f.stem,
+        "name":           raw.get("name", f.stem),
+        "description":    raw.get("description", ""),
+        "leader":         raw.get("leader", "") or default_leader,
+        "members":        members,
+        "execution_mode": raw.get("execution_mode", "parallel"),
     }
 
 
@@ -1788,6 +2272,7 @@ async def handle_team_post(request: web.Request) -> web.Response:
         "description": data.get("description", ""),
         "leader": data.get("leader", ""),
         "members": data.get("members", []),
+        "execution_mode": data.get("execution_mode", "parallel"),
     })
     return web.json_response({"ok": True, "id": tid})
 
@@ -1800,10 +2285,11 @@ async def handle_team_put(request: web.Request) -> web.Response:
     data = await request.json()
     current = _team_dict(f)
     payload = {
-        "name":        data.get("name", current["name"]),
-        "description": data.get("description", current["description"]),
-        "leader":      data.get("leader", current.get("leader", "")),
-        "members":     data.get("members", current["members"]),
+        "name":           data.get("name", current["name"]),
+        "description":    data.get("description", current["description"]),
+        "leader":         data.get("leader", current.get("leader", "")),
+        "members":        data.get("members", current["members"]),
+        "execution_mode": data.get("execution_mode", current.get("execution_mode", "parallel")),
     }
     _write_team_yaml(f, payload)
     return web.json_response({"ok": True})
@@ -1823,6 +2309,17 @@ _team_runs:   dict[str, dict] = {}
 _team_events: dict[str, list] = {}
 _team_queues: dict[str, list] = {}
 _team_run_processes: dict[str, asyncio.subprocess.Process] = {}
+
+
+def _cleanup_old_runs(max_age: float = 7200.0) -> None:
+    """Remove finished runs older than max_age seconds (default 2 h)."""
+    now = time.time()
+    stale = [rid for rid, r in _team_runs.items()
+             if r.get("_finished_at") and now - r["_finished_at"] > max_age]
+    for rid in stale:
+        _team_runs.pop(rid, None)
+        _team_events.pop(rid, None)
+        _team_queues.pop(rid, None)
 
 
 def _tr_emit(run_id: str, event: dict) -> None:
@@ -1849,7 +2346,7 @@ async def _agent_run_capture(
         except Exception:
             pass
 
-    soul = get_concatenated_soul()
+    soul = get_agent_soul(agent_id)
     full_prompt = prompt
     if agent_body:
         full_prompt = f"[代理人：{agent_id}]\n{agent_body}\n\n---\n\n{full_prompt}"
@@ -1944,11 +2441,14 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         # 分層 team memory 注入
         mem_ctx = build_team_memory_context(team_id, all_member_ids, agent_id, cwd)
 
-        # 舊式 KV memory（向下相容，保留原有 memory 欄位讀取）
-        legacy_memory: list[str] = []
-        read_keys = agent_info.get("memory", [])
+        # P2-B2: per-member input_memory keys (from team YAML) take precedence;
+        # fallback to agent-level memory keys (from agent frontmatter)
         mem_dir = _memory_dir()
-        for key in read_keys:
+        step_input_keys  = step.get("input_memory",  []) or agent_info.get("memory", [])
+        step_output_keys = step.get("output_memory", []) or agent_info.get("output_memory", [])
+
+        legacy_memory: list[str] = []
+        for key in step_input_keys:
             key_file = mem_dir / f"{key}.md"
             if key_file.exists():
                 try:
@@ -1979,11 +2479,10 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
         prev_output = output
         _tr_emit(run_id, {"type": "step_done", "step": i})
 
-        # 舊式 KV output_memory（向下相容）
-        write_keys = agent_info.get("output_memory", [])
-        if write_keys:
+        # P2-B2: write output to per-member output_memory keys
+        if step_output_keys:
             mem_dir.mkdir(parents=True, exist_ok=True)
-            for key in write_keys:
+            for key in step_output_keys:
                 try:
                     (mem_dir / f"{key}.md").write_text(output, encoding="utf-8")
                 except Exception:
@@ -2013,6 +2512,8 @@ async def _execute_team_run(run_id: str, task: str, model: str, cwd: str) -> Non
     else:
         # cancelled
         run["_finished_at"] = time.time()
+
+    _cleanup_old_runs()
 
 
 async def handle_team_run_post(request: web.Request) -> web.Response:
@@ -2045,7 +2546,15 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
         "task":    task,
         "status":  "running",
         "steps": [
-            {"agent": m["agent"], "role": m["role"], "status": "pending", "output": ""}
+            {
+                "agent":         m["agent"],
+                "role":          m["role"],
+                # P2-B2: carry per-member memory routing into run state
+                "input_memory":  m.get("input_memory",  []) if isinstance(m, dict) else [],
+                "output_memory": m.get("output_memory", []) if isinstance(m, dict) else [],
+                "status":        "pending",
+                "output":        "",
+            }
             for m in team["members"]
         ],
         "summary": "",
@@ -2137,15 +2646,22 @@ async def handle_memory(request: web.Request) -> web.Response:
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "claude_desktop_uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+_UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # 20 MB
+
 async def handle_upload(request: web.Request) -> web.Response:
     data = await request.json()
     b64  = data.get("data", "")
     name = data.get("name", "upload.bin")
     if not b64:
         return web.json_response({"error": "no data"}, status=400)
+    if len(b64) > _UPLOAD_MAX_BYTES * 4 // 3 + 4:
+        return web.json_response({"error": "file too large (max 20 MB)"}, status=413)
+    raw_bytes = base64.b64decode(b64)
+    if len(raw_bytes) > _UPLOAD_MAX_BYTES:
+        return web.json_response({"error": "file too large (max 20 MB)"}, status=413)
     ext  = Path(name).suffix or ".bin"
     dest = UPLOAD_DIR / f"{uuid.uuid4()}{ext}"
-    dest.write_bytes(base64.b64decode(b64))
+    dest.write_bytes(raw_bytes)
     return web.json_response({"path": str(dest), "name": name})
 
 
@@ -2544,7 +3060,7 @@ Now convert this: {text}"""
             "content-type": "application/json"
         }
         payload = {
-            "model": "claude-3-5-sonnet-20241022",
+            "model": "claude-haiku-4-5-20251001",
             "max_tokens": 50,
             "messages": [{"role": "user", "content": prompt}]
         }
@@ -2706,9 +3222,18 @@ async def handle_logs(request: web.Request) -> web.Response:
 
 async def handle_files(request: web.Request) -> web.Response:
     raw = request.rel_url.query.get("path", "")
-    p = Path(raw) if raw else Path.home()
+    home = Path.home()
+    try:
+        p = Path(raw).resolve() if raw else home
+    except Exception:
+        p = home
+    # 只允許 home 目錄以下，防止路徑穿越
+    try:
+        p.relative_to(home)
+    except ValueError:
+        p = home
     if not p.is_dir():
-        p = Path.home()
+        p = home
     items = []
     try:
         for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
@@ -2719,11 +3244,21 @@ async def handle_files(request: web.Request) -> web.Response:
         pass
     return web.json_response({"path": str(p), "parent": str(p.parent), "items": items})
 
+_CLI_ALLOWLIST: dict[str, set[str] | None] = {
+    "logout": None, "doctor": None, "update": None,
+    "mcp": {"list", "remove"},
+}
+
 async def handle_cli(request: web.Request) -> web.Response:
     data = await request.json()
     args = data.get("args", [])
-    if not isinstance(args, list):
-        return web.json_response({"error": "args must be list"}, status=400)
+    if not isinstance(args, list) or not args:
+        return web.json_response({"error": "args must be non-empty list"}, status=400)
+    allowed_sub = _CLI_ALLOWLIST.get(args[0])
+    if args[0] not in _CLI_ALLOWLIST:
+        return web.json_response({"error": f"disallowed verb: {args[0]}"}, status=400)
+    if allowed_sub is not None and (len(args) < 2 or args[1] not in allowed_sub):
+        return web.json_response({"error": f"disallowed subcommand"}, status=400)
     try:
         proc = await asyncio.create_subprocess_exec(
             CLAUDE_BIN, *args,
@@ -2867,11 +3402,9 @@ async def handle_session_auto_title(request: web.Request) -> web.Response:
     if not title:
         return web.json_response({"error": "empty title"}, status=500)
 
-    # Save to session_names.json
     names = load_session_names()
     names[sid] = title
-    SESSION_NAMES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SESSION_NAMES_FILE.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+    _safe_write_text(SESSION_NAMES_FILE, json.dumps(names, ensure_ascii=False, indent=2))
 
     # Also update SQLite
     try:
@@ -3060,7 +3593,7 @@ def _load_tg_config() -> dict:
     return {"token": "", "enabled": False}
 
 def _save_tg_config(cfg: dict) -> None:
-    TELEGRAM_CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    _safe_write_text(TELEGRAM_CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 async def _tg_send_msg(session: aiohttp.ClientSession, token: str, chat_id: int, text: str) -> None:
     try:
@@ -3073,20 +3606,43 @@ async def _tg_send_msg(session: aiohttp.ClientSession, token: str, chat_id: int,
         _log(f"[telegram] send error: {e}")
 
 async def _tg_run_claude(prompt: str) -> str:
+    cfg = _load_config()
+    permission_mode = cfg.get("permissionMode", "")
+    model = cfg.get("model", "")
+    effort = cfg.get("effort", "")
+    
+    cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "text"]
+    if permission_mode and permission_mode not in ("default", ""):
+        cmd += ["--permission-mode", permission_mode]
+    if model and model not in ("sonnet", ""):
+        cmd += ["--model", model]
+    if effort and effort != "medium":
+        cmd += ["--effort", effort]
+
     env = os.environ.copy()
     key = _resolve_api_key()
     if key:
         env["ANTHROPIC_API_KEY"] = key
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt, "--output-format", "text",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env=env, cwd=str(Path.home()),
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,  # 防止卡死
+            env=env,
+            cwd=str(Path.home()),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
         return stdout.decode("utf-8", errors="replace").strip() or "[no response]"
     except Exception as e:
         return f"[Error: {e}]"
+    finally:
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
 
 async def _telegram_poll() -> None:
     cfg  = _tg_state
@@ -3279,7 +3835,8 @@ async def handle_debug_dump(request: web.Request) -> web.Response:
 
 
 async def handle_status(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "active_sessions": len(active_sessions), "claude_bin": CLAUDE_BIN})
+    pool_size = len(_team_pool) if (HAS_AGENT_SDK and _team_pool is not None) else 0
+    return web.json_response({"status": "ok", "active_sessions": len(active_sessions), "pool_size": pool_size, "claude_bin": CLAUDE_BIN})
 
 
 async def handle_config_get(request: web.Request) -> web.Response:
@@ -3327,6 +3884,7 @@ def _init_presets() -> None:
         AGENTS_DIR.mkdir(parents=True, exist_ok=True)
         SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         TEAMS_DIR.mkdir(parents=True, exist_ok=True)
+        SOULS_DIR.mkdir(parents=True, exist_ok=True)
 
         # 1. 複製 skills
         p_skills = presets_dir / "skills"
@@ -3361,7 +3919,16 @@ def _init_presets() -> None:
                     shutil.copy2(src, dest)
                     _log(f"Copied preset team: {src.name} -> {dest}")
 
-        # 4. 合併 MCP servers (claude.json)
+        # 4. 複製 souls（Soul 與 Agent 為 1:1，檔名對應 agent id）
+        p_souls = presets_dir / "souls"
+        if p_souls.exists():
+            for src in p_souls.iterdir():
+                dest = SOULS_DIR / src.name
+                if not dest.exists():
+                    shutil.copy2(src, dest)
+                    _log(f"Copied preset soul: {src.name} -> {dest}")
+
+        # 5. 合併 MCP servers (claude.json)
         p_claude_json = presets_dir / "claude.json"
         if p_claude_json.exists():
             dest_claude_json = CLAUDE_HOME / "claude.json"
@@ -3397,8 +3964,7 @@ def _init_presets() -> None:
                         _log(f"Added preset MCP server: {k}")
 
                 if changed:
-                    CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
-                    dest_claude_json.write_text(json.dumps(user_data, ensure_ascii=False, indent=2), encoding="utf-8")
+                    _safe_write_text(dest_claude_json, json.dumps(user_data, ensure_ascii=False, indent=2))
 
     except Exception as e:
         _log(f"Error initializing presets: {e}")
@@ -3410,7 +3976,7 @@ def build_app() -> web.Application:
     _migrate_fts_tokenizer()
     _backfill_project_paths()
     _init_presets()
-    app = web.Application()
+    app = web.Application(client_max_size=_UPLOAD_MAX_BYTES + 1024)
 
     cors = aiohttp_cors.setup(app, defaults={
         "*": aiohttp_cors.ResourceOptions(
@@ -3430,6 +3996,7 @@ def build_app() -> web.Application:
         ("POST",   "/api/team/execute",   handle_team_execute),
         ("POST",   "/api/team/authorize", handle_team_authorize),
         ("POST",   "/api/chat/stop",      handle_chat_stop),
+        ("POST",   "/api/chat/clear",     handle_chat_clear),
         ("GET",    "/api/backup",          handle_backup),
         ("POST",   "/api/restore",         handle_restore),
         ("DELETE", "/api/soul",            handle_soul_reset),
@@ -3522,6 +4089,31 @@ def build_app() -> web.Application:
         for method, handler in method_handlers:
             cors.add(resource.add_route(method, handler))
 
+    async def cleanup_processes(app_ref):
+        _log("[cleanup] Shutting down, cleaning up all active processes...")
+        for k in list(active_procs.keys()):
+            proc = active_procs.pop(k, None)
+            if proc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        for name in list(_mcp_procs.keys()):
+            proc = _mcp_procs.pop(name, None)
+            if proc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        if HAS_AGENT_SDK and _team_pool is not None:
+            try:
+                await _team_pool.evict_all()
+            except Exception:
+                pass
+
+    app.on_cleanup.append(cleanup_processes)
+
     return app
 
 
@@ -3578,23 +4170,39 @@ async def _send_line_message(to: str, text: str) -> None:
         print(f"[schedule] Failed to send LINE message: {e}")
 
 
+_SCHEDULE_TIMEOUT = 300  # 5 分鐘，防止 schedule 無限 hang
+
 async def run_schedule_prompt(schedule: dict) -> None:
     prompt = schedule["prompt"] if isinstance(schedule, dict) else schedule
-    # 移除 --dangerously-skip-permissions 旗標以支援 Docker 容器安全執行
+    
+    cfg = _load_config()
+    permission_mode = cfg.get("permissionMode", "")
+    model = cfg.get("model", "")
+    effort = cfg.get("effort", "")
+    
     cmd = [CLAUDE_BIN, "-p", prompt, "--output-format", "json"]
+    if permission_mode and permission_mode not in ("default", ""):
+        cmd += ["--permission-mode", permission_mode]
+    if model and model not in ("sonnet", ""):
+        cmd += ["--model", model]
+    if effort and effort != "medium":
+        cmd += ["--effort", effort]
+
     env = os.environ.copy()
     key = _resolve_api_key()
     if key:
         env["ANTHROPIC_API_KEY"] = key
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,  # 防止背景卡死
             env=env,
             cwd=str(Path.home()),
         )
-        stdout, _ = await proc.communicate()
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_SCHEDULE_TIMEOUT)
         result_text = ""
         try:
             output = json.loads(stdout.decode("utf-8", errors="replace"))
@@ -3606,6 +4214,13 @@ async def run_schedule_prompt(schedule: dict) -> None:
             # 依使用者需求，預設直接推送至 LINE Admin 帳號
             to = _load_config().get("lineAdminUserId", "").strip()
             await _send_line_message(to, result_text)
+    except asyncio.TimeoutError:
+        print(f"[schedule] Prompt timed out after {_SCHEDULE_TIMEOUT}s")
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
 
@@ -3635,6 +4250,9 @@ async def on_startup(app: web.Application) -> None:
     _log(f"Backend started. Claude: {CLAUDE_BIN}")
     asyncio.create_task(run_schedule_runner())
     asyncio.create_task(_gc_team_runs())  # 定期清除舊 team runs
+    if HAS_AGENT_SDK and _team_pool is not None:
+        from session_pool import run_idle_pruner
+        asyncio.create_task(run_idle_pruner(_team_pool))
     # Auto-start Telegram bot if configured
     tg_cfg = _load_tg_config()
     _tg_state.update({"token": tg_cfg.get("token",""), "enabled": tg_cfg.get("enabled", False)})
