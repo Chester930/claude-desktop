@@ -1931,11 +1931,12 @@ def _team_dict(f: Path) -> dict:
     # 預設首個成員為組長
     default_leader = members[0]["agent"] if members else ""
     return {
-        "id":          f.stem,
-        "name":        raw.get("name", f.stem),
-        "description": raw.get("description", ""),
-        "leader":      raw.get("leader", "") or default_leader,
-        "members":     members,
+        "id":             f.stem,
+        "name":           raw.get("name", f.stem),
+        "description":    raw.get("description", ""),
+        "leader":         raw.get("leader", "") or default_leader,
+        "members":        members,
+        "execution_mode": raw.get("execution_mode", "parallel"),
     }
 
 
@@ -1972,6 +1973,7 @@ async def handle_team_post(request: web.Request) -> web.Response:
         "description": data.get("description", ""),
         "leader": data.get("leader", ""),
         "members": data.get("members", []),
+        "execution_mode": data.get("execution_mode", "parallel"),
     })
     return web.json_response({"ok": True, "id": tid})
 
@@ -1984,10 +1986,11 @@ async def handle_team_put(request: web.Request) -> web.Response:
     data = await request.json()
     current = _team_dict(f)
     payload = {
-        "name":        data.get("name", current["name"]),
-        "description": data.get("description", current["description"]),
-        "leader":      data.get("leader", current.get("leader", "")),
-        "members":     data.get("members", current["members"]),
+        "name":           data.get("name", current["name"]),
+        "description":    data.get("description", current["description"]),
+        "leader":         data.get("leader", current.get("leader", "")),
+        "members":        data.get("members", current["members"]),
+        "execution_mode": data.get("execution_mode", current.get("execution_mode", "parallel")),
     }
     _write_team_yaml(f, payload)
     return web.json_response({"ok": True})
