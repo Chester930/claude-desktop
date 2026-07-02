@@ -4,7 +4,7 @@
 
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F)
-![Angular](https://img.shields.io/badge/Angular-19-DD0031)
+![Angular](https://img.shields.io/badge/Angular-22-DD0031)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
 
@@ -225,7 +225,7 @@ claude-desktop/
 ├── electron/
 │   ├── main.js          # Electron 主程序（視窗、後端生命週期）
 │   └── preload.js       # IPC bridge
-├── frontend/            # Angular 19
+├── frontend/            # Angular 22
 │   ├── src/app/
 │   │   ├── app.ts       # 主元件、對話邏輯
 │   │   ├── app.html     # 版型
