@@ -32,6 +32,9 @@ class SessionPool:
     def has(self, key: str) -> bool:
         return key in self._clients
 
+    def keys(self) -> list[str]:
+        return list(self._clients.keys())
+
     async def evict(self, key: str) -> None:
         client = self._clients.pop(key, None)
         self._touched.pop(key, None)

@@ -24,7 +24,8 @@ except ImportError:
 try:
     from claude_agent_sdk import (
         ClaudeSDKClient, ClaudeAgentOptions,
-        AssistantMessage, ResultMessage, TextBlock,
+        AssistantMessage, ResultMessage, TextBlock, UserMessage,
+        PermissionResultAllow, PermissionResultDeny,
     )
     from session_pool import SessionPool
     HAS_AGENT_SDK = True
@@ -435,17 +436,14 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             except Exception:
                 pass
 
-    has_session = client_id in active_sessions
-
-    if not has_session:
-        # 首次：組裝完整靜態 context
+    def _build_full_message() -> str:
+        """組裝首 Turn 用的完整 prompt（soul + team + memory + agent def）。"""
         soul = get_agent_soul(agent)
-        full_message = f"[System Persona]\n{soul}\n\n{message}" if soul else message
+        fm = f"[System Persona]\n{soul}\n\n{message}" if soul else message
 
         if team_id and team_info:
             all_members = [m["agent"] for m in team_info.get("members", [])]
             mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd, members_meta=team_info.get("members", []))
-            
             team_name = team_info.get("name", team_id)
             members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in team_info.get("members", [])])
             team_prompt = (
@@ -454,12 +452,12 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 f"你的團隊成員如下：\n{members_str}\n"
                 f"當使用者交辦任務時，請以團隊組長的角色進行回覆與規畫。你可以運用其他組員的專長來協助引導對話與思考。\n\n"
             )
-            full_message = team_prompt + full_message
+            fm = team_prompt + fm
         else:
             mem_ctx = build_memory_context(agent, cwd)
 
         if mem_ctx:
-            full_message = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{full_message}"
+            fm = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{fm}"
 
         if agent:
             agent_file = AGENTS_DIR / f"{agent}.md"
@@ -472,26 +470,10 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                         if len(parts) >= 3:
                             body = parts[2].strip()
                     if body:
-                        full_message = f"[代理人：{agent}]\n{body}\n\n---\n\n{full_message}"
+                        fm = f"[代理人：{agent}]\n{body}\n\n---\n\n{fm}"
                 except Exception:
                     pass
-    else:
-        # 後續 Turn：只送使用者輸入增量
-        full_message = message
-
-    cmd = [claude_bin, "-p", full_message, "--output-format", "stream-json", "--verbose"]
-    if model and model not in ("sonnet", ""):
-        cmd += ["--model", model]
-    if effort and effort != "medium":
-        cmd += ["--effort", effort]
-    if permission_mode and permission_mode not in ("default", ""):
-        cmd += ["--permission-mode", permission_mode]
-    for att in attachments:
-        if Path(att).exists():
-            cmd += ["--input-file", att]
-
-    if has_session:
-        cmd += ["--resume", active_sessions[client_id]]
+        return fm
 
     response = web.StreamResponse(headers={
         "Content-Type":    "text/event-stream",
@@ -500,55 +482,142 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     })
     await response.prepare(request)
 
-    proc = None
-    try:
-        env = {**os.environ}
-        api_key = _resolve_api_key()
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-            cwd=cwd,
-            env=env,
-        )
-        active_procs[client_id] = proc
+    has_persisted = client_id in active_sessions
+    in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(client_id)
+    use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
 
-        async for line in proc.stdout:
-            raw = line.decode("utf-8", errors="replace").strip()
-            if not raw:
-                continue
-            if _is_cli_noise(raw):
-                continue
-            try:
-                event = json.loads(raw)
-                if event.get("type") == "result" and "session_id" in event:
-                    active_sessions[client_id] = event["session_id"]
-                await response.write(f"data: {raw}\n\n".encode())
-            except json.JSONDecodeError:
-                payload = json.dumps({"type": "text", "text": raw})
-                await response.write(f"data: {payload}\n\n".encode())
+    async def _run_pooled(prompt_to_send: str, resume_target: "str | None") -> None:
+        in_pool = _team_pool.has(client_id)
+        opts = None
+        if not in_pool:
+            env = {**os.environ}
+            api_key = _resolve_api_key()
+            if api_key:
+                env["ANTHROPIC_API_KEY"] = api_key
+            opts = ClaudeAgentOptions(
+                cwd=cwd,
+                env=env,
+                model=(model if model and model not in ("sonnet", "") else None),
+                effort=(effort if effort and effort != "medium" else None),
+                permission_mode=(permission_mode if permission_mode and permission_mode not in ("default", "") else None),
+                resume=resume_target,
+            )
 
-        await proc.wait()
+        client = await _team_pool.get_or_create(client_id, opts)
         try:
-            await response.write(b'data: {"type":"done"}\n\n')
+            await client.query(prompt_to_send)
+            async for message_obj in client.receive_response():
+                if isinstance(message_obj, AssistantMessage):
+                    text_blocks = [b.text for b in message_obj.content if isinstance(b, TextBlock)]
+                    if text_blocks:
+                        env_msg = {"type": "assistant", "message": {"content": [{"type": "text", "text": t} for t in text_blocks]}}
+                        await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
+                    for b in message_obj.content:
+                        if type(b).__name__ == "ToolUseBlock":
+                            env_msg = {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
+                            await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
+                elif isinstance(message_obj, UserMessage):
+                    content = message_obj.content if isinstance(message_obj.content, list) else []
+                    result_blocks = [b for b in content if type(b).__name__ == "ToolResultBlock"]
+                    if result_blocks:
+                        env_msg = {
+                            "type": "user",
+                            "message": {"content": [
+                                {"type": "tool_result", "tool_use_id": b.tool_use_id, "content": b.content}
+                                for b in result_blocks
+                            ]}
+                        }
+                        await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
+                elif isinstance(message_obj, ResultMessage):
+                    active_sessions[client_id] = message_obj.session_id
+                    usage = message_obj.usage or {}
+                    env_msg = {
+                        "type": "result",
+                        "total_cost_usd": message_obj.total_cost_usd or 0,
+                        "usage": {
+                            "input_tokens": usage.get("input_tokens", 0) if isinstance(usage, dict) else 0,
+                            "output_tokens": usage.get("output_tokens", 0) if isinstance(usage, dict) else 0,
+                        },
+                    }
+                    await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
         except Exception:
-            pass
+            await _team_pool.evict(client_id)
+            raise
+
+    async def _run_legacy(full_message: str) -> None:
+        cmd = [claude_bin, "-p", full_message, "--output-format", "stream-json", "--verbose"]
+        if model and model not in ("sonnet", ""):
+            cmd += ["--model", model]
+        if effort and effort != "medium":
+            cmd += ["--effort", effort]
+        if permission_mode and permission_mode not in ("default", ""):
+            cmd += ["--permission-mode", permission_mode]
+        for att in attachments:
+            if Path(att).exists():
+                cmd += ["--input-file", att]
+        if client_id in active_sessions:
+            cmd += ["--resume", active_sessions[client_id]]
+
+        proc = None
+        try:
+            env = {**os.environ}
+            api_key = _resolve_api_key()
+            if api_key:
+                env["ANTHROPIC_API_KEY"] = api_key
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+                cwd=cwd,
+                env=env,
+            )
+            active_procs[client_id] = proc
+
+            async for line in proc.stdout:
+                raw = line.decode("utf-8", errors="replace").strip()
+                if not raw:
+                    continue
+                if _is_cli_noise(raw):
+                    continue
+                try:
+                    event = json.loads(raw)
+                    if event.get("type") == "result" and "session_id" in event:
+                        active_sessions[client_id] = event["session_id"]
+                    await response.write(f"data: {raw}\n\n".encode())
+                except json.JSONDecodeError:
+                    payload = json.dumps({"type": "text", "text": raw})
+                    await response.write(f"data: {payload}\n\n".encode())
+
+            await proc.wait()
+        finally:
+            active_procs.pop(client_id, None)
+            if proc and proc.returncode is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+
+    try:
+        if use_pool:
+            needs_full_rebuild = not (in_pool_now or has_persisted)
+            prompt_to_send = _build_full_message() if needs_full_rebuild else message
+            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(client_id)
+            try:
+                await _run_pooled(prompt_to_send, resume_target)
+            except Exception:
+                active_sessions.pop(client_id, None)
+                await _run_legacy(_build_full_message())
+        else:
+            full_message = message if client_id in active_sessions else _build_full_message()
+            await _run_legacy(full_message)
+        await response.write(b'data: {"type":"done"}\n\n')
     except Exception as e:
         try:
             payload = json.dumps({"type": "error", "text": str(e)})
             await response.write(f"data: {payload}\n\n".encode())
         except Exception:
             pass
-    finally:
-        active_procs.pop(client_id, None)
-        if proc and proc.returncode is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
 
     return response
 
@@ -1004,19 +1073,16 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
 
     async def run_agent_executor(agent_id: str, role: str, agent_task: str) -> str:
         """
-        執行單一 agent 的任務。
-        - 首次呼叫：送完整 prompt（soul + agent def + task）
-        - 已有 exec session：改送追加說明，透過 --resume 續接
-        - 回傳收集到的文字輸出（供 sequential 模式傳遞給下一個 agent）
+        執行單一 agent 的任務。優先透過 session_pool 重用長駐連線（不重開 subprocess，
+        權限核准改用 SDK 的 can_use_tool callback）；沒有 SDK 時退回舊的一次性 subprocess + stdin y/n 模式。
         """
-        exec_key   = f"exec_{team_id}_{agent_id}"
-        has_session = exec_key in active_sessions
+        exec_key = f"exec_{team_id}_{agent_id}"
+        proc_key = f"exec_{client_id}_{agent_id}"
+        log_file = Path(project_path) / f".agent_{agent_id}.log"
 
-        if not has_session:
-            # 首次：組裝完整 prompt
+        def _build_full_exec_prompt() -> str:
             agent_file = AGENTS_DIR / f"{agent_id}.md"
             agent_body = _read_agent_body(agent_file) if agent_file.exists() else ""
-
             prompt = (
                 f"你現在在專案目錄 {project_path} 下執行任務。\n"
                 f"你是團隊成員 @{agent_id}，你的職責是「{role}」。\n"
@@ -1029,145 +1095,240 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             soul = get_agent_soul(agent_id)
             if soul:
                 prompt = f"[System Persona]\n{soul}\n\n{prompt}"
-            resume_sid = None
-        else:
-            # 已有 session：只送追加說明
-            prompt     = f"請繼續完成上述任務。追加說明：\n{agent_task}"
-            resume_sid = active_sessions.get(exec_key)
+            return prompt
 
-        cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
-        if model and model not in ("sonnet", ""):
-            cmd += ["--model", model]
-        if effort and effort != "medium":
-            cmd += ["--effort", effort]
-        if permission_mode and permission_mode not in ("default", ""):
-            cmd += ["--permission-mode", permission_mode]
-        if resume_sid:
-            cmd += ["--resume", resume_sid]
+        async def _legacy_exec(prompt: str, resume_sid: "str | None") -> str:
+            """舊模式：一次性 subprocess + stdin y/n 權限核准。"""
+            cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
+            if model and model not in ("sonnet", ""):
+                cmd += ["--model", model]
+            if effort and effort != "medium":
+                cmd += ["--effort", effort]
+            if permission_mode and permission_mode not in ("default", ""):
+                cmd += ["--permission-mode", permission_mode]
+            if resume_sid:
+                cmd += ["--resume", resume_sid]
 
-        env = {**os.environ}
-        api_key = _resolve_api_key()
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
+            env = {**os.environ}
+            api_key = _resolve_api_key()
+            if api_key:
+                env["ANTHROPIC_API_KEY"] = api_key
 
-        await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
+            await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
 
-        collected_output: list[str] = []
-        proc = None
-        proc_key = f"exec_{client_id}_{agent_id}"
+            collected_output: list[str] = []
+            proc = None
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                stdin=asyncio.subprocess.PIPE,
-                cwd=project_path,
-                env=env,
-            )
-            # 註冊到 active_procs 進程表中，供 chat/stop 終止
-            active_procs[proc_key] = proc
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    stdin=asyncio.subprocess.PIPE,
+                    cwd=project_path,
+                    env=env,
+                )
+                active_procs[proc_key] = proc
 
-            log_file = Path(project_path) / f".agent_{agent_id}.log"
+                try:
+                    log_file.write_text("", encoding="utf-8")
+                except Exception:
+                    pass
+
+                async for line in proc.stdout:
+                    raw = line.decode("utf-8", errors="replace").strip()
+                    if not raw:
+                        continue
+                    if _is_cli_noise(raw):
+                        continue
+
+                    try:
+                        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+                            f.write(raw + "\n")
+                    except Exception:
+                        pass
+
+                    is_perm_req = False
+                    command_to_show = ""
+
+                    try:
+                        event = json.loads(raw)
+                        if event.get("type") == "permission_request":
+                            is_perm_req = True
+                            command_to_show = event.get("command") or event.get("description") or "敏感操作"
+                        elif event.get("type") == "tool_use" and event.get("requires_approval"):
+                            is_perm_req = True
+                            command_to_show = f"呼叫工具 {event.get('name')}"
+                    except json.JSONDecodeError:
+                        pass
+
+                    raw_lower = raw.lower()
+                    if ("do you want to" in raw_lower or "permission required" in raw_lower or "allow" in raw_lower) and ("[y/n]" in raw_lower or "y/n" in raw_lower or "?" in raw_lower):
+                        is_perm_req = True
+                        command_to_show = raw
+
+                    if is_perm_req:
+                        req_id = uuid.uuid4().hex[:8]
+                        evt = asyncio.Event()
+                        pending_permissions[req_id] = {
+                            "process": proc,
+                            "agent": agent_id,
+                            "command": command_to_show,
+                            "event": evt,
+                            "decision": None
+                        }
+                        await response.write(f"data: {json.dumps({'type': 'permission_request', 'agent': agent_id, 'request_id': req_id, 'command': command_to_show})}\n\n".encode())
+
+                        try:
+                            await asyncio.wait_for(evt.wait(), timeout=600.0)
+                            decision = pending_permissions[req_id]["decision"]
+                        except asyncio.TimeoutError:
+                            decision = "reject"
+                            text_val = f"\n[授權超時：自動拒絕 @{agent_id} 的操作]\n"
+                            try:
+                                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': text_val})}\n\n".encode())
+                            except Exception:
+                                pass
+
+                        if decision == "approve":
+                            proc.stdin.write(b"y\n")
+                            await proc.stdin.drain()
+                        else:
+                            proc.stdin.write(b"n\n")
+                            await proc.stdin.drain()
+                        pending_permissions.pop(req_id, None)
+                        continue
+
+                    try:
+                        event = json.loads(raw)
+                        if event.get("type") == "result" and "session_id" in event:
+                            active_sessions[exec_key] = event["session_id"]
+                        if event.get("type") == "assistant" and event.get("message", {}).get("content"):
+                            for block in event["message"]["content"]:
+                                if block.get("type") == "text":
+                                    collected_output.append(block["text"])
+                                    await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
+                        elif event.get("type") == "text":
+                            collected_output.append(event.get("text", ""))
+                            await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
+                    except json.JSONDecodeError:
+                        collected_output.append(raw)
+                        await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': raw})}\n\n".encode())
+
+                await proc.wait()
+            except Exception as e:
+                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': f'[Error: {e}]'})}\n\n".encode())
+            finally:
+                active_procs.pop(proc_key, None)
+                if proc and proc.returncode is None:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+
+            await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
+            return "".join(collected_output)
+
+        async def _pooled_exec(prompt_to_send: str, resume_target: "str | None") -> str:
+            """透過 session_pool 送出，重用長駐連線；權限核准改用 can_use_tool callback。"""
+            await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
             try:
                 log_file.write_text("", encoding="utf-8")
             except Exception:
                 pass
 
-            async for line in proc.stdout:
-                raw = line.decode("utf-8", errors="replace").strip()
-                if not raw:
-                    continue
-                if _is_cli_noise(raw):
-                    continue
-
+            async def can_use_tool(tool_name, tool_input, context):
+                req_id = uuid.uuid4().hex[:8]
+                evt = asyncio.Event()
+                command_to_show = f"呼叫工具 {tool_name}"
+                pending_permissions[req_id] = {
+                    "agent": agent_id,
+                    "command": command_to_show,
+                    "event": evt,
+                    "decision": None
+                }
+                await response.write(f"data: {json.dumps({'type': 'permission_request', 'agent': agent_id, 'request_id': req_id, 'command': command_to_show})}\n\n".encode())
                 try:
-                    with open(log_file, "a", encoding="utf-8", errors="replace") as f:
-                        f.write(raw + "\n")
-                except Exception:
-                    pass
-
-                is_perm_req = False
-                command_to_show = ""
-
-                try:
-                    event = json.loads(raw)
-                    if event.get("type") == "result" and "session_id" in event:
-                        active_sessions[exec_key] = event["session_id"]
-                    if event.get("type") == "permission_request":
-                        is_perm_req = True
-                        command_to_show = event.get("command") or event.get("description") or "敏感操作"
-                    elif event.get("type") == "tool_use" and event.get("requires_approval"):
-                        is_perm_req = True
-                        command_to_show = f"呼叫工具 {event.get('name')}"
-                except json.JSONDecodeError:
-                    pass
-
-                raw_lower = raw.lower()
-                if ("do you want to" in raw_lower or "permission required" in raw_lower or "allow" in raw_lower) and ("[y/n]" in raw_lower or "y/n" in raw_lower or "?" in raw_lower):
-                    is_perm_req = True
-                    command_to_show = raw
-
-                if is_perm_req:
-                    req_id = uuid.uuid4().hex[:8]
-                    evt = asyncio.Event()
-                    pending_permissions[req_id] = {
-                        "process": proc,
-                        "agent": agent_id,
-                        "command": command_to_show,
-                        "event": evt,
-                        "decision": None
-                    }
-                    await response.write(f"data: {json.dumps({'type': 'permission_request', 'agent': agent_id, 'request_id': req_id, 'command': command_to_show})}\n\n".encode())
-                    
+                    await asyncio.wait_for(evt.wait(), timeout=600.0)
+                    decision = pending_permissions[req_id]["decision"]
+                except asyncio.TimeoutError:
+                    decision = "reject"
+                    text_val = f"\n[授權超時：自動拒絕 @{agent_id} 的操作]\n"
                     try:
-                        # 加上 10 分鐘超時安全機制，防範無回應造成的死鎖
-                        await asyncio.wait_for(evt.wait(), timeout=600.0)
-                        decision = pending_permissions[req_id]["decision"]
-                    except asyncio.TimeoutError:
-                        decision = "reject"
-                        text_val = f"\n[授權超時：自動拒絕 @{agent_id} 的操作]\n"
-                        try:
-                            await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': text_val})}\n\n".encode())
-                        except Exception:
-                            pass
+                        await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': text_val})}\n\n".encode())
+                    except Exception:
+                        pass
+                pending_permissions.pop(req_id, None)
+                if decision == "approve":
+                    return PermissionResultAllow(updated_input=tool_input)
+                return PermissionResultDeny(message="使用者拒絕此操作")
 
-                    if decision == "approve":
-                        proc.stdin.write(b"y\n")
-                        await proc.stdin.drain()
-                    else:
-                        proc.stdin.write(b"n\n")
-                        await proc.stdin.drain()
-                    pending_permissions.pop(req_id, None)
-                    continue
+            in_pool = _team_pool.has(proc_key)
+            opts = None
+            if not in_pool:
+                env = {**os.environ}
+                api_key = _resolve_api_key()
+                if api_key:
+                    env["ANTHROPIC_API_KEY"] = api_key
+                opts = ClaudeAgentOptions(
+                    cwd=project_path,
+                    env=env,
+                    model=(model if model and model not in ("sonnet", "") else None),
+                    effort=(effort if effort and effort != "medium" else None),
+                    permission_mode=(permission_mode if permission_mode and permission_mode not in ("default", "") else None),
+                    resume=resume_target,
+                    can_use_tool=can_use_tool,
+                )
 
-                try:
-                    event = json.loads(raw)
-                    if event.get("type") == "assistant" and event.get("message", {}).get("content"):
-                        for block in event["message"]["content"]:
-                            if block.get("type") == "text":
-                                collected_output.append(block["text"])
-                                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block['text']})}\n\n".encode())
-                    elif event.get("type") == "text":
-                        collected_output.append(event.get("text", ""))
-                        await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': event.get('text', '')})}\n\n".encode())
-                except json.JSONDecodeError:
-                    collected_output.append(raw)
-                    await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': raw})}\n\n".encode())
+            client = await _team_pool.get_or_create(proc_key, opts)
+            collected: list[str] = []
+            try:
+                await client.query(prompt_to_send)
+                async for message in client.receive_response():
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                collected.append(block.text)
+                                try:
+                                    with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+                                        f.write(block.text + "\n")
+                                except Exception:
+                                    pass
+                                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': block.text})}\n\n".encode())
+                    elif isinstance(message, ResultMessage):
+                        active_sessions[exec_key] = message.session_id
+            except Exception:
+                await _team_pool.evict(proc_key)
+                raise
 
-            await proc.wait()
-        except Exception as e:
-            await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': f'[Error: {e}]'})}\n\n".encode())
-        finally:
-            active_procs.pop(proc_key, None)
-            if proc and proc.returncode is None:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+            await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
+            return "".join(collected)
 
-        await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
-        return "".join(collected_output)
+        has_persisted = exec_key in active_sessions
+        in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(proc_key)
+        use_pool = HAS_AGENT_SDK and _team_pool is not None
+
+        if use_pool:
+            needs_full_rebuild = not (in_pool_now or has_persisted)
+            if needs_full_rebuild:
+                prompt_to_send = _build_full_exec_prompt()
+            else:
+                prompt_to_send = f"請繼續完成上述任務。追加說明：\n{agent_task}"
+            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(exec_key)
+            try:
+                return await _pooled_exec(prompt_to_send, resume_target)
+            except Exception:
+                active_sessions.pop(exec_key, None)
+                return await _legacy_exec(_build_full_exec_prompt(), None)
+
+        if not has_persisted:
+            prompt = _build_full_exec_prompt()
+            resume_sid = None
+        else:
+            prompt = f"請繼續完成上述任務。追加說明：\n{agent_task}"
+            resume_sid = active_sessions.get(exec_key)
+
+        return await _legacy_exec(prompt, resume_sid)
 
     # 自動彈出已依照團隊人數拆分 Pane 的 Windows Terminal 監控視窗
     try:
@@ -1355,6 +1516,17 @@ async def handle_chat_stop(request: web.Request) -> web.Response:
             if proc:
                 try:
                     proc.kill()
+                except Exception:
+                    pass
+
+        if HAS_AGENT_SDK and _team_pool is not None:
+            pool_keys_to_evict = [
+                k for k in _team_pool.keys()
+                if k == client_id or k.startswith(f"exec_{client_id}_") or k.startswith(f"{client_id}_")
+            ]
+            for k in pool_keys_to_evict:
+                try:
+                    await _team_pool.evict(k)
                 except Exception:
                     pass
     return web.json_response({"ok": True})
