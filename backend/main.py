@@ -22,6 +22,16 @@ except ImportError:
     HAS_CRONITER = False
 
 try:
+    from claude_agent_sdk import (
+        ClaudeSDKClient, ClaudeAgentOptions,
+        AssistantMessage, ResultMessage, TextBlock,
+    )
+    from session_pool import SessionPool
+    HAS_AGENT_SDK = True
+except ImportError:
+    HAS_AGENT_SDK = False
+
+try:
     import database as _db_mod
 except ImportError:
     import backend.database as _db_mod
@@ -117,6 +127,8 @@ for _k in active_sessions.keys():
 active_sessions._prune()
 
 active_procs:    dict[str, asyncio.subprocess.Process] = {}  # client_id -> proc
+
+_team_pool = SessionPool() if HAS_AGENT_SDK else None  # persistent ClaudeSDKClient pool for team chat/execute
 _mcp_procs:      dict[str, asyncio.subprocess.Process] = {}  # mcp name -> proc
 _mcp_logs:       dict[str, list[str]] = {}                   # mcp name -> log lines
 pending_permissions: dict[str, dict] = {}                    # request_id -> dict with process, event, etc.
@@ -608,16 +620,10 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         is_first_turn: bool = True,
     ) -> tuple[str, str]:
         """
-        呼叫單一 agent。
-
-        is_first_turn=True  → 組裝完整 prompt（soul + memory + agent def + history）
-        is_first_turn=False → 只送 prompt_text（增量訊息），透過 --resume 續接 session
-        fallback：若 --resume 失敗（session 過期），自動退回完整 prompt 重啟。
+        呼叫單一 agent。優先透過 session_pool 重用長駐連線（不重開 subprocess）；
+        沒有 SDK 或帶附件時退回舊的一次性 subprocess + --resume 模式。
         """
-        import re as _re
-
         session_key = f"{client_id}_{agent_id}"
-        has_session = session_key in active_sessions
 
         def _build_full_prompt(hist: str) -> str:
             """組裝首 Turn 用的完整 prompt。"""
@@ -664,7 +670,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             return fp
 
         async def _exec_cmd(fp: str, resume_sid: "str | None") -> tuple[list[str], str, bool]:
-            """執行 claude CLI，回傳 (collected_text, new_session_id, resume_failed)。"""
+            """執行 claude CLI（舊模式，一次性 subprocess），回傳 (collected_text, new_session_id, resume_failed)。"""
             cmd = [claude_bin, "-p", fp, "--output-format", "stream-json", "--verbose"]
             if model and model not in ("sonnet", ""):
                 cmd += ["--model", model]
@@ -706,7 +712,6 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                         continue
                     if _is_cli_noise(raw):
                         continue
-                    # 偵測 session 過期 / resume 失敗
                     if resume_sid and (
                         "session not found" in raw.lower()
                         or "invalid session" in raw.lower()
@@ -736,24 +741,76 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
             return collected, new_sid, resume_failed
 
-        # ── 決定要送的 prompt ─────────────────────────────────────────
-        if not has_session or is_first_turn:
-            # 首次 or 無 session：送完整 prompt
+        async def _exec_pooled(prompt_to_send: str, resume_target: "str | None") -> tuple[list[str], str]:
+            """透過 session_pool 送出，重用長駐連線（不重開 subprocess）。連線斷開/resume 失敗會拋出供外層 fallback。"""
+            await response.write(f"data: {json.dumps({'type': 'agent_start', 'agent': agent_id})}\n\n".encode())
+
+            in_pool = _team_pool.has(session_key)
+            opts = None
+            if not in_pool:
+                env = {**os.environ}
+                api_key = _resolve_api_key()
+                if api_key:
+                    env["ANTHROPIC_API_KEY"] = api_key
+                opts = ClaudeAgentOptions(
+                    cwd=cwd,
+                    env=env,
+                    model=(model if model and model not in ("sonnet", "") else None),
+                    effort=(effort if effort and effort != "medium" else None),
+                    permission_mode=(permission_mode if permission_mode and permission_mode not in ("default", "") else None),
+                    resume=resume_target,
+                )
+
+            client = await _team_pool.get_or_create(session_key, opts)
+            collected: list[str] = []
+            new_sid = ""
+            try:
+                await client.query(prompt_to_send)
+                async for message in client.receive_response():
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                collected.append(block.text)
+                                await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': block.text})}\n\n".encode())
+                    elif isinstance(message, ResultMessage):
+                        new_sid = message.session_id
+                        active_sessions[session_key] = new_sid
+            except Exception:
+                await _team_pool.evict(session_key)
+                raise
+
+            await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
+            return collected, new_sid
+
+        has_persisted = session_key in active_sessions
+        in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(session_key)
+        use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
+
+        if use_pool:
+            needs_full_rebuild = not (in_pool_now or has_persisted)
+            prompt_to_send = _build_full_prompt(prompt_text) if needs_full_rebuild else prompt_text
+            resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(session_key)
+            try:
+                collected_list, new_session_id = await _exec_pooled(prompt_to_send, resume_target)
+                return "".join(collected_list), new_session_id
+            except Exception:
+                active_sessions.pop(session_key, None)
+                full_fallback = _build_full_prompt(prompt_text)
+                collected_list, new_session_id, _ = await _exec_cmd(full_fallback, None)
+                return "".join(collected_list), new_session_id
+
+        if not has_persisted or is_first_turn:
             full_prompt = _build_full_prompt(prompt_text)
             resume_sid  = None
         else:
-            # 後續 Turn：只送增量訊息，由 --resume 帶入歷史 context
             full_prompt = prompt_text
             resume_sid  = active_sessions.get(session_key)
 
         collected_list, new_session_id, resume_failed = await _exec_cmd(full_prompt, resume_sid)
-
-        # ── Graceful fallback：session 過期時改用完整 prompt 重跑 ──────
         if resume_failed:
             active_sessions.pop(session_key, None)
             full_fallback = _build_full_prompt(prompt_text)
             collected_list, new_session_id, _ = await _exec_cmd(full_fallback, None)
-
         return "".join(collected_list), new_session_id
 
     import re
@@ -3555,7 +3612,8 @@ async def handle_debug_dump(request: web.Request) -> web.Response:
 
 
 async def handle_status(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "active_sessions": len(active_sessions), "claude_bin": CLAUDE_BIN})
+    pool_size = len(_team_pool) if (HAS_AGENT_SDK and _team_pool is not None) else 0
+    return web.json_response({"status": "ok", "active_sessions": len(active_sessions), "pool_size": pool_size, "claude_bin": CLAUDE_BIN})
 
 
 async def handle_config_get(request: web.Request) -> web.Response:
@@ -3824,6 +3882,12 @@ def build_app() -> web.Application:
                 except Exception:
                     pass
 
+        if HAS_AGENT_SDK and _team_pool is not None:
+            try:
+                await _team_pool.evict_all()
+            except Exception:
+                pass
+
     app.on_cleanup.append(cleanup_processes)
 
     return app
@@ -3962,6 +4026,9 @@ async def on_startup(app: web.Application) -> None:
     _log(f"Backend started. Claude: {CLAUDE_BIN}")
     asyncio.create_task(run_schedule_runner())
     asyncio.create_task(_gc_team_runs())  # 定期清除舊 team runs
+    if HAS_AGENT_SDK and _team_pool is not None:
+        from session_pool import run_idle_pruner
+        asyncio.create_task(run_idle_pruner(_team_pool))
     # Auto-start Telegram bot if configured
     tg_cfg = _load_tg_config()
     _tg_state.update({"token": tg_cfg.get("token",""), "enabled": tg_cfg.get("enabled", False)})
