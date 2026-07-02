@@ -1828,7 +1828,7 @@ async def handle_skill_put(request: web.Request) -> web.Response:
             return web.json_response({"error": "not found"}, status=404)
     data = await request.json()
     fm = _parse_full_frontmatter(f)
-    for field in ("mcp", "memory", "output_memory"):
+    for field in ("description", "mcp", "memory", "output_memory"):
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)

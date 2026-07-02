@@ -1669,7 +1669,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   saveSkillEditor() {
     const d = this.skillEditorData();
     if (!d.id) return;
-    this.claude.updateSkill(d.id, { mcp: d.mcp, memory: d.memory, output_memory: d.output_memory })
+    this.claude.updateSkill(d.id, { description: d.description, mcp: d.mcp, memory: d.memory, output_memory: d.output_memory })
       .subscribe({ next: () => { this.skillEditorOpen.set(false); this.claude.getSkills().subscribe(s => this.skills.set(s)); } });
   }
 

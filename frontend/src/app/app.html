@@ -2389,8 +2389,11 @@
       </div>
       <div class="editor-modal-body">
         <div class="editor-section">
-          <div class="editor-section-title">說明（唯讀）</div>
-          <p style="color:#888;font-size:12px;margin:0;">{{ skillEditorData().description || '（無說明）' }}</p>
+          <div class="editor-section-title">說明</div>
+          <textarea class="editor-input editor-textarea" rows="3"
+            [value]="skillEditorData().description || ''"
+            (input)="skillEditorData.set({...skillEditorData(), description: $any($event.target).value})"
+            placeholder="這個 Skill 的用途"></textarea>
         </div>
         <!-- MCPs -->
         <div class="editor-section">
