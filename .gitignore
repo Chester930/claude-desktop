@@ -48,6 +48,9 @@ tests/*.pyc
 # Local Claude permissions (personal, not for version control)
 .claude/settings.local.json
 
+# 外部參考資料（非本專案程式碼，不進版控）
+reference/
+
 # Personal / local overrides — 個人設定、連結、私有腳本，不進版控
 *.local
 *.local.*
