@@ -1553,6 +1553,17 @@ async def handle_chat_clear(request: web.Request) -> web.Response:
         for k in list(active_sessions.keys()):
             if k.startswith(f"{client_id}_"):
                 active_sessions.pop(k, None)
+
+        if HAS_AGENT_SDK and _team_pool is not None:
+            pool_keys_to_evict = [
+                k for k in _team_pool.keys()
+                if k == client_id or k.startswith(f"exec_{client_id}_") or k.startswith(f"{client_id}_")
+            ]
+            for k in pool_keys_to_evict:
+                try:
+                    await _team_pool.evict(k)
+                except Exception:
+                    pass
     return web.json_response({"ok": True})
 
 
