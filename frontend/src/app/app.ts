@@ -379,7 +379,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   isStreaming = signal(false);
   selectedAgent = signal('');
   activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp' | 'memview'>('teams');
-  selectedMemoryKey = signal('');
   sessionSearch = '';
 
   // Schedule form
@@ -1273,37 +1272,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.renamingId.set(null);
   }
 
-  // Memory editing
-  memoryDraft = '';
-  memoryDraftSaved = signal(true);
-  contextMemoryKeys = signal<string[]>([]);
-
-  selectMemoryKey(key: string) {
-    this.selectedMemoryKey.set(key);
-    this.memoryDraft = this.memory()[key] ?? '';
-    this.memoryDraftSaved.set(true);
-  }
-
-  onMemoryEdit() {
-    this.memoryDraftSaved.set(false);
-  }
-
-  saveMemoryEdit() {
-    const key = this.selectedMemoryKey();
-    if (!key) return;
-    this.claude.saveMemory(key, this.memoryDraft).subscribe(() => {
-      this.memoryDraftSaved.set(true);
-      this.memory.update(m => ({ ...m, [key]: this.memoryDraft }));
-    });
-  }
-
-  discardMemoryEdit() {
-    const key = this.selectedMemoryKey();
-    if (!key) return;
-    this.memoryDraft = this.memory()[key] ?? '';
-    this.memoryDraftSaved.set(true);
-  }
-
   loadMemoryOverview() {
     this.claude.getMemoryOverview().subscribe(data => {
       this.memoryOverview.set(data);
@@ -1348,16 +1316,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.memEditMode.update(m => ({ ...m, [key]: false }));
       this.loadMemoryOverview();
     });
-  }
-
-  isMemoryInContext(key: string): boolean {
-    return this.contextMemoryKeys().includes(key);
-  }
-
-  toggleMemoryContext(key: string) {
-    this.contextMemoryKeys.update(keys =>
-      keys.includes(key) ? keys.filter(k => k !== key) : [...keys, key]
-    );
   }
 
   // ── Toast notification system ────────────────────────────────────────────
@@ -1567,10 +1525,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (agent.soul) {
       const s = this.souls().find(s => s.id === agent.soul || s.name === agent.soul);
       if (s) this.selectSoulProfile(s.id);
-    }
-    // 把 agent 的 memory keys 加入上下文
-    if (agent.memory?.length) {
-      this.contextMemoryKeys.set([...new Set([...this.contextMemoryKeys(), ...agent.memory])]);
     }
     // 啟動對應 MCPs
     agent.mcp?.forEach(name => {
@@ -2393,11 +2347,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   helpSection = signal<'start' | 'features' | 'faq'>('start');
 
   memoryKeys = computed(() => Object.keys(this.memory()));
-  memoryTotalChars = computed(() =>
-    Object.values(this.memory()).reduce((sum, v) => sum + v.length, 0)
-  );
-  memoryUsagePct = computed(() => Math.min((this.memoryTotalChars() / 50000) * 100, 100));
-
   constructor(private claude: ClaudeService, private settings: SettingsService) {
     this.settingsForm = this.settings.get();
     const s = this.settings.get();
@@ -2849,13 +2798,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  deleteMemory(key: string) {
-    this.claude.deleteMemory(key).subscribe(() => {
-      this.selectedMemoryKey.set('');
-      this.claude.getMemory().subscribe(m => this.memory.set(m));
-    });
-  }
-
   reload() {
     this.sessionOffset = 0;
     this.claude.getStats().subscribe(s => this.stats.set(s));
@@ -2866,14 +2808,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.hasMoreSessions.set(r.has_more);
     });
     this.claude.getSchedules().subscribe(s => this.schedules.set(s));
-    this.claude.getMemory().subscribe(m => {
-      this.memory.set(m);
-      const keys = Object.keys(m);
-      if (keys.length && !this.selectedMemoryKey()) {
-        this.selectedMemoryKey.set(keys[0]);
-        this.memoryDraft = m[keys[0]] ?? '';
-      }
-    });
+    this.claude.getMemory().subscribe(m => this.memory.set(m));
     this.claude.getSouls().subscribe(list => {
       this.souls.set(list);
       if (list.length && !this.selectedSoulId()) {
@@ -3888,15 +3823,4 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return this.agents().find(a => a.id === agentId.replace(/^@/, ''))?.mcp?.includes(mcpName) ?? false;
   }
 
-  // 此 Memory key 是否在 activeAgent 的 frontmatter memory[] 中（P1-F5）
-  isMemoryRequiredByActiveAgent(key: string): boolean {
-    const agentId = this.selectedAgent();
-    if (!agentId) return false;
-    return this.agents().find(a => a.id === agentId.replace(/^@/, ''))?.memory?.includes(key) ?? false;
-  }
-
-
-  get selectedMemoryContent(): string {
-    return this.memory()[this.selectedMemoryKey()] ?? '';
-  }
 }
