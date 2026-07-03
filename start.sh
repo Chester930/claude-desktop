@@ -28,6 +28,21 @@ if ! "$PYTHON" -c "import aiohttp, aiohttp_cors" &>/dev/null 2>&1; then
   "$PYTHON" -m pip install -r "$SCRIPT_DIR/backend/requirements.txt" --quiet
 fi
 
+# ── 檢查是否已導入 Agency Agents ───────────────────────────────────────────
+FLAG_FILE="$HOME/.claude/agency_imported.flag"
+if [[ ! -f "$FLAG_FILE" ]]; then
+  echo "======================================================================"
+  echo " Do you want to import 140+ specialized agents and department teams"
+  echo " from msitarzewski/agency-agents?"
+  echo "======================================================================"
+  read -p "Import now? (y/n): " IMPORT_CHOICE
+  if [[ "$IMPORT_CHOICE" =~ ^[Yy]$ ]]; then
+    echo "[Import] Importing agency agents (this may take a minute)..."
+    "$PYTHON" "$SCRIPT_DIR/backend/agency_agents_importer.py"
+  fi
+  echo ""
+fi
+
 # ── 啟動後端 ─────────────────────────────────────────────────────────────────
 echo "🚀  Starting backend on http://localhost:8765 ..."
 cd "$SCRIPT_DIR/backend"

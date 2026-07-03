@@ -279,6 +279,15 @@ async def handle_skill_put(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def handle_agent_import_agency(request: web.Request) -> web.Response:
+    try:
+        from agency_agents_importer import run_import
+        res = await asyncio.to_thread(run_import, False)
+        return web.json_response(res)
+    except Exception as e:
+        return web.json_response({"ok": False, "message": f"Import failed: {str(e)}"}, status=500)
+
+
 # ── Route registration ────────────────────────────────────────────────────────
 
 def register_agent_routes(app: web.Application, cors_add) -> None:
@@ -290,6 +299,7 @@ def register_agent_routes(app: web.Application, cors_add) -> None:
     cors_add(app.router.add_post("/api/agents",           handle_agent_post))
     cors_add(app.router.add_delete("/api/agents/{id}",    handle_agent_delete))
     cors_add(app.router.add_post("/api/hr/dispatch",      handle_hr_dispatch))
+    cors_add(app.router.add_post("/api/agents/import-agency", handle_agent_import_agency))
 
 
 def register_skill_routes(app: web.Application, cors_add) -> None:

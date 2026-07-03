@@ -409,6 +409,24 @@
           }
         </div>
 
+        <!-- Agency Agents Importer -->
+        <div class="modal-section">
+          <div class="modal-section-header">Agency Agents 導入</div>
+          <div class="modal-form">
+            <small style="color:#aaa; display:block; margin-bottom:8px;">
+              自 <code>msitarzewski/agency-agents</code> 專案導入 140+ 個專業的 AI 代理人，並自動建立對應的部門團隊（TEAMS）。
+            </small>
+            <div style="display:flex;gap:12px;align-items:center;">
+              <button class="btn-primary btn-sm" (click)="importAgencyAgents()" [disabled]="importingAgency()">
+                {{ importingAgency() ? '正在導入…' : '開始自動導入' }}
+              </button>
+              @if (importResult()) {
+                <span style="font-size:12px; color:#d4a853; flex:1;">{{ importResult() }}</span>
+              }
+            </div>
+          </div>
+        </div>
+
         <!-- T09 Doctor 診斷 -->
         <div class="modal-logs">
           <div class="modal-logs-header">
@@ -1357,10 +1375,10 @@
 @if (activeTab() === 'teams') {
             <div class="panel-list">
               @for (t of teams(); track t.id) {
-                <div class="panel-card">
+                <div class="panel-card" (click)="toggleTeamExpanded(t.id)" style="cursor: pointer; user-select: none;">
                   <div class="card-header-row">
                     <span class="card-name">{{ t.name }}</span>
-                    <div class="agent-action-btns">
+                    <div class="agent-action-btns" (click)="$event.stopPropagation()">
                       <button class="agent-activate-btn" style="background: linear-gradient(135deg, #6366f1, #28a745); color:white;" (click)="selectTeamLeader(t)" title="與整個團隊對話（各成員依序序列執行任務）">💬 團隊對話</button>
                       <button class="agent-edit-btn" (click)="openTeamEditor(t)" title="編輯 Team">✎</button>
                     </div>
@@ -1368,19 +1386,31 @@
                   @if (t.description) {
                     <div class="card-desc">{{ t.description }}</div>
                   }
-                  <!-- 成員列表 -->
-                  <div class="team-members-row">
-                    @for (m of t.members; track m.agent) {
-                      <span class="team-member-chip" [title]="m.role || m.agent" [style.border-color]="t.leader === m.agent ? '#d4a853' : null">
-                        <span class="member-dot" [style.color]="t.leader === m.agent ? '#d4a853' : null">●</span> {{ m.agent }}
-                        @if (t.leader === m.agent) { <span style="color:#d4a853;margin-left:2px;font-weight:bold;" title="組長 (Team Leader)">👑</span> }
-                        @if (m.role) { <span class="member-role">{{ m.role }}</span> }
-                      </span>
-                    }
-                    @if (!t.members.length) {
-                      <span style="font-size:11px;color:#555;font-style:italic;">無成員</span>
-                    }
+                  <!-- 組長與展開收合按鈕 -->
+                  <div class="team-leader-preview" style="font-size:11px; margin-top:6px; display:flex; align-items:center; gap:6px;">
+                    <span style="color:#d4a853; font-weight:bold;">👑 組長:</span>
+                    <span class="team-member-chip" style="border-color:#d4a853; cursor:default; margin:0; padding:2px 6px;">
+                      {{ t.leader || '（無）' }}
+                    </span>
+                    <span style="color:#888; font-size:10px; margin-left:auto;">
+                      {{ expandedTeams()[t.id] ? '▲ 收合' : '▼ 展開其餘 ' + (t.members.length > 1 ? (t.members.length - 1) : 0) + ' 名成員' }}
+                    </span>
                   </div>
+                  <!-- 成員列表 -->
+                  @if (expandedTeams()[t.id]) {
+                    <div class="team-members-row" style="margin-top:8px;">
+                      @for (m of t.members; track m.agent) {
+                        <span class="team-member-chip" [title]="m.role || m.agent" [style.border-color]="t.leader === m.agent ? '#d4a853' : null">
+                          <span class="member-dot" [style.color]="t.leader === m.agent ? '#d4a853' : null">●</span> {{ m.agent }}
+                          @if (t.leader === m.agent) { <span style="color:#d4a853;margin-left:2px;font-weight:bold;" title="組長 (Team Leader)">👑</span> }
+                          @if (m.role) { <span class="member-role">{{ m.role }}</span> }
+                        </span>
+                      }
+                      @if (!t.members.length) {
+                        <span style="font-size:11px;color:#555;font-style:italic;">無成員</span>
+                      }
+                    </div>
+                  }
                 </div>
               } @empty {
                 <div class="empty-guide">

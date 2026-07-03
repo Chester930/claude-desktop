@@ -114,6 +114,9 @@ export class ClaudeService {
   deleteAgent(id: string): Observable<{ ok: boolean }> {
     return this.http.delete<{ ok: boolean }>(`${this.api}/agents/${id}`);
   }
+  importAgencyAgents(): Observable<{ ok: boolean; message: string }> {
+    return this.http.post<{ ok: boolean; message: string }>(`${this.api}/agents/import-agency`, {});
+  }
 
   getSkills(): Observable<Skill[]> { return this.http.get<Skill[]>(`${this.api}/skills`); }
   getSkill(id: string): Observable<Skill> { return this.http.get<Skill>(`${this.api}/skills/${id}`); }

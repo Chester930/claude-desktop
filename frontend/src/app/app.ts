@@ -73,6 +73,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   schedules = signal<Schedule[]>([]);
   memoryOverview = signal<any>(null);
   memViewExpanded = signal<Record<string, boolean>>({});
+  expandedTeams = signal<Record<string, boolean>>({});
   memEditMode = signal<Record<string, boolean>>({});
   memEditContent = signal<Record<string, string>>({});
 
@@ -1656,6 +1657,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.getTeams().subscribe(t => this.teams.set(t));
   }
 
+  toggleTeamExpanded(tid: string) {
+    this.expandedTeams.update(m => ({ ...m, [tid]: !m[tid] }));
+  }
+
   openTeamEditor(team?: Team) {
     if (team) {
       this.teamEditorData.set({ ...team, members: team.members.map(m => ({ ...m })) });
@@ -2331,6 +2336,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   resolvedClaudeHome = signal('');
   skillGenBusy = signal(false);
   skillGenResult = signal<string | null>(null);
+  importingAgency = signal(false);
+  importResult = signal<string | null>(null);
 
   // ── Onboarding wizard ────────────────────────────────
   showOnboarding = signal(false);
@@ -3479,6 +3486,27 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.runCliCommand(['update']).subscribe({
       next: out => this.messages.update(m => [...m, { role: 'system', text: out || '已是最新版本' }]),
       error: err => this.messages.update(m => [...m, { role: 'system', text: String(err) }]),
+    });
+  }
+
+  importAgencyAgents() {
+    this.importingAgency.set(true);
+    this.importResult.set('正在下載並導入 Agency Agents，這可能需要一至兩分鐘，請稍候…');
+    this.claude.importAgencyAgents().subscribe({
+      next: (res) => {
+        this.importingAgency.set(false);
+        if (res.ok) {
+          this.importResult.set(res.message);
+          this.reload();
+          this.loadTeams();
+        } else {
+          this.importResult.set(`導入失敗: ${res.message}`);
+        }
+      },
+      error: (err) => {
+        this.importingAgency.set(false);
+        this.importResult.set(`導入出錯: ${err?.error?.message || err?.message || err || '網路或伺服器錯誤'}`);
+      }
     });
   }
 

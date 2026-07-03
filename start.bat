@@ -11,6 +11,29 @@ for %%A in (%*) do (
   if /I "%%A"=="--build"  set BUILD_MODE=1
 )
 
+:: Resolve Python
+set PYTHON=python
+set HAS_PYTHON=1
+where python >nul 2>&1 || (
+  where python3 >nul 2>&1 && (set PYTHON=python3) || (set HAS_PYTHON=0)
+)
+
+:: Check if agency agents have been imported
+if not exist "%USERPROFILE%\.claude\agency_imported.flag" (
+  if "%HAS_PYTHON%"=="1" (
+    echo ======================================================================
+    echo  Do you want to import 140+ specialized agents and department teams 
+    echo  from msitarzewski/agency-agents?
+    echo ======================================================================
+    set /p IMPORT_CHOICE="Import now? (y/n): "
+    if /I "%IMPORT_CHOICE%"=="y" (
+      echo [Import] Importing agency agents (this may take a minute)...
+      "%PYTHON%" "%~dp0backend\agency_agents_importer.py"
+    )
+    echo.
+  )
+)
+
 :: ── Docker mode ───────────────────────────────────────────────────────────────
 if "%DOCKER_MODE%"=="1" (
   echo [Docker] Starting backend + dev-frontend via Docker Compose [dev profile]...
@@ -43,8 +66,6 @@ if "%DOCKER_MODE%"=="1" (
 
 :: ── Dev mode ──────────────────────────────────────────────────────────────────
 if "%DEV_MODE%"=="1" (
-  set PYTHON=python
-  where python >nul 2>&1 || (set PYTHON=python3)
   start "Claude Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
   echo Starting Angular dev server with HMR...
   timeout /t 2 /nobreak >nul
@@ -59,8 +80,6 @@ if "%DEV_MODE%"=="1" (
 )
 
 :: ── Default mode (local backend only) ─────────────────────────────────────────
-set PYTHON=python
-where python >nul 2>&1 || (set PYTHON=python3)
 start "Claude Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
 echo.
 echo Backend:  http://localhost:8765
