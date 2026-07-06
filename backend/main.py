@@ -2482,15 +2482,41 @@ async def handle_local_mcp_config_get(request: web.Request) -> web.Response:
     return web.json_response(_load_local_mcp_cfg())
 
 
+def _is_safe_docker_ident(name: str) -> bool:
+    """
+    T2 加固：containerName/composeService 會被當成 `docker stop/start <name>`、
+    `docker compose ... <service>` 的位置參數傳給 subprocess_exec（非 shell，
+    無 shell injection 風險），但仍需擋掉會被 docker CLI 誤判成旗標的字串
+    （如開頭 `-`）與路徑分隔符/`..`，避免打錯目標或被用來探測非預期容器。
+    空字串代表未設定，視為合法。
+    """
+    if not name:
+        return True
+    import re
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name))
+
+
 async def handle_local_mcp_config_put(request: web.Request) -> web.Response:
     """Save Docker/compose metadata for one MCP server."""
     name = request.match_info["name"]
     data = await request.json()
+
+    container_name  = data.get("containerName", "")
+    compose_service = data.get("composeService", "")
+    compose_file    = data.get("composeFile", "")
+
+    if not _is_safe_docker_ident(container_name):
+        return web.json_response({"error": "Invalid containerName"}, status=400)
+    if not _is_safe_docker_ident(compose_service):
+        return web.json_response({"error": "Invalid composeService"}, status=400)
+    if compose_file and not Path(compose_file).is_file():
+        return web.json_response({"error": "composeFile does not exist"}, status=400)
+
     cfg  = _load_local_mcp_cfg()
     cfg[name] = {
-        "containerName":  data.get("containerName", ""),
-        "composeFile":    data.get("composeFile", ""),
-        "composeService": data.get("composeService", ""),
+        "containerName":  container_name,
+        "composeFile":    compose_file,
+        "composeService": compose_service,
         "port":           data.get("port", ""),
         "notes":          data.get("notes", ""),
     }
@@ -2599,6 +2625,14 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
     compose_f   = local_cfg.get("composeFile", "")
     compose_svc = local_cfg.get("composeService", "")
     is_docker   = mcp_info["mcpType"] == "docker" or bool(container) or bool(compose_f)
+
+    # T2 加固：即使 config 是透過已驗證的 PUT 端點寫入，這裡對即將傳給
+    # docker/docker compose subprocess 的值再檢查一次（防禦深度：涵蓋手動編輯
+    # config 檔或舊版資料殘留的情況）。
+    if not _is_safe_docker_ident(container) or not _is_safe_docker_ident(compose_svc):
+        return web.json_response({"error": "Invalid containerName/composeService in local MCP config"}, status=400)
+    if compose_f and not Path(compose_f).is_file():
+        return web.json_response({"error": "composeFile does not exist"}, status=400)
 
     # ── STOP / RESTART phase 1: shut down ────────────────────────────────────
     if action in ("stop", "restart"):
@@ -3157,6 +3191,25 @@ def _init_presets() -> None:
         _log(f"Error initializing presets: {e}")
 
 
+def _allowed_cors_origins() -> list[str]:
+    """
+    T2 加固：原本用 `"*"` 當 aiohttp_cors 的 defaults key，疊加 allow_credentials=True，
+    等於對任意呼叫來源（含惡意網頁）都核發帶憑證的 CORS 許可，讓瀏覽器能對
+    /api/mcp/{name}/{action}、/api/mcp-local-config/{name} 等會實際啟動/停止 Docker
+    容器（透過掛載的 docker.sock）的端點發出跨站請求。改為明確白名單：
+    只有前端實際會被載入的來源才給 CORS 許可，其餘來源一律不核發
+    Access-Control-Allow-Origin，瀏覽器就會擋下 preflight，跨站請求送不出去。
+    """
+    origins = [
+        "http://localhost:4200", "http://127.0.0.1:4200",  # ng serve / docker-compose 前端
+        "null",  # 封裝後 Electron 從 file:// 載入頁面時的 Origin
+    ]
+    extra = os.environ.get("CLAUDE_DESKTOP_EXTRA_ORIGINS", "").strip()
+    if extra:
+        origins.extend(o.strip() for o in extra.split(",") if o.strip())
+    return origins
+
+
 def build_app() -> web.Application:
     _init_db()
     _migrate_db()
@@ -3165,13 +3218,14 @@ def build_app() -> web.Application:
     _init_presets()
     app = web.Application(client_max_size=_UPLOAD_MAX_BYTES + 1024)
 
+    _cors_options = aiohttp_cors.ResourceOptions(
+        allow_credentials=True,
+        expose_headers="*",
+        allow_headers="*",
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
     cors = aiohttp_cors.setup(app, defaults={
-        "*": aiohttp_cors.ResourceOptions(
-            allow_credentials=True,
-            expose_headers="*",
-            allow_headers="*",
-            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        )
+        origin: _cors_options for origin in _allowed_cors_origins()
     })
 
     # Routes grouped by resource path to avoid double-CORS registration

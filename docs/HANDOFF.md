@@ -220,8 +220,8 @@ npm install
 
 ### 🔴 P0 — 資安 / 阻斷性
 
-- [x] **T1｜MCP 敏感操作授權閘門形同虛設** — `backend/routes/mcp_debugger.py` 原本只信任呼叫方自報的 `authorized: true`，疊加既有 CORS（`allow_credentials=True` + origin `"*"`）可被任意網頁繞過確認流程觸發破壞性 MCP 呼叫。已改為伺服器核發、單次使用、TTL 120 秒的 `pending_id`，`frontend/app.ts` 同步改讀後端回傳的 `pending_id`（原本寫死成固定字串）。CORS 白名單化仍待評估，未變更。
-- [ ] **T2｜`docker-compose.yml` 新增 docker.sock 掛載，配合 T1 構成提權鏈** — 需與使用者確認是否真的需要掛整個 socket，或改用受限中介方案（如 docker-socket-proxy）。**需要產品決策，尚未處理。**
+- [x] **T1｜MCP 敏感操作授權閘門形同虛設** — `backend/routes/mcp_debugger.py` 原本只信任呼叫方自報的 `authorized: true`，疊加既有 CORS（`allow_credentials=True` + origin `"*"`）可被任意網頁繞過確認流程觸發破壞性 MCP 呼叫。已改為伺服器核發、單次使用、TTL 120 秒的 `pending_id`，`frontend/app.ts` 同步改讀後端回傳的 `pending_id`（原本寫死成固定字串）。CORS 白名單化見 T2。
+- [x] **T2｜`docker-compose.yml` 新增 docker.sock 掛載，配合 T1 構成提權鏈** — 複查後發現這是一條**目前就能觸發、不需任何確認**的完整提權路徑：`POST /api/mcp/{name}/{action}`（start/stop/restart）與 `PUT /api/mcp-local-config/{name}` 完全不在 T1 的 `pending_id` 閘門保護範圍內，且原本對 `containerName`/`composeFile`/`composeService` 沒有任何驗證；只要能打中這兩個端點，就能餵入任意 `composeFile` 路徑並觸發 `docker compose up`，透過掛載的 docker.sock 取得 host root。已與使用者確認採「應用層加固」：①`main.py` 的全域 CORS 設定從單一 `"*"` key（疊加 `allow_credentials=True` 等於對任意來源核發帶憑證許可）改成明確白名單（`http://localhost:4200`、`http://127.0.0.1:4200`、封裝 Electron 的 `null` origin，可用 `CLAUDE_DESKTOP_EXTRA_ORIGINS` 環境變數擴充），非白名單來源的 preflight 直接 403、瀏覽器不會送出實際請求；②新增 `_is_safe_docker_ident()` 驗證 `containerName`/`composeService`（擋路徑分隔符、`..`、開頭 `-`），`composeFile` 需為已存在的檔案，`PUT /api/mcp-local-config/{name}` 與 `POST /api/mcp/{name}/{action}` 兩處都驗證（後者作為防禦深度，涵蓋手動編輯 config 檔殘留舊資料的情況）。已用 `tests/test_mcp_docker_hardening.py`（含實際發 preflight 驗證 CORS 中介層真的擋掉 disallowed origin）驗證。**docker.sock 本身仍是完整、未受限的掛載**（未改用 docker-socket-proxy、也未移除掛載），這部分維持原狀，使用者選擇先做低風險的應用層修補。
 - [x] **T3｜Electron dev 模式後端啟動靜默失敗** — `electron/main.js` 用未 import 的 `execSync`，改用已 import 的 `execFileSync`。
 
 ### 🟠 P1 — 既有測試 / CI
@@ -251,4 +251,4 @@ npm install
 
 ### 剩餘待處理
 
-- **T2｜`docker-compose.yml` 新增 docker.sock 掛載，配合 T1 構成提權鏈** — 仍需與使用者確認是否真的需要掛整個 socket，或改用受限中介方案（如 docker-socket-proxy）。**需要產品決策，本輪未處理。**
+- **T2 後續（可選）｜docker.sock 完整掛載本身** — 應用層加固已關閉「任意網頁觸發提權」這條已知路徑，但 `docker-compose.yml` 的 `backend-dev`/`backend` 服務仍掛載完整、未受限的 `/var/run/docker.sock`。若之後想進一步縮小攻擊面，可評估：(a) 移除掛載並砍掉 docker-compose 部署下的「本地 Docker MCP 管理」功能（Electron 桌面版本身跑在 host 上不受影響）；(b) 改用 docker-socket-proxy 之類的限權中介（需驗證 `docker compose` 子指令相容性）。屬於範疇/基礎設施決策，非本輪必要項目。
