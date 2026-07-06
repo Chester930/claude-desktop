@@ -267,7 +267,7 @@ async def _get_agent_memory_prompt(team_id: str, all_member_ids: list[str], agen
     mem_ctx = ""
     if build_team_mem:
         try:
-            mem_ctx = build_team_mem(team_id, all_member_ids, agent_id, cwd)
+            mem_ctx = await asyncio.to_thread(build_team_mem, team_id, all_member_ids, agent_id, cwd)
         except Exception:
             pass
 
@@ -470,7 +470,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             mem_ctx = ""
             if build_team_mem:
                 try:
-                    mem_ctx = build_team_mem(team_id, all_member_ids, agent_id, cwd)
+                    mem_ctx = await asyncio.to_thread(build_team_mem, team_id, all_member_ids, agent_id, cwd)
                 except Exception:
                     pass
 
@@ -532,7 +532,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
 
             # 分層 team memory 注入
             if build_team_mem:
-                mem_ctx = build_team_mem(team_id, all_member_ids, agent_id, cwd)
+                mem_ctx = await asyncio.to_thread(build_team_mem, team_id, all_member_ids, agent_id, cwd)
             else:
                 mem_ctx = ""
 

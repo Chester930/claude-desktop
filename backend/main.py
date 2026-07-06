@@ -443,14 +443,17 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             except Exception:
                 pass
 
-    def _build_full_message() -> str:
+    async def _build_full_message() -> str:
         """組裝首 Turn 用的完整 prompt（soul + team + memory + agent def）。"""
         soul = get_agent_soul(agent)
         fm = f"[System Persona]\n{soul}\n\n{message}" if soul else message
 
         if team_id and team_info:
             all_members = [m["agent"] for m in team_info.get("members", [])]
-            mem_ctx = build_team_memory_context(team_id, all_members, agent, cwd, members_meta=team_info.get("members", []), query=message)
+            mem_ctx = await asyncio.to_thread(
+                build_team_memory_context, team_id, all_members, agent, cwd,
+                members_meta=team_info.get("members", []), query=message
+            )
             team_name = team_info.get("name", team_id)
             members_str = "\n".join([f"- @{m['agent']} (職責: {m['role']})" for m in team_info.get("members", [])])
             team_prompt = (
@@ -461,7 +464,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             )
             fm = team_prompt + fm
         else:
-            mem_ctx = build_memory_context(agent, cwd, query=message)
+            mem_ctx = await asyncio.to_thread(build_memory_context, agent, cwd, query=message)
 
         if mem_ctx:
             fm = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{fm}"
@@ -606,7 +609,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     try:
         if use_pool:
             needs_full_rebuild = not (in_pool_now or has_persisted)
-            prompt_to_send = _build_full_message() if needs_full_rebuild else message
+            prompt_to_send = await _build_full_message() if needs_full_rebuild else message
             resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(client_id)
             try:
                 await _run_pooled(prompt_to_send, resume_target)
@@ -615,9 +618,9 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 return response
             except Exception:
                 active_sessions.pop(client_id, None)
-                await _run_legacy(_build_full_message())
+                await _run_legacy(await _build_full_message())
         else:
-            full_message = message if client_id in active_sessions else _build_full_message()
+            full_message = message if client_id in active_sessions else await _build_full_message()
             await _run_legacy(full_message)
         await response.write(b'data: {"type":"done"}\n\n')
     except Exception as e:
@@ -704,10 +707,10 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         cwd_hash = hashlib.md5(cwd.encode("utf-8")).hexdigest()[:8] if cwd else "default"
         session_key = f"{client_id}_{agent_id}_{cwd_hash}"
 
-        def _build_full_prompt(hist: str) -> str:
+        async def _build_full_prompt(hist: str) -> str:
             """組裝首 Turn 用的完整 prompt。"""
-            mem_ctx = build_team_memory_context(
-                team_id, all_members_list, agent_id, cwd,
+            mem_ctx = await asyncio.to_thread(
+                build_team_memory_context, team_id, all_members_list, agent_id, cwd,
                 members_meta=members,
                 query=prompt_text
             )
@@ -868,7 +871,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
 
         if use_pool:
             needs_full_rebuild = not (in_pool_now or has_persisted)
-            prompt_to_send = _build_full_prompt(prompt_text) if needs_full_rebuild else prompt_text
+            prompt_to_send = await _build_full_prompt(prompt_text) if needs_full_rebuild else prompt_text
             resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(session_key)
             try:
                 collected_list, new_session_id = await _exec_pooled(prompt_to_send, resume_target)
@@ -878,12 +881,12 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 return "", ""
             except Exception:
                 active_sessions.pop(session_key, None)
-                full_fallback = _build_full_prompt(prompt_text)
+                full_fallback = await _build_full_prompt(prompt_text)
                 collected_list, new_session_id, _ = await _exec_cmd(full_fallback, None)
                 return "".join(collected_list), new_session_id
 
         if not has_persisted or is_first_turn:
-            full_prompt = _build_full_prompt(prompt_text)
+            full_prompt = await _build_full_prompt(prompt_text)
             resume_sid  = None
         else:
             full_prompt = prompt_text
@@ -892,7 +895,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         collected_list, new_session_id, resume_failed = await _exec_cmd(full_prompt, resume_sid)
         if resume_failed:
             active_sessions.pop(session_key, None)
-            full_fallback = _build_full_prompt(prompt_text)
+            full_fallback = await _build_full_prompt(prompt_text)
             collected_list, new_session_id, _ = await _exec_cmd(full_fallback, None)
         return "".join(collected_list), new_session_id
 
@@ -2025,9 +2028,9 @@ async def handle_mem_preview(request: web.Request) -> web.Response:
     members  = [m.strip() for m in request.rel_url.query.get("members", "").split(",") if m.strip()]
 
     if mode == "team":
-        ctx = build_team_memory_context(team_id, members or [agent_id], agent_id, cwd)
+        ctx = await asyncio.to_thread(build_team_memory_context, team_id, members or [agent_id], agent_id, cwd)
     else:
-        ctx = build_memory_context(agent_id, cwd)
+        ctx = await asyncio.to_thread(build_memory_context, agent_id, cwd)
 
     sections = [s.split("\n")[0] for s in ctx.split("\n\n---\n\n")] if ctx else []
     return web.json_response({
