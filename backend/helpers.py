@@ -402,3 +402,16 @@ def safe_kill_process(proc) -> None:
             proc.kill()
         except Exception:
             pass
+
+def wrap_cmd(bin_path: str, args: list[str]) -> list[str]:
+    """Wrap command list on Windows if running a .cmd/.bat file to avoid WinError 193."""
+    import platform
+    import shutil
+    cmd = [bin_path] + list(args)
+    if platform.system() == "Windows":
+        if bin_path.lower().endswith((".cmd", ".bat")):
+            return ["cmd", "/c"] + cmd
+        resolved = shutil.which(bin_path)
+        if resolved and resolved.lower().endswith((".cmd", ".bat")):
+            return ["cmd", "/c", resolved] + list(args)
+    return cmd

@@ -30,10 +30,10 @@ function detectClaude() {
   const bins = process.platform === 'win32'
     ? ['claude.cmd', 'claude']
     : ['claude'];
-  for (const bin of bins) {
+  for (const b of bins) {
     try {
-      execFileSync(bin, ['--version'], { stdio: 'pipe', windowsHide: true, shell: false, timeout: 5000 });
-      return bin;
+      execFileSync(b, ['--version'], { stdio: 'pipe', windowsHide: true, shell: false, timeout: 5000 });
+      return b;
     } catch {}
   }
   return null;
@@ -47,17 +47,24 @@ function startBackend() {
     const candidates = process.platform === 'win32'
       ? ['python', 'py', 'python3']
       : ['python3', 'python'];
+    let pythonCmd = null;
     for (const py of candidates) {
       try {
+        execSync(`${py} --version`, { stdio: 'ignore' });
+        pythonCmd = py;
+        break;
+      } catch {}
+    }
+    if (pythonCmd) {
+      try {
         const [cmd, args] = process.platform === 'win32'
-          ? ['cmd', ['/c', py, srcBackendPy]]
-          : [py, [srcBackendPy]];
+          ? ['cmd', ['/c', pythonCmd, srcBackendPy]]
+          : [pythonCmd, [srcBackendPy]];
         backendProcess = spawn(cmd, args, {
           cwd: path.dirname(srcBackendPy),
           stdio: 'pipe', windowsHide: true, shell: false,
         });
         backendProcess.on('error', () => {});
-        break;
       } catch {}
     }
   } else {
@@ -283,7 +290,18 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  backendProcess?.kill();
+  if (backendProcess) {
+    if (process.platform === 'win32') {
+      try {
+        const { execSync } = require('child_process');
+        execSync(`taskkill /pid ${backendProcess.pid} /f /t`, { windowsHide: true });
+      } catch (e) {
+        backendProcess.kill();
+      }
+    } else {
+      backendProcess.kill();
+    }
+  }
 });
 
 app.on('window-all-closed', () => {

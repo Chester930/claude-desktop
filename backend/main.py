@@ -139,7 +139,7 @@ _usage_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
-from helpers import _read_agent_body, _team_dict, safe_kill_process
+from helpers import _read_agent_body, _team_dict, safe_kill_process, wrap_cmd
 
 _CLI_NOISE_PATTERNS = ("no stdin data received",)
 
@@ -217,9 +217,11 @@ async def _natural_to_cron(natural_text: str) -> str:
     key = _resolve_api_key()
     if key:
         env["ANTHROPIC_API_KEY"] = key
+    proc = None
     try:
+        cmd = wrap_cmd(CLAUDE_BIN, ["-p", prompt, "--output-format", "text"])
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt, "--output-format", "text",
+            *cmd,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env, cwd=str(Path.home()),
         )
@@ -235,6 +237,11 @@ async def _natural_to_cron(natural_text: str) -> str:
             return lines[0]
     except Exception as e:
         print(f"[schedule] Error translating natural time to cron: {e}")
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
     return natural_text
 
 
@@ -555,6 +562,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             api_key = _resolve_api_key()
             if api_key:
                 env["ANTHROPIC_API_KEY"] = api_key
+            cmd = wrap_cmd(cmd[0], cmd[1:])
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -751,6 +759,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             if api_key:
                 env["ANTHROPIC_API_KEY"] = api_key
 
+            cmd = wrap_cmd(cmd[0], cmd[1:])
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -1114,6 +1123,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             proc = None
 
             try:
+                cmd = wrap_cmd(cmd[0], cmd[1:])
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
@@ -1481,6 +1491,8 @@ async def handle_soul_reset(request: web.Request) -> web.Response:
         for f in SOULS_DIR.glob("*.md"):
             try: f.unlink()
             except Exception: pass
+    # 重新寫入預設 presets 靈魂（例如 Pi），防止重設後列表空白
+    _init_presets()
     return web.json_response({'ok': True})
 
 
@@ -1574,6 +1586,51 @@ async def handle_session_delete(request: web.Request) -> web.Response:
         f.unlink()
     for k in [k for k, v in active_sessions.items() if v == sid]:
         active_sessions.pop(k, None)
+
+    # 主動從 SQLite 數據庫中清除該 Session 索引，保持即時一致
+    try:
+        with _db() as c:
+            c.execute("DELETE FROM sessions WHERE id=?", (sid,))
+            c.execute("DELETE FROM sessions_fts WHERE id=?", (sid,))
+    except Exception as e:
+        _log(f"[sqlite] delete error: {e}")
+
+    return web.json_response({"ok": True})
+
+
+async def handle_session_truncate(request: web.Request) -> web.Response:
+    """POST /api/sessions/{id}/truncate — 截斷對話歷史，丟棄指定 count 之後的 user/assistant 訊息"""
+    sid = request.match_info["id"]
+    data = await request.json()
+    count = data.get("count", 0)
+
+    f = _find_session_file(sid)
+    if not f:
+        return web.json_response({"error": "session not found"}, status=404)
+
+    try:
+        lines = f.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+        new_lines = []
+        valid_count = 0
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                ev = json.loads(line)
+                t = ev.get("type", "")
+                if t in ("user", "assistant"):
+                    if valid_count >= count:
+                        continue  # 丟棄 count 之後的對話
+                    valid_count += 1
+                new_lines.append(line)
+            except Exception:
+                new_lines.append(line)
+
+        content = "\n".join(new_lines) + "\n" if new_lines else ""
+        f.write_text(content, encoding="utf-8")
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
     return web.json_response({"ok": True})
 
 
@@ -2115,6 +2172,7 @@ Now convert this: {text}"""
             env = {**os.environ}
             if api_key:
                 env["ANTHROPIC_API_KEY"] = api_key
+            cmd = wrap_cmd(cmd[0], cmd[1:])
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -2232,9 +2290,11 @@ async def handle_skill_generate(request: web.Request) -> web.Response:
         "## How It Works\n...\n## Example\n...\n\n"
         f"對話摘錄：\n{context}"
     )
+    proc = None
     try:
+        cmd = wrap_cmd(CLAUDE_BIN, ["-p", prompt, "--output-format", "json"])
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt, "--output-format", "json",
+            *cmd,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
             cwd=str(Path.home()),
         )
@@ -2242,6 +2302,11 @@ async def handle_skill_generate(request: web.Request) -> web.Response:
         result = json.loads(raw.decode("utf-8", errors="replace"))
         skill_md = result.get("result", "") or result.get("content", "")
     except Exception as e:
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
         return web.json_response({"error": str(e)}, status=500)
 
     # auto-save to ~/.claude/skills/auto-<session_id[:8]>.md
@@ -2262,12 +2327,9 @@ async def handle_files(request: web.Request) -> web.Response:
         p = Path(raw).resolve() if raw else home
     except Exception:
         p = home
-    # 只允許 home 目錄以下，防止路徑穿越
-    try:
-        p.relative_to(home)
-    except ValueError:
-        p = home
-    if not p.is_dir():
+    
+    # 移除了限制在 home 目錄之下的限制，以支援 Windows 上的多磁碟機（如 D 槽）專案目錄瀏覽
+    if not p.exists() or not p.is_dir():
         p = home
     items = []
     try:
@@ -2294,9 +2356,11 @@ async def handle_cli(request: web.Request) -> web.Response:
         return web.json_response({"error": f"disallowed verb: {args[0]}"}, status=400)
     if allowed_sub is not None and (len(args) < 2 or args[1] not in allowed_sub):
         return web.json_response({"error": f"disallowed subcommand"}, status=400)
+    proc = None
     try:
+        cmd = wrap_cmd(CLAUDE_BIN, args)
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, *args,
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(Path.home()),
@@ -2304,8 +2368,18 @@ async def handle_cli(request: web.Request) -> web.Response:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
         return web.json_response({"output": out.decode("utf-8", errors="replace"), "code": proc.returncode})
     except asyncio.TimeoutError:
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
         return web.json_response({"output": "[逾時]", "code": -1})
     except Exception as e:
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
         return web.json_response({"output": str(e), "code": -1})
 
 async def _drain_mcp(name: str, proc: asyncio.subprocess.Process) -> None:
@@ -2333,6 +2407,7 @@ async def handle_mcp_logs(request: web.Request) -> web.Response:
     local_cfg = _load_local_mcp_cfg().get(name, {})
     container = local_cfg.get("containerName", "")
     if container and not lines:
+        p = None
         try:
             p = await asyncio.create_subprocess_exec(
                 "docker", "logs", "--tail", "80", container,
@@ -2341,7 +2416,11 @@ async def handle_mcp_logs(request: web.Request) -> web.Response:
             out, _ = await asyncio.wait_for(p.communicate(), timeout=5)
             lines = out.decode("utf-8", errors="replace").splitlines()
         except Exception:
-            pass
+            if p:
+                try:
+                    safe_kill_process(p)
+                except Exception:
+                    pass
 
     return web.json_response({"name": name, "lines": lines[-100:]})
 
@@ -2422,16 +2501,22 @@ async def handle_session_auto_title(request: web.Request) -> web.Response:
     if key:
         env["ANTHROPIC_API_KEY"] = key
 
+    proc = None
     try:
+        cmd = wrap_cmd(CLAUDE_BIN, ["-p", prompt, "--model", "claude-haiku-4-5-20251001", "--output-format", "text"])
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt, "--model", "claude-haiku-4-5-20251001",
-            "--output-format", "text",
+            *cmd,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env, cwd=str(Path.home()),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
         title = stdout.decode("utf-8", errors="replace").strip().splitlines()[0][:60]
     except Exception as e:
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
         return web.json_response({"error": str(e)}, status=500)
 
     if not title:
@@ -2501,6 +2586,7 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
                 mcp_cmd = _get_mcp_command(name)
                 if not mcp_cmd:
                     return web.json_response({"ok": False, "error": "no command configured"})
+                mcp_cmd = wrap_cmd(mcp_cmd[0], mcp_cmd[1:])
                 proc = await asyncio.create_subprocess_exec(
                     *mcp_cmd,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -2519,8 +2605,8 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
 
 
 def _get_mcp_command(name: str) -> list[str] | None:
-    """Parse ~/.claude/claude.json to find the stdio command for an MCP server."""
-    config_path = CLAUDE_HOME / "claude.json"
+    """Parse ~/.claude.json to find the stdio command for an MCP server."""
+    config_path = CLAUDE_HOME.parent / ".claude.json"
     if not config_path.exists():
         return None
     try:
@@ -2659,6 +2745,7 @@ async def _tg_run_claude(prompt: str) -> str:
         env["ANTHROPIC_API_KEY"] = key
     proc = None
     try:
+        cmd = wrap_cmd(cmd[0], cmd[1:])
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -2779,13 +2866,15 @@ async def _line_reply(reply_token: str, text: str) -> None:
 async def _line_run_claude(user_message: str) -> str:
     soul = _load_pi_soul()
     prompt = f"<instructions>\n{soul}\n</instructions>\n\n{user_message}"
-    env = os.environ.copy()
-    key = _resolve_api_key()
-    if key:
-        env["ANTHROPIC_API_KEY"] = key
+    proc = None
     try:
+        cmd = wrap_cmd(CLAUDE_BIN, ["-p", prompt, "--output-format", "json"])
+        env = os.environ.copy()
+        key = _resolve_api_key()
+        if key:
+            env["ANTHROPIC_API_KEY"] = key
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "-p", prompt, "--output-format", "json",
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
@@ -2796,6 +2885,11 @@ async def _line_run_claude(user_message: str) -> str:
         return output.get("result", "[Pi 無回應]").strip()
     except Exception as e:
         _log(f"[line] claude call exception: {e}")
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
         return "[Pi 暫時無法回應，請稍後再試]"
 
 async def handle_line_webhook(request: web.Request) -> web.Response:
@@ -2879,7 +2973,7 @@ async def handle_config_get(request: web.Request) -> web.Response:
 
 
 async def handle_config_put(request: web.Request) -> web.Response:
-    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, SESSIONS_DIR
+    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, SESSIONS_DIR, TEAMS_DIR, SOULS_DIR
     data = await request.json()
     cfg = _load_config()
     if "projectDir" in data:
@@ -2893,7 +2987,17 @@ async def handle_config_put(request: web.Request) -> web.Response:
     CLAUDE_HOME  = _resolve_claude_home()
     AGENTS_DIR   = CLAUDE_HOME / "agents"
     SKILLS_DIR   = CLAUDE_HOME / "skills"
+    TEAMS_DIR    = CLAUDE_HOME / "teams"
+    SOULS_DIR    = CLAUDE_HOME / "souls"
     SESSIONS_DIR = CLAUDE_HOME / "sessions"
+    
+    # 同步更新 database 模組內部的所有路徑變數，防止其依然讀寫舊路徑
+    import database
+    database.update_paths(CLAUDE_HOME)
+    
+    # 確保新目錄複製了預設的 presets (Pi, HR 等)，防止切換目錄後介面空白
+    _init_presets()
+    
     _log(f"Config updated: claudeHome={CLAUDE_HOME}  projectDir={cfg.get('projectDir','')!r}")
     return web.json_response({"ok": True, "slug": cfg.get("projectDir", "")})
 
@@ -2959,10 +3063,10 @@ def _init_presets() -> None:
                     shutil.copy2(src, dest)
                     _log(f"Copied preset soul: {src.name} -> {dest}")
 
-        # 5. 合併 MCP servers (claude.json)
+        # 5. 合併 MCP servers (.claude.json)
         p_claude_json = presets_dir / "claude.json"
         if p_claude_json.exists():
-            dest_claude_json = CLAUDE_HOME / "claude.json"
+            dest_claude_json = CLAUDE_HOME.parent / ".claude.json"
             
             # 讀取 preset mcpServers
             try:
@@ -3045,6 +3149,7 @@ def build_app() -> web.Application:
         ("POST",   "/api/sessions/resume",              handle_resume_session),
         ("GET",    "/api/sessions/{id}/messages",      handle_session_messages),
         ("DELETE", "/api/sessions/{id}",               handle_session_delete),
+        ("POST",   "/api/sessions/{id}/truncate",      handle_session_truncate),
         ("PATCH",  "/api/sessions/{id}",               handle_session_rename),
         ("POST",   "/api/sessions/{id}/auto-title",    handle_session_auto_title),
         ("POST",   "/api/skills/generate",     handle_skill_generate),
@@ -3212,6 +3317,7 @@ async def run_schedule_prompt(schedule: dict) -> None:
         env["ANTHROPIC_API_KEY"] = key
     proc = None
     try:
+        cmd = wrap_cmd(cmd[0], cmd[1:])
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -3234,10 +3340,15 @@ async def run_schedule_prompt(schedule: dict) -> None:
             await _send_line_message(to, result_text)
     except asyncio.TimeoutError:
         print(f"[schedule] Prompt timed out after {_SCHEDULE_TIMEOUT}s")
-        if proc and proc.returncode is None:
+        if proc:
             safe_kill_process(proc)
     except Exception as e:
         print(f"[schedule] Error running prompt: {e}")
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
 
 
 

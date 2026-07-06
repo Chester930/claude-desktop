@@ -378,6 +378,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   messages = signal<ChatMessage[]>([]);
   inputText = '';
   isStreaming = signal(false);
+  isRecording = signal(false);
+  recognition: any = null;
   selectedAgent = signal('');
   activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp' | 'memview'>('teams');
   sessionSearch = '';
@@ -528,6 +530,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       sessionMcps: [],
       projectDir: projectDir ?? this.settings.get().workDir,
       teamId,
+      draft: '',
     };
   }
 
@@ -535,12 +538,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const id = this.activeChatId();
     if (!id) return;
     this.chatTabs.update(tabs => tabs.map(t => t.id === id
-      ? { ...t, messages: this.messages(), tokenUsage: this.tokenUsage(), selectedAgent: this.selectedAgent(), isStreaming: this.isStreaming() }
+      ? { ...t, messages: this.messages(), tokenUsage: this.tokenUsage(), selectedAgent: this.selectedAgent(), isStreaming: this.isStreaming(), draft: this.inputText }
       : t));
   }
 
   switchChatTab(tabId: string) {
     if (tabId === this.activeChatId()) return;
+    if (this.isRecording()) {
+      this.toggleMic();
+    }
     this.saveCurrentTab();
     const tab = this.chatTabs().find(t => t.id === tabId);
     if (!tab) return;
@@ -549,6 +555,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.selectedAgent.set(tab.selectedAgent);
     this.isStreaming.set(tab.isStreaming);
     this.claude.clientId = tab.clientId;
+    this.inputText = tab.draft || '';
+
+    setTimeout(() => {
+      if (this.inputRef?.nativeElement) {
+        const el = this.inputRef.nativeElement;
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+      }
+    }, 50);
+
     this.activeChatId.set(tabId);
     this.checkQuotaInMessages(tab.messages);
   }
@@ -565,6 +581,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   addChatTab() {
     if (this.chatTabs().length >= 4) return; // 畫布最多 4 個面板
+    if (this.isRecording()) {
+      this.toggleMic();
+    }
     this.saveCurrentTab();
     const tab = this.makeTab();
     this.chatTabs.update(t => [...t, tab]);
@@ -573,6 +592,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.selectedAgent.set(this.settings.get().defaultAgent || '');
     this.isStreaming.set(false);
     this.claude.clientId = tab.clientId;
+    this.inputText = '';
     this.activeChatId.set(tab.id);
   }
 
@@ -621,6 +641,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const idx = tabs.findIndex(t => t.id === tabId);
     const isActive = tabId === this.activeChatId();
     const next = tabs[idx > 0 ? idx - 1 : 1];
+    if (isActive && this.isRecording()) {
+      this.toggleMic();
+    }
     this.chatTabs.update(t => t.filter(x => x.id !== tabId));
     if (isActive && next) this.switchChatTab(next.id);
   }
@@ -850,7 +873,76 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   toggleMic() {
-    this.showToast('語音輸入即將推出，敬請期待！', 'info');
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      this.showToast('瀏覽器或系統不支援 Web Speech API 語音識別', 'error');
+      return;
+    }
+
+    if (this.isRecording()) {
+      if (this.recognition) {
+        this.recognition.stop();
+      }
+      return;
+    }
+
+    try {
+      this.recognition = new SpeechRecognition();
+      this.recognition.continuous = true;
+      this.recognition.interimResults = true;
+      this.recognition.lang = this.settings.get().lang === 'en' ? 'en-US' : 'zh-TW';
+
+      this.recognition.onstart = () => {
+        this.isRecording.set(true);
+        this.showToast('🎙️ 語音輸入中，請開始說話...', 'success');
+      };
+
+      this.recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error);
+        if (event.error !== 'aborted') {
+          this.showToast(`語音輸入出錯: ${event.error}`, 'error');
+        }
+        this.isRecording.set(false);
+        this.recognition = null;
+      };
+
+      this.recognition.onend = () => {
+        this.isRecording.set(false);
+        this.recognition = null;
+        this.showToast('🎙️ 語音輸入已結束', 'info');
+      };
+
+      const startText = this.inputText;
+
+      this.recognition.onresult = (event: any) => {
+        let interimTranscript = '';
+        let finalTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          } else {
+            interimTranscript += event.results[i][0].transcript;
+          }
+        }
+
+        this.inputText = startText + finalTranscript + interimTranscript;
+
+        setTimeout(() => {
+          if (this.inputRef?.nativeElement) {
+            const el = this.inputRef.nativeElement;
+            el.style.height = 'auto';
+            el.style.height = el.scrollHeight + 'px';
+          }
+        }, 50);
+      };
+
+      this.recognition.start();
+    } catch (e: any) {
+      console.error('Failed to start speech recognition:', e);
+      this.showToast('啟動語音識別失敗', 'error');
+      this.isRecording.set(false);
+    }
   }
   cycleEffort() {
     const idx = (this.EFFORT_OPTIONS.indexOf(this.effort() as any) + 1) % this.EFFORT_OPTIONS.length;
@@ -876,7 +968,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
         const result = await this.claude.uploadFile(file);
         this.attachedFiles.update(a => [...a, { ...result, preview }]);
-      } catch { }
+      } catch (err: any) {
+        this.showToast(`上傳檔案失敗: ${err.message ?? err}`, 'error');
+      }
     }
     this.isUploading.set(false);
   }
@@ -1388,12 +1482,29 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!btn) return;
     const code = btn.closest('.code-block-wrap')?.querySelector('code') as HTMLElement | null;
     if (!code) return;
-    navigator.clipboard.writeText(code.innerText).then(() => {
+    const textToCopy = code.innerText;
+    const onSuccess = () => {
       const orig = btn.textContent;
       btn.textContent = '✓ 已複製';
       btn.classList.add('copied');
       setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
-    });
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(textToCopy).then(onSuccess);
+    } else {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = textToCopy;
+        textarea.style.position = 'fixed';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        onSuccess();
+      } catch (err) {
+        console.error('Fallback copy failed', err);
+      }
+    }
   }
 
   // Message edit + regenerate (#11)
@@ -1411,6 +1522,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   confirmEditMsg(idx: number) {
     const newText = this.editingMsgText().trim();
     if (!newText) { this.cancelEditMsg(); return; }
+    const sid = this.activeChatId();
+    if (sid) {
+      this.claude.truncateSession(sid, idx).subscribe();
+    }
     // slice off from this user message onward
     this.messages.set(this.messages().slice(0, idx));
     this.editingMsgIdx.set(null);
@@ -2161,14 +2276,30 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // MCP log viewer (#15)
   mcpLogOpen = signal<string | null>(null);
   mcpLogLines = signal<string[]>([]);
+  private _mcpLogInterval: any = null;
 
   toggleMcpLog(name: string) {
+    if (this._mcpLogInterval) {
+      clearInterval(this._mcpLogInterval);
+      this._mcpLogInterval = null;
+    }
+
     if (this.mcpLogOpen() === name) {
       this.mcpLogOpen.set(null);
       return;
     }
     this.mcpLogOpen.set(name);
     this.refreshMcpLog(name);
+
+    // 每 2.5 秒自動重整日誌，方便使用者調試
+    this._mcpLogInterval = setInterval(() => {
+      if (this.mcpLogOpen() === name) {
+        this.refreshMcpLog(name);
+      } else {
+        clearInterval(this._mcpLogInterval);
+        this._mcpLogInterval = null;
+      }
+    }, 2500);
   }
   refreshMcpLog(name: string) {
     this.claude.getMcpLogs(name).subscribe(r => this.mcpLogLines.set(r.lines));
@@ -2477,6 +2608,30 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.settingsForm.lang = next;
   }
 
+  get currentTheme(): 'dark' | 'light' {
+    return this.settings.get().theme || 'dark';
+  }
+
+  toggleTheme() {
+    const current = this.settings.get().theme || 'dark';
+    const next = current === 'dark' ? 'light' : 'dark';
+    this.settings.save({ theme: next });
+    this.settingsForm.theme = next;
+  }
+
+  applyQuickPrompt(text: string) {
+    this.inputText = text;
+    this.saveCurrentTab();
+    setTimeout(() => {
+      if (this.inputRef?.nativeElement) {
+        const el = this.inputRef.nativeElement;
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+        el.focus();
+      }
+    }, 10);
+  }
+
   checkForUpdates() {
     this.userMenuOpen.set(false);
     const api = (window as any).electronAPI;
@@ -2542,9 +2697,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnInit() {
     this.reload();
-    this.claude.getSoul().subscribe(s => { this.soulContent = s; });
-    this.loadProfiles();
-    this.loadTeams();
     this._healthTimer = setInterval(() => {
       this.claude.getStatus().subscribe({
         next: () => {
@@ -2583,6 +2735,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnDestroy() {
     clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); clearInterval(this.usageTimer);
+    if (this._mcpLogInterval) clearInterval(this._mcpLogInterval);
     this.stopFn?.(); this._teamRunStopFn?.();
   }
 
@@ -2600,7 +2753,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const preview = URL.createObjectURL(file);
       const result = await this.claude.uploadFile(file);
       this.attachedFiles.update(a => [...a, { ...result, preview }]);
-    } catch { }
+    } catch (err: any) {
+      this.showToast(`上傳截圖失敗: ${err.message ?? err}`, 'error');
+    }
     this.isUploading.set(false);
   }
 
@@ -2822,6 +2977,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.selectSoulProfile(list[0].id);
       }
     });
+    this.loadProfiles();
+    this.loadTeams();
+    this.claude.getSoul().subscribe(s => { this.soulContent = s; });
+    this.loadMcp();
   }
 
   ngAfterViewChecked() {
@@ -2856,6 +3015,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.lastUserText = text;
     this.lastAttachments = this.attachedFiles().map(f => f.path);
     this.inputText = '';
+    if (this.inputRef?.nativeElement) {
+      this.inputRef.nativeElement.style.height = 'auto';
+    }
     localStorage.removeItem('claude_input_draft');
     this.isStreaming.set(true);
     const attachments = this.attachedFiles().map(f => f.path);
@@ -3013,7 +3175,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     // 2. 啟動團隊討論
     let createdProjectMeta: any = null;
     
-    const stopTeamChat = this.claude.streamTeamChat(
+    const abortFn = this.claude.streamTeamChat(
       text,
       curTab.teamId,
       (ev) => {
@@ -3101,7 +3263,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     );
 
     this.stopFn = () => {
-      stopTeamChat();
+      abortFn();
       this.isStreaming.set(false);
       this.stopFn = null;
       this.messages.update(msgs => msgs.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
@@ -3141,7 +3303,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.shouldScroll = true;
     this.isStreaming.set(true);
 
-    const stopExec = this.claude.executeTeamTask(
+    const abortExec = this.claude.executeTeamTask(
       teamId,
       projectPath,
       task,
@@ -3266,7 +3428,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     );
 
     this.stopFn = () => {
-      stopExec();
+      abortExec();
       this.isStreaming.set(false);
       this.stopFn = null;
       this.messages.update(msgs => {

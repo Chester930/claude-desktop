@@ -89,6 +89,7 @@ export interface ChatTab {
   sessionMcps: string[];    // 一次性：本對話框有效
   projectDir: string;       // 建立時繼承 workDir，送出第一則訊息後視為鎖定
   teamId?: string;          // 綁定的團隊 ID，若有則為與組長對話情境
+  draft?: string;           // 對話框尚未傳送的草稿文字
 }
 
 @Injectable({ providedIn: 'root' })
@@ -293,6 +294,10 @@ export class ClaudeService {
 
   deleteSession(id: string): Observable<any> {
     return this.http.delete(`${this.api}/sessions/${id}`);
+  }
+
+  truncateSession(id: string, count: number): Observable<any> {
+    return this.http.post(`${this.api}/sessions/${id}/truncate`, { count });
   }
 
   renameSession(id: string, title: string): Observable<any> {

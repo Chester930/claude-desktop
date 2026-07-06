@@ -615,11 +615,10 @@
               </button>
               -->
 
-              <!-- TODO: 主題切換（明亮 / 暗影模式）— 待實作
               <button class="umenu-item" (click)="toggleTheme(); userMenuOpen.set(false)">
-                <span class="umenu-icon">🌙</span><span>切換主題</span>
+                <span class="umenu-icon">{{ currentTheme === 'dark' ? '☀️' : '🌙' }}</span>
+                <span>切換為{{ currentTheme === 'dark' ? '明亮' : '暗黑' }}模式</span>
               </button>
-              -->
 
               <!-- TODO: 回饋意見 — 待串接回饋系統後啟用
               <button class="umenu-item" (click)="openFeedback()">
@@ -992,7 +991,7 @@
                       <div class="chat-welcome-prompts">
                         @for (p of quickPrompts(); track p.label) {
                           <button class="welcome-prompt-btn"
-                            (click)="inputText = p.text; inputRef.focus()">
+                            (click)="applyQuickPrompt(p.text)">
                             {{ p.label }}
                           </button>
                         }
@@ -1212,8 +1211,8 @@
               <input type="file" accept="image/*,.txt,.md,.py,.ts,.js,.json" multiple
                 (change)="pickFile($event)" style="display:none">
             </label>
-            <button class="sb-btn mic-btn" (click)="toggleMic()" title="語音輸入（未啟用）" style="margin-left: 4px; padding: 2px 4px; opacity: 0.8;">
-              🎤
+            <button class="sb-btn mic-btn" [class.recording]="isRecording()" (click)="toggleMic()" [title]="isRecording() ? '正在語音輸入...點擊停止' : '語音輸入'">
+              🎙️
             </button>
             @if (!activeChat?.teamId) {
               <button class="sb-btn hr-btn" (click)="dispatchHR()" [disabled]="!inputText.trim() || isStreaming() || hrLoading()" [title]="'🤖 自動組隊 (HR Agent) 分析任務並建立臨時 Team'">
@@ -1234,7 +1233,6 @@
               {{ effort() }}
             </button>
             <span class="status-dot" [class.online]="!backendDown() && !outOfQuota()" [title]="backendDown() ? '已斷開後端連線' : outOfQuota() ? '已達用量限制' : '後端連線正常，可用量充足'"></span>
-            <button class="sb-btn" (click)="showSettingsHelp.set(true)" title="說明狀態列設定" style="margin-left: -2px; padding: 2px 4px; opacity: 0.7;">❓</button>
           </div>
         </div>
       </div>
@@ -1388,12 +1386,12 @@
                   }
                   <!-- 組長與展開收合按鈕 -->
                   <div class="team-leader-preview" style="font-size:11px; margin-top:6px; display:flex; align-items:center; gap:6px;">
-                    <span style="color:#d4a853; font-weight:bold;">👑 組長:</span>
+                    <span style="color:#d4a853; font-weight:bold;">👑</span>
                     <span class="team-member-chip" style="border-color:#d4a853; cursor:default; margin:0; padding:2px 6px;">
                       {{ t.leader || '（無）' }}
                     </span>
-                    <span style="color:#888; font-size:10px; margin-left:auto;">
-                      {{ expandedTeams()[t.id] ? '▲ 收合' : '▼ 展開其餘 ' + (t.members.length > 1 ? (t.members.length - 1) : 0) + ' 名成員' }}
+                    <span style="color:#888; font-size:10px; margin-left:auto;" [title]="expandedTeams()[t.id] ? '收合' : '展開其餘 ' + (t.members.length > 1 ? (t.members.length - 1) : 0) + ' 名成員'">
+                      {{ expandedTeams()[t.id] ? '▲' : '▼ ' + (t.members.length > 1 ? (t.members.length - 1) : 0) }}
                     </span>
                   </div>
                   <!-- 成員列表 -->

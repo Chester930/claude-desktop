@@ -31,7 +31,7 @@ SOUL_FILE          = CLAUDE_HOME / "soul.md"
 SOULS_DIR          = CLAUDE_HOME / "souls"
 
 def update_paths(value: Path):
-    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, TEAMS_DIR, SESSIONS_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR
+    global CLAUDE_HOME, AGENTS_DIR, SKILLS_DIR, TEAMS_DIR, SESSIONS_DIR, SCHEDULES_FILE, SESSION_NAMES_FILE, SOUL_FILE, SOULS_DIR, LOCAL_MCP_CONFIG_FILE
     CLAUDE_HOME = value
     AGENTS_DIR = value / "agents"
     SKILLS_DIR = value / "skills"
@@ -41,6 +41,7 @@ def update_paths(value: Path):
     SESSION_NAMES_FILE = value / "session_names.json"
     SOUL_FILE = value / "soul.md"
     SOULS_DIR = value / "souls"
+    LOCAL_MCP_CONFIG_FILE = value / "claude-desktop-local-mcps.json"
 
 def _safe_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
     """原子寫入檔案，避免寫入中途崩潰時造成設定檔損毀"""
@@ -336,8 +337,8 @@ def _save_local_mcp_cfg(cfg: dict) -> None:
     _safe_write_text(LOCAL_MCP_CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
 
 def _analyze_mcp_entry(name: str) -> dict:
-    """Read ~/.claude/claude.json and return type + metadata for one MCP."""
-    config_path = CLAUDE_HOME / "claude.json"
+    """Read ~/.claude.json and return type + metadata for one MCP."""
+    config_path = CLAUDE_HOME.parent / ".claude.json"
     entry: dict = {}
     if config_path.exists():
         try:

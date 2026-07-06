@@ -17,6 +17,7 @@ services:
       - type: bind
         source: ${CLAUDE_HOME}
         target: /root/.claude
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
     healthcheck:
@@ -56,6 +57,7 @@ services:
       - type: bind
         source: ${CLAUDE_HOME}
         target: /root/.claude
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - CLAUDE_BIN=claude
     healthcheck:

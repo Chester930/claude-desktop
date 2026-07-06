@@ -24,6 +24,8 @@ from helpers import (
     _write_frontmatter,
     _skill_dict_from_file,
     _skill_dict_from_dir,
+    safe_kill_process,
+    wrap_cmd,
 )
 
 
@@ -187,15 +189,22 @@ JSON Schema:
     key = resolve_key()
     if key:
         env["ANTHROPIC_API_KEY"] = key
+    proc = None
     try:
+        cmd = wrap_cmd(claude_bin, ["-p", prompt, "--output-format", "text"])
         proc = await asyncio.create_subprocess_exec(
-            claude_bin, "-p", prompt, "--output-format", "text",
+            *cmd,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=env, cwd=str(Path.home()),
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
         output_str = stdout.decode("utf-8", errors="replace").strip()
     except Exception as e:
+        if proc:
+            try:
+                safe_kill_process(proc)
+            except Exception:
+                pass
         return {"error": f"HR dispatch failed: {e}"}
 
     s = output_str.strip()
