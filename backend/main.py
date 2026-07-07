@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import html
 import io
 import json
 import os
@@ -1421,15 +1422,25 @@ async def handle_sessions(request: web.Request) -> web.Response:
             if q and len(q) >= 3:
                 # trigram tokenizer needs >=3 chars to form any trigram, so this
                 # path only fires for queries long enough for FTS5 MATCH to work.
-                rows = c.execute("""
+                # T44 健檢修復：snippet 會經前端 [innerHTML] 直接渲染，FTS5 的
+                # snippet() 回傳的是 search_text 原始子字串（未跳脫），若對話
+                # 內容剛好含有 <script> 之類字元就會被當成真的 HTML 執行。
+                # 用不可能出現在一般文字裡的控制字元當標記，取回後先整段
+                # html.escape() 再把標記換回真正的 <mark> 標籤，確保只有
+                # 「刻意插入的」標記會被當成 HTML，其餘內容一律跳脫。
+                raw_rows = c.execute("""
                     SELECT s.id, s.title, s.mtime, s.message_count, s.file_path, s.project_path,
-                           snippet(sessions_fts, 2, '<mark>', '</mark>', '…', 12) AS snippet
+                           snippet(sessions_fts, 2, ?, ?, '…', 12) AS snippet
                     FROM sessions_fts f
                     JOIN sessions s ON s.id = f.id
                     WHERE sessions_fts MATCH ?
                       AND s.mtime >= ?
                     ORDER BY s.mtime DESC
-                """, (q, cutoff)).fetchall()
+                """, ("\x01", "\x02", q, cutoff)).fetchall()
+                rows = []
+                for r in raw_rows:
+                    safe_snippet = html.escape(r["snippet"] or "").replace("\x01", "<mark>").replace("\x02", "</mark>")
+                    rows.append({**dict(r), "snippet": safe_snippet})
             elif q:
                 # short (1-2 char) queries: trigram can't match these at all, so
                 # fall back to LIKE -- table is small enough that this is cheap.
@@ -1446,18 +1457,25 @@ async def handle_sessions(request: web.Request) -> web.Response:
                     if idx >= 0:
                         start = max(0, idx - 30)
                         end = min(len(text), idx + len(q) + 30)
-                        snippet = ("…" if start > 0 else "") + text[start:idx] + "<mark>" + q + "</mark>" + text[idx + len(q):end] + ("…" if end < len(text) else "")
+                        snippet = (
+                            ("…" if start > 0 else "")
+                            + html.escape(text[start:idx])
+                            + "<mark>" + html.escape(q) + "</mark>"
+                            + html.escape(text[idx + len(q):end])
+                            + ("…" if end < len(text) else "")
+                        )
                     else:
-                        snippet = text[:120]
+                        snippet = html.escape(text[:120])
                     rows.append({**dict(r), "snippet": snippet})
             else:
-                rows = c.execute("""
+                raw_rows = c.execute("""
                     SELECT id, title, mtime, message_count, file_path, project_path,
                            substr(search_text, 1, 120) AS snippet
                     FROM sessions
                     WHERE mtime >= ?
                     ORDER BY mtime DESC
                 """, (cutoff,)).fetchall()
+                rows = [{**dict(r), "snippet": html.escape(r["snippet"] or "")} for r in raw_rows]
         total = len(rows)
         items = [
             {
