@@ -252,10 +252,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   saveDockerConfig() {
     const cfg = this.localDockerConfig();
     if (!cfg) return;
-    this.claude.saveLocalMcpConfig(cfg.name, cfg).subscribe(() => {
-      this.localMcpConfigs.update(all => ({ ...all, [cfg.name]: cfg }));
-      this.showToast(`Docker 設定已儲存：${cfg.name}`, 'success', 2000);
-      this.editingDockerMcp.set(null);
+    this.claude.saveLocalMcpConfig(cfg.name, cfg).subscribe({
+      next: () => {
+        this.localMcpConfigs.update(all => ({ ...all, [cfg.name]: cfg }));
+        this.showToast(`Docker 設定已儲存：${cfg.name}`, 'success', 2000);
+        this.editingDockerMcp.set(null);
+      },
+      error: (e) => this.showToast(`Docker 設定儲存失敗: ${e.message ?? e}`, 'error'),
     });
   }
 
@@ -1352,7 +1355,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (e.key === 'Escape') {
       if (this.contextMenu()) this.closeContextMenu();
       else if (this.cmdOpen()) this.closeCmd();
-      else if (this.settingsOpen()) this.settingsOpen.set(false);
+      else if (this.settingsOpen()) this.closeSettings();
       else if (this.expandedAgentId() || this.expandedSkillId() || this.expandedMcpId()) {
         this.expandedAgentId.set('');
         this.expandedSkillId.set('');
@@ -1798,9 +1801,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             this.agentEditorOpen.set(false);
             this.claude.getAgents().subscribe(a => this.agents.set(a));
             this.claude.getSouls().subscribe(s => this.souls.set(s));
-          }
+          },
+          error: (e) => this.showToast(`Agent 已儲存，但 Soul 內容儲存失敗: ${e.message ?? e}`, 'error'),
         });
-      }
+      },
+      error: (e) => this.showToast(`儲存 Agent 失敗: ${e.message ?? e}`, 'error'),
     });
   }
 
@@ -1920,7 +1925,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const d = this.skillEditorData();
     if (!d.id) return;
     this.claude.updateSkill(d.id, { description: d.description, mcp: d.mcp, memory: d.memory, output_memory: d.output_memory })
-      .subscribe({ next: () => { this.skillEditorOpen.set(false); this.claude.getSkills().subscribe(s => this.skills.set(s)); } });
+      .subscribe({
+        next: () => { this.skillEditorOpen.set(false); this.claude.getSkills().subscribe(s => this.skills.set(s)); },
+        error: (e) => this.showToast(`儲存 Skill 失敗: ${e.message ?? e}`, 'error'),
+      });
   }
 
   skillEditorToggleList(field: 'memory' | 'mcp', value: string) {
@@ -2004,11 +2012,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const obs = this.teamEditorIsNew()
       ? this.claude.createTeam(d)
       : this.claude.updateTeam(d.id!, d);
-    obs.subscribe({ next: () => { this.teamEditorOpen.set(false); this.loadTeams(); } });
+    obs.subscribe({
+      next: () => { this.teamEditorOpen.set(false); this.loadTeams(); },
+      error: (e) => this.showToast(`儲存 Team 失敗: ${e.message ?? e}`, 'error'),
+    });
   }
 
   deleteTeam(id: string) {
-    this.claude.deleteTeam(id).subscribe({ next: () => this.loadTeams() });
+    this.claude.deleteTeam(id).subscribe({
+      next: () => this.loadTeams(),
+      error: (e) => this.showToast(`刪除 Team 失敗: ${e.message ?? e}`, 'error'),
+    });
   }
 
   teamEditorAddMember() {
@@ -2506,6 +2520,24 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       }
     }, 2500);
   }
+
+  // T40 健檢修復：關閉 Settings（ESC 或按下儲存）原本只是把 settingsOpen
+  // 設成 false，從未重設 mcpLogOpen 或清掉 _mcpLogInterval —— 開著 MCP 記
+  // 錄檢視器再關閉 Settings，這個每 2.5 秒打一次後端的計時器會永遠留著，
+  // 直到元件銷毀或重新打開 Settings 並手動切換掉同一個 MCP 記錄。
+  private stopMcpLogPolling() {
+    if (this._mcpLogInterval) {
+      clearInterval(this._mcpLogInterval);
+      this._mcpLogInterval = null;
+    }
+    this.mcpLogOpen.set(null);
+  }
+
+  closeSettings() {
+    this.stopMcpLogPolling();
+    this.settingsOpen.set(false);
+  }
+
   refreshMcpLog(name: string) {
     this.claude.getMcpLogs(name).subscribe(r => {
       this.mcpLogLines.set(r.lines);
@@ -2576,13 +2608,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   downloadBackup() {
     const port = this.settings.get().backendPort;
     fetch(`http://localhost:${port}/api/backup`)
-      .then(r => r.blob())
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.blob();
+      })
       .then(blob => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url; a.download = `claude-backup-${Date.now()}.zip`; a.click();
         URL.revokeObjectURL(url);
-      });
+      })
+      .catch((e) => this.showToast(`備份下載失敗: ${e.message ?? e}`, 'error'));
   }
 
   exportChat() {
@@ -2899,13 +2935,15 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       projectDir: this.settingsForm.projectDir,
       apiKeyCmd: this.settingsForm.apiKeyCmd,
       claudeHome: this.settingsForm.claudeHome,
-    }).subscribe();
+    }).subscribe({
+      error: (e) => this.showToast(`後端設定儲存失敗: ${e.message ?? e}`, 'error'),
+    });
     // 同步 Electron login item
     const eAPI = (window as any).electronAPI;
     if (eAPI?.setLoginItem) {
       eAPI.setLoginItem(this.settingsForm.openAtLogin);
     }
-    this.settingsOpen.set(false);
+    this.closeSettings();
   }
 
   ngOnInit() {
@@ -3006,9 +3044,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   saveSoulProfileEdits() {
     const id = this.selectedSoulId();
     if (!id) return;
-    this.claude.saveSoulProfile(id, this.soulDraft).subscribe(() => {
-      this.soulDraftSaved.set(true);
-      this.souls.update(list => list.map(x => x.id === id ? { ...x, content: this.soulDraft } : x));
+    this.claude.saveSoulProfile(id, this.soulDraft).subscribe({
+      next: () => {
+        this.soulDraftSaved.set(true);
+        this.souls.update(list => list.map(x => x.id === id ? { ...x, content: this.soulDraft } : x));
+      },
+      error: (e) => this.showToast(`Soul 儲存失敗: ${e.message ?? e}`, 'error'),
     });
   }
 
@@ -4119,9 +4160,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.chatTabs.update(tabs => tabs.filter(t => (t.messages?.length ?? 0) > 0));
       if (this.chatTabs().length < 4) {
         this.addChatTab();
-      } else {
-        this.saveCurrentTab();
       }
+      // 已達 4 個分頁上限時，就地取代目前分頁的對話。這裡刻意不呼叫
+      // saveCurrentTab() —— 舊內容本來就要被取代掉，先存進去只會造成
+      // 「畫面顯示新對話、chatTabs 裡卻還是舊對話」的分歧，切走再切回來
+      // 舊對話又跑出來蓋掉剛載入的內容。改成下面訊息載入完成後才同步。
     }
 
     const id = this.activeChatId();
@@ -4132,8 +4175,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.messages.set([{ role: 'system', text: '載入歷史對話中…' }]);
     this.claude.resumeSession(s.id).subscribe();
     this.claude.getSessionMessages(s.id).subscribe({
-      next: res => this.messages.set(res.messages),
-      error: () => this.messages.set([{ role: 'system', text: '無法載入歷史對話' }]),
+      next: res => { this.messages.set(res.messages); this.saveCurrentTab(); },
+      error: () => { this.messages.set([{ role: 'system', text: '無法載入歷史對話' }]); this.saveCurrentTab(); },
     });
   }
 

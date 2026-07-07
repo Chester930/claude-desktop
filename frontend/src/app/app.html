@@ -211,11 +211,11 @@
 
   <!-- ── 設定 Modal ──────────────────────────────────── -->
   @if (settingsOpen()) {
-    <div class="modal-backdrop" (click)="settingsOpen.set(false)">
+    <div class="modal-backdrop" (click)="closeSettings()">
       <div class="modal" (click)="$event.stopPropagation()">
         <div class="modal-header">
           <span>⚙ 設定</span>
-          <button class="icon-btn" (click)="settingsOpen.set(false)">✕</button>
+          <button class="icon-btn" (click)="closeSettings()">✕</button>
         </div>
         <div class="modal-scroll-wrap">
         <div class="modal-body">
@@ -457,14 +457,14 @@
         </div><!-- /modal-scroll-wrap -->
         <div class="modal-footer">
           <span class="settings-status">Claude：{{ statusInfo() }}</span>
-          <button class="btn-secondary" (click)="resetOnboarding(); settingsOpen.set(false)" title="重新開啟設定精靈">🧭 精靈</button>
+          <button class="btn-secondary" (click)="resetOnboarding(); closeSettings()" title="重新開啟設定精靈">🧭 精靈</button>
           <button class="btn-secondary" (click)="downloadDebugDump()" title="下載診斷資料（Debug Dump）">🐞 診斷</button>
           <label class="btn-secondary" title="從備份 zip 還原">
             ⬆ 還原
             <input type="file" accept=".zip" (change)="restoreBackup($event)" style="display:none">
           </label>
           <button class="btn-secondary" (click)="downloadBackup()" title="備份設定與記憶">⬇ 備份</button>
-          <button class="btn-secondary" (click)="settingsOpen.set(false)">取消</button>
+          <button class="btn-secondary" (click)="closeSettings()">取消</button>
           <button class="btn-primary" (click)="saveSettings()">儲存</button>
         </div>
       </div>
