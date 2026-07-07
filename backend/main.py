@@ -3488,7 +3488,14 @@ async def on_startup(app: web.Application) -> None:
 
 
 if __name__ == "__main__":
-    print("Claude Desktop backend starting on http://localhost:8765")
+    # 健檢第二輪修復：這支後端沒有任何身分驗證層（所有 state-changing 端點
+    # 都只靠 CORS + 「同機信任」假設），綁 0.0.0.0 等於讓同一個 LAN/VPN 上的
+    # 任何主機都能直接 curl 到（CORS 只擋瀏覽器，不擋直接發送 HTTP 請求的用戶端）。
+    # Electron 桌面版本身跑在 host 上，只需要 loopback 就夠；docker-compose
+    # 部署下的容器需要接受同網段其他容器（frontend/ngrok）連線，透過
+    # BACKEND_BIND_HOST=0.0.0.0（docker-compose.yml 已設定）明確選擇放寬。
+    bind_host = os.environ.get("BACKEND_BIND_HOST", "127.0.0.1")
+    print(f"Claude Desktop backend starting on http://{bind_host}:8765")
     app = build_app()
     app.on_startup.append(on_startup)
-    web.run_app(app, host="0.0.0.0", port=8765)
+    web.run_app(app, host=bind_host, port=8765)
