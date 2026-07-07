@@ -73,35 +73,26 @@ class TestTeamRunPathTraversalRejected:
 
 
 class TestWrapCmdFixedInTeamRun:
-    async def test_step_failure_is_not_a_wrap_cmd_nameerror(self, client, tmp_claude_home):
+    pytestmark = [pytest.mark.asyncio]
+
+    async def test_agent_run_capture_calls_wrap_cmd_without_nameerror(self, monkeypatch):
         """
         Regression test for wrap_cmd NameError: routes/teams.py previously never
-        imported wrap_cmd, so every team-run step failed with
-        "name 'wrap_cmd' is not defined" regardless of whether the `claude` CLI
-        was installed. In this test environment there's no real `claude` binary,
-        so the step is still expected to fail — but it must fail at the actual
-        subprocess-spawn stage (FileNotFoundError), never at wrap_cmd itself.
+        imported wrap_cmd, so _agent_run_capture's `cmd = wrap_cmd(cmd[0], cmd[1:])`
+        raised NameError on every single call, regardless of whether the `claude`
+        CLI was installed. Call the real function directly (no HTTP round-trip /
+        background-task polling needed) and force the subsequent subprocess spawn
+        to fail deterministically — the failure must come from that forced spawn
+        error, never from "name 'wrap_cmd' is not defined".
         """
-        import main
-        main.TEAMS_DIR = tmp_claude_home / "teams"
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            raise FileNotFoundError("forced: no real subprocess spawned in this test")
 
-        resp = await client.post("/api/team/run", json={
-            "task": "smoke test",
-            "team": {"name": "t", "members": [{"agent": "nonexistent-agent", "role": "r"}]},
-        })
-        assert resp.status == 200
-        run_id = (await resp.json())["run_id"]
+        monkeypatch.setattr(teams_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
-        # Poll for the background task to finish the (failing) step. Generous
-        # timeout since this spawns a real subprocess attempt under the hood.
-        step = None
-        for _ in range(200):
-            r = await client.get(f"/api/team/run/{run_id}")
-            body = await r.json()
-            step = body["steps"][0]
-            if step["status"] == "done":
-                break
-            await asyncio.sleep(0.1)
+        output = await teams_module._agent_run_capture(
+            "run-x", 0, "nonexistent-agent", "prompt", "haiku", "/tmp"
+        )
 
-        assert step["status"] == "done", f"step never finished: {step}"
-        assert "wrap_cmd" not in step["output"]
+        assert "wrap_cmd" not in output
+        assert "forced: no real subprocess spawned" in output

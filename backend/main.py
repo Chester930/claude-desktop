@@ -1404,7 +1404,7 @@ async def handle_sessions(request: web.Request) -> web.Response:
     q      = request.rel_url.query.get("q", "").strip()
     offset = int(request.rel_url.query.get("offset", "0"))
     PAGE   = 30
-    _sync_index()
+    await asyncio.to_thread(_sync_index)
     custom_names = load_session_names()
 
     # 只保留最近 30 天的對話
@@ -1517,7 +1517,7 @@ async def handle_soul_reset(request: web.Request) -> web.Response:
             try: f.unlink()
             except Exception: pass
     # 重新寫入預設 presets 靈魂（例如 Pi），防止重設後列表空白
-    _init_presets()
+    await asyncio.to_thread(_init_presets)
     return web.json_response({'ok': True})
 
 
@@ -2265,7 +2265,7 @@ async def handle_stats(request: web.Request) -> web.Response:
     """Dashboard 統計 — 用 SQLite index 計算，不重新掃描 JSONL。"""
     from datetime import timedelta
     today = datetime.now().date()
-    _sync_index()
+    await asyncio.to_thread(_sync_index)
 
     sessions_count = 0
     total_tokens   = 0
@@ -3091,8 +3091,8 @@ async def handle_config_put(request: web.Request) -> web.Response:
     database.update_paths(CLAUDE_HOME)
     
     # 確保新目錄複製了預設的 presets (Pi, HR 等)，防止切換目錄後介面空白
-    _init_presets()
-    
+    await asyncio.to_thread(_init_presets)
+
     _log(f"Config updated: claudeHome={CLAUDE_HOME}  projectDir={cfg.get('projectDir','')!r}")
     return web.json_response({"ok": True, "slug": cfg.get("projectDir", "")})
 
