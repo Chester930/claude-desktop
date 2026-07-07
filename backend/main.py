@@ -3026,7 +3026,8 @@ async def handle_debug_dump(request: web.Request) -> web.Response:
     import platform, sys
     cfg      = _load_config()
     safe_cfg = {k: v for k, v in cfg.items()
-                if "key" not in k.lower() and "token" not in k.lower() and "password" not in k.lower()}
+                if "key" not in k.lower() and "token" not in k.lower()
+                and "password" not in k.lower() and "secret" not in k.lower()}
     sqlite_stats: dict = {}
     try:
         with _db() as c:
@@ -3064,6 +3065,10 @@ async def handle_config_get(request: web.Request) -> web.Response:
     cfg.setdefault("projectDir", "")
     cfg.setdefault("claudeHome", "")
     cfg["_resolvedClaudeHome"] = str(CLAUDE_HOME)   # read-only info for UI
+    # 健檢第二輪修復：這是驗證 LINE webhook 簽章的 HMAC secret，外洩等於能
+    # 偽造合法 webhook 請求繞過簽章驗證。前端 settings 表單目前不會讀回這個
+    # 欄位（只有 apiKeyCmd 會被讀回填入表單），拿掉不影響既有功能。
+    cfg.pop("lineChannelSecret", None)
     return web.json_response(cfg)
 
 
