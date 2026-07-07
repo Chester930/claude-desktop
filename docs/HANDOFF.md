@@ -249,6 +249,70 @@ npm install
 
 前端 `ng build`/`tsc --noEmit` 全過；Electron `contextIsolation: true`、`nodeIntegration: false` 設定正確；所有變更的 backend 檔案 `py_compile` 全過；前端沒有 RxJS 訂閱洩漏或 XSS 風險。
 
-### 剩餘待處理
+### 剩餘待處理（第一輪）
 
 - **T2 後續（可選）｜docker.sock 完整掛載本身** — 應用層加固已關閉「任意網頁觸發提權」這條已知路徑，但 `docker-compose.yml` 的 `backend-dev`/`backend` 服務仍掛載完整、未受限的 `/var/run/docker.sock`。若之後想進一步縮小攻擊面，可評估：(a) 移除掛載並砍掉 docker-compose 部署下的「本地 Docker MCP 管理」功能（Electron 桌面版本身跑在 host 上不受影響）；(b) 改用 docker-socket-proxy 之類的限權中介（需驗證 `docker compose` 子指令相容性）。屬於範疇/基礎設施決策，非本輪必要項目。
+
+---
+
+## 十、2026-07-06 第二輪健檢 — 全部修復完成
+
+> **背景**：延續第一輪健檢，針對尚未覆蓋的範圍再做一輪全面掃描，涵蓋
+> backend/main.py 核心 handler、routes/agents.py、routes/teams.py、
+> session_pool.py、helpers.py、memory_agent.py、message_bus.py、
+> agency_agents_importer.py、database.py、frontend app.ts 全文、
+> claude.service.ts、markdown.pipe.ts、settings.service.ts、
+> electron/main.js、preload.js、docker-compose.yml、Dockerfile 系列、
+> nginx.conf。5 個並行 agent 分別負責 backend 核心、backend routes/libs、
+> frontend 安全性、frontend 正確性、Electron/infra，共產出 35 筆原始
+> 發現（1 筆確認為已修復的舊發現，予以排除）。所有項目皆已修復並驗證。
+
+### 🔴 關鍵發現：後端零認證 + 綁定 0.0.0.0
+
+`backend/main.py` 完全沒有任何身分驗證層，`web.run_app(host="0.0.0.0")`
+讓同一個 LAN/VPN 上的任何主機都能直接發送請求（CORS 只擋瀏覽器，擋不住
+curl/腳本），docker-compose.yml 的 `prod` profile 又把 ngrok 對外網路通道
+跟 backend/frontend 綁在一起，等於預設就把這個無認證 API 曝露到公開網際
+網路。這個根源問題放大了好幾筆本來看似 P2 的發現（`apiKeyCmd` RCE、
+排程建立、`lineChannelSecret` 外洩等）。與使用者確認後採「最小限度部署
+面收斂」（不新增完整 API 認證層）：詳見下方 T16-18。
+
+### Backend — team 執行引擎 / 路徑穿越 / 併發
+
+- [x] **T19｜`wrap_cmd` 從未被 import，team 執行引擎 100% 壞掉** — `routes/teams.py` 呼叫 `wrap_cmd()` 但從未 import，每個 team run step 都直接 NameError（被 broad except 吃掉變成錯誤字串）。補上 import。
+- [x] **T20-22｜team run 的 memory key／agent id 路徑穿越** — `POST /api/team/run` 的 inline team payload 完全繞過已儲存的 team YAML，`agent`/`input_memory`/`output_memory` 沒有驗證就被拼進檔案路徑。新增 `_is_safe_id()`，API 邊界擋下不合法請求，並在實際讀寫檔案處加防禦深度檢查。
+- [x] **T23｜parallel team run 的 process 追蹤 race** — `_team_run_processes` 從 `dict[run_id]=proc` 改成 `dict[run_id]=set(processes)`，cancel/timeout 時正確殺掉該 run 底下追蹤到的所有 process，不再留下孤兒 process。
+- [x] **T24｜SessionPool.evict() race** — `evict()` 改成先拿 per-key lock 才動作、鎖物件本身永遠不刪除；新增 busy counter，避免長 turn 進行中被 `run_idle_pruner` 斷線；`evict()` 新增 `force` 參數供已知壞連線/app 關閉時無條件使用。
+- [x] **T25-26｜`handle_sessions`/`handle_stats`/`handle_config_put` 等阻塞 event loop** — `_sync_index()`/`_init_presets()` 改用 `await asyncio.to_thread(...)`。
+
+### Backend — 網路曝露收斂 / 資訊外洩 / 穩健性
+
+- [x] **T16-18｜後端零認證 + 綁定 0.0.0.0** — `BACKEND_BIND_HOST` 環境變數（預設 `127.0.0.1`），docker-compose.yml 三個服務的 host 埠全部改綁 `127.0.0.1:`，ngrok 拆成獨立 `tunnel` profile 不再隨 `prod` 自動啟動。
+- [x] **T27｜`handle_files` 任意目錄列舉** — 複查後確認是刻意設計（支援多磁碟機瀏覽），且已被 T16-18 的網路收斂降低到同機風險，維持現狀不變更程式碼。
+- [x] **T28｜`lineChannelSecret` 經 debug-dump/config 外洩** — `handle_debug_dump` 過濾器加上 `secret` 子字串；`handle_config_get` 針對性移除 `lineChannelSecret`（保留 `apiKeyCmd` 供設定表單讀回填入）。
+- [x] **T29｜`_db()` 連線在約 10 個呼叫點從未關閉** — 新增 `_db_ctx()` context manager 取代所有 `with _db() as c:`，語意相同但保證 close()。
+- [x] **T30｜`handle_restore` 沒有解壓大小上限（zip bomb）** — 用 `ZipInfo.file_size` 檢查單一項目（20MB）與總計（50MB）上限。
+- [x] **T31｜LINE webhook 簽章驗證 fail-open** — `lineChannelSecret` 未設定時原本直接放行，改成 fail-closed。
+- [x] **T32-33｜MemoryAgent TOCTOU、agency_agents_importer 路徑穿越防禦深度** — `_safe_mtime()` 容錯；`_is_safe_id()` 過濾 divisions.json 的 key。
+
+### Electron / Infra
+
+- [x] **T34｜容器用 root 執行 + docker.sock/憑證掛載** — `backend/Dockerfile` 新增非 root 使用者，透過 `DOCKER_GID` build arg 對齊 host docker 群組；順手發現並修復這個 image 從未真正開機成功過的兩個問題（COPY 漏掉好幾個必要模組、`CLAUDE_HOME` 目錄建立順序錯誤）。已用 `docker build`+`docker run` 端對端驗證。
+- [x] **T35｜Electron `did-fail-load` 無條件 fallback 到 localhost:4200** — 只在 `isDev` 才 fallback，正式版失敗顯示錯誤畫面。
+- [x] **T36｜nginx 沒有安全性 header** — 新增 `X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/`Permissions-Policy`/CSP，已用真實 nginx container 驗證 header 正確出現且資源仍正常載入。
+- [x] **T37｜容器沒有資源限制 + 不可重現建置** — `deploy.resources.limits`（已用 `docker inspect` 驗證真的套用到 HostConfig）；`frontend/Dockerfile.dev` 的 `npm install` 改 `npm ci`。
+
+### Frontend
+
+- [x] **T38｜跨分頁串流污染** — `send()`/`submitTeamMessage()`/`executeTeamCodePhase()` 的事件 callback 原本直接寫共用的 `this.messages`/`this.isStreaming`/`this.stopFn`，沒檢查事件所屬分頁是否還是作用中分頁。新增 `tabMessages()`/`tabStreaming()`/`tabTokenUsage()` helper 與 per-tab 的 `tabStopFns` Map。
+- [x] **T39｜editor 儲存家族吞掉錯誤** — `saveAgentEditor`/`saveSkillEditor`/`saveTeamEditor`/`deleteTeam`/`saveDockerConfig`/`saveSoulProfileEdits`/`saveSettings` 全部補上 `error` callback + toast。
+- [x] **T40｜MCP log poller 在 Settings 關閉後洩漏** — 新增 `closeSettings()` 統一停止輪詢，取代 5 處直接寫 `settingsOpen.set(false)`。
+- [x] **T41-42｜備份下載無錯誤處理、`loadSession` 分頁滿載時分歧** — `downloadBackup()` 補 `r.ok`+`.catch()`；`loadSession()` 改成新對話真正載入完成後才同步 `chatTabs`，不再有畫面與儲存狀態分歧。
+- [x] **T43｜`providerApiKey` 明碼存在 localStorage** — 改用 Electron `safeStorage`（DPAPI/Keychain/libsecret）另外加密存放，已用 headless Electron 腳本驗證加解密流程正確、檔案不含明碼。
+- [x] **T44｜session snippet 原始 innerHTML 注入、markdown 語言標籤未跳脫** — FTS5/LIKE/無查詢三條 snippet 生成路徑都補上 `html.escape()`；`markdown.pipe.ts` 的 `langLabel` 補上跳脫（原本已被下游 DOMPurify 擋住，屬於縱深防禦補強）。
+
+### 已驗證沒問題（第二輪）
+
+`routes/run_artifacts.py` 的路徑穿越修復重新驗證仍然有效；`message_bus.py`／`watcher.py` 沒有超出第一輪已修復範圍的問題；`electron/preload.js` 暴露的介面精簡安全；`database.py` 的 `_analyze_mcp_entry` 邏輯繁瑣但功能正確。
+
+pytest tests/ 162 個測試全過；`tsc --noEmit`／`ng build` 全過；`docker build`/`docker run`/`docker compose config` 皆已實際驗證通過（非僅語法檢查）。
