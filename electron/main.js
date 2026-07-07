@@ -321,8 +321,22 @@ function createWindow() {
   const startHidden = process.argv.includes('--hidden');
   mainWindow.once('ready-to-show', () => { if (!startHidden) mainWindow.show(); });
   mainWindow.webContents.on('did-fail-load', (_e, code, _desc, failedUrl) => {
+    // 健檢第二輪修復：這個 fallback 原本沒有限制 isDev，封裝後的正式版
+    // 如果 bundled frontend 載入失敗，會無條件改載入 http://localhost:4200 ——
+    // 這個視窗掛了 preload（暴露 window.electronAPI：openDirectory/
+    // openExternal/notify/loginItem），萬一本機剛好有其他程式（甚至惡意
+    // 程式）占用 4200 port，它的內容就會被載進這個有特權的視窗。只在開發
+    // 模式這樣做才合理（開發時 file:// 載入失敗通常代表建置產物還沒生成，
+    // 退回 ng serve 是預期行為）；正式版失敗就顯示錯誤畫面，不要嘗試連
+    // 任意本機 port。
     if (failedUrl && failedUrl.startsWith('file://')) {
-      mainWindow.loadURL('http://localhost:4200');
+      if (isDev) {
+        mainWindow.loadURL('http://localhost:4200');
+      } else {
+        const errorHtml = `<!doctype html><html><body style="background:#0d0d0d;color:#eee;font-family:sans-serif;padding:40px;">
+          <h2>載入失敗</h2><p>前端資源載入失敗，請重新安裝或重啟應用程式。</p></body></html>`;
+        mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorHtml)}`);
+      }
     }
   });
 
