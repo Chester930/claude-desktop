@@ -2266,18 +2266,18 @@ body {
 }
 .panel-msg-count {
   font-size: 10px;
-  color: #333;
-  .active & { color: #555; }
+  color: $text-dim;
+  .active & { color: $text; }
 }
 .panel-close {
   background: transparent;
   border: none;
-  color: #333;
+  color: $text-dim;
   cursor: pointer;
   font-size: 10px;
   padding: 2px 4px;
   border-radius: 3px;
-  &:hover { color: #e8e8e8; background: #2a2a2a; }
+  &:hover { color: $text; background: #2a2a2a; }
 }
 
 .panel-messages {
@@ -2311,10 +2311,10 @@ body {
   align-items: center;
   justify-content: center;
   text-align: center;
-  color: #444;
+  color: $text-dim;
   font-size: 13px;
   line-height: 1.8;
-  small { font-size: 11px; color: #333; }
+  small { font-size: 11px; color: $text-dim; }
 }
 
 // ── 拖放 overlay ──────────────────────────────────────
@@ -2536,7 +2536,7 @@ body {
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  color: #444;
+  color: $text-dim;
   font-style: italic;
   padding: 16px;
 }
@@ -2658,7 +2658,7 @@ body {
   background: none;
   border: none;
   font-size: 14px;
-  color: #444;
+  color: $text-dim;
   cursor: pointer;
   padding: 0;
   line-height: 1;
@@ -3570,13 +3570,13 @@ body {
 }
 .mcp-section-hint {
   font-size: 9px;
-  color: #444;
+  color: $text-dim;
   margin-left: auto;
   font-weight: 400;
 }
 .mcp-empty {
   font-size: 10px;
-  color: #444;
+  color: $text-dim;
   font-style: italic;
   padding: 8px 4px;
   text-align: center;
@@ -3585,7 +3585,7 @@ body {
 .mcp-footer-hint {
   margin-top: 8px;
   font-size: 10px;
-  color: #444;
+  color: $text-dim;
   padding: 4px;
   code { background: #1a1a1a; padding: 1px 4px; border-radius: 3px; }
 }
@@ -3994,7 +3994,7 @@ body[style*="ns-resize"] .mcp-divider-grip {
   border: none;
   cursor: pointer;
   font-size: 12px;
-  color: #444;
+  color: $text-dim;
   padding: 1px 4px;
   border-radius: 3px;
   transition: color 0.15s, background 0.15s;
@@ -4789,7 +4789,7 @@ body[style*="ns-resize"] .mcp-divider-grip {
 }
 
 .memview-empty {
-  font-size: 11px; color: #444; padding: 4px 0; font-style: italic;
+  font-size: 11px; color: $text-dim; padding: 4px 0; font-style: italic;
 }
 
 .memview-path-row, .memview-proj-row {
