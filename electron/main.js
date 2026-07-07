@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Tray, Menu, nativeImage, dialog, ipcMain, Notification } = require('electron');
+const { app, BrowserWindow, shell, Tray, Menu, nativeImage, dialog, ipcMain, Notification, safeStorage } = require('electron');
 const path = require('path');
 const fs   = require('fs');
 const { spawn, execFileSync } = require('child_process');
@@ -299,6 +299,42 @@ ipcMain.handle('loginItem:set', (_, enabled) => {
   const args = enabled ? (isDocker ? ['--docker', '--hidden'] : ['--hidden']) : [];
   app.setLoginItemSettings({ openAtLogin: enabled, args });
 });
+
+// 健檢第二輪修復：providerApiKey（第三方 OpenAI/OpenRouter/Gemini API key）
+// 原本明碼存在 renderer 的 localStorage（未加密的 LevelDB 檔案，任何本機
+// 程序、備份/同步工具，或未來的 renderer XSS 都能直接讀到）。改用 Electron
+// safeStorage（背後是 Windows DPAPI／macOS Keychain／Linux libsecret 加密），
+// 加密後的內容存成使用者專屬的檔案，renderer 只透過這幾個 IPC 存取，
+// 不再落地到 localStorage。
+const SECURE_STORAGE_FILE = path.join(app.getPath('userData'), 'secure-settings.enc');
+
+function readSecureValue() {
+  if (!safeStorage.isEncryptionAvailable()) return '';
+  try {
+    const encrypted = fs.readFileSync(SECURE_STORAGE_FILE);
+    return safeStorage.decryptString(encrypted);
+  } catch {
+    return '';
+  }
+}
+
+function writeSecureValue(value) {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  try {
+    if (!value) {
+      if (fs.existsSync(SECURE_STORAGE_FILE)) fs.unlinkSync(SECURE_STORAGE_FILE);
+      return true;
+    }
+    fs.writeFileSync(SECURE_STORAGE_FILE, safeStorage.encryptString(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+ipcMain.handle('secureStorage:isAvailable', () => safeStorage.isEncryptionAvailable());
+ipcMain.handle('secureStorage:get', () => readSecureValue());
+ipcMain.handle('secureStorage:set', (_, value) => writeSecureValue(typeof value === 'string' ? value : ''));
 
 // ── 建立主視窗 ────────────────────────────────────────────
 function createWindow() {
