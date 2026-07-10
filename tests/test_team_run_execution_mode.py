@@ -23,7 +23,7 @@ pytestmark = pytest.mark.asyncio
 async def test_inline_payload_sequential_mode_chains_output(monkeypatch):
     captured_prompts = []
 
-    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd):
+    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd, permission_mode="acceptEdits"):
         captured_prompts.append(prompt)
         return f"output-from-{agent_id}"
 
@@ -58,7 +58,7 @@ async def test_inline_payload_without_execution_mode_still_defaults_parallel(mon
     *propagation* of an explicitly-set mode was broken."""
     calls = []
 
-    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd):
+    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd, permission_mode="acceptEdits"):
         calls.append(agent_id)
         return f"output-from-{agent_id}"
 
@@ -88,7 +88,7 @@ async def test_inline_payload_without_execution_mode_still_defaults_parallel(mon
 async def test_handle_team_run_post_stores_inline_execution_mode(client, monkeypatch):
     """POST /api/team/run must persist the inline payload's execution_mode
     into run state, not silently drop it because there's no team_id."""
-    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd):
+    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd, permission_mode="acceptEdits"):
         return f"output-from-{agent_id}"
 
     monkeypatch.setattr(teams_module, "_agent_run_capture", fake_agent_run_capture)

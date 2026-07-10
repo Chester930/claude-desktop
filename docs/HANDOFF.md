@@ -339,18 +339,17 @@ pytest tests/ 162 個測試全過；`tsc --noEmit`／`ng build` 全過；`docker
 
 **追加修復（同一發現的另一半，複查上面的修法時發現還不夠）**：上面的修法只解決了「execution_mode 有值時會被正確套用」，但 `_run_hr_agent()`（`routes/agents.py`）的 prompt/JSON schema 從頭到尾**沒有要求模型輸出 `execution_mode` 欄位**——代表就算修好了套用機制，HR Agent 實際產生的 plan 還是永遠沒有這個欄位，套用端一樣只能 fallback 成預設的 `"parallel"`，等於白修。補上：① prompt 明確要求固定填 `"sequential"`、JSON Schema 範例加上這個欄位；② 解析完 JSON 後再補一層防呆（`_with_sequential_default`），模型偶爾漏填時後端直接補上 `"sequential"`，不 100% 依賴模型照 schema 輸出。新增 `tests/test_hr_dispatch_execution_mode.py`（3 個測試，含模擬模型漏填欄位、模型有填、輸出包 markdown fence 三種情境）。`pytest tests/` 170 個測試全過。
 
-### 🟠 發現 2（未修復，需要產品/安全判斷，見下方待決策）｜`/api/team/run` 完全沒有工具權限核准機制
+### 🟢 發現 2（已修復並補上回歸測試，採用選項 3：開放 acceptEdits）｜`/api/team/run` 完全沒有工具權限核准機制
 
-用真實 `claude -p` CLI 直接重現 `_agent_run_capture()`（`routes/teams.py`）目前的 subprocess 呼叫方式驗證過（非猜測）：`cmd = [claude_bin, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]`，**沒有 `--permission-mode` flag，`stdin=asyncio.subprocess.DEVNULL`（無法回應任何核准提示）**。實測結果：CLI 不會卡住等待，而是**直接把需要核准的工具呼叫自動判定為拒絕**（`permission_denials` 裡記一筆，回傳文字說明「請求被系統阻擋」），process 正常以 `exit 0` 結束。
+用真實 `claude -p` CLI 直接重現 `_agent_run_capture()`（`routes/teams.py`）修復前的 subprocess 呼叫方式驗證過（非猜測）：`cmd = [claude_bin, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]`，**沒有 `--permission-mode` flag，`stdin=asyncio.subprocess.DEVNULL`（無法回應任何核准提示）**。實測結果：CLI 不會卡住等待，而是**直接把需要核准的工具呼叫自動判定為拒絕**（`permission_denials` 裡記一筆，回傳文字說明「請求被系統阻擋」），process 正常以 `exit 0` 結束——「發任務給 Team」進度面板這個最主要的 team 協作入口，實質上做不了任何需要核准的真實操作（寫檔、跑指令等）。
 
-問題是：這代表**「發任務給 Team」進度面板（`POST /api/team/run`，P2-F4/F5，前端 `runTeam()`/`streamTeamRun()`）這個最主要的 team 協作入口，實質上做不了任何需要核准的真實操作**（寫檔、跑指令等）——每個 team member 遇到這類操作都會被 CLI 靜默拒絕，只能回報「無法執行」。
+**選項 2（補齊權限轉發，仿照 `_legacy_exec` 的 stdin y/n 模式）動手前先做了一次實測驗證，結果推翻了原本的假設**：把 `_agent_run_capture` 的 `stdin=DEVNULL` 改成 `stdin=PIPE` 後用真實 CLI 重測，headless `-p` 模式底下即使 stdin 是可寫入的 pipe，**依然不會產生任何可偵測、可回應的互動式權限提示**——CLI 只會印一行「no stdin data received in 3s, proceeding without it」然後照樣自主判斷（對敏感路徑自動拒絕）。這代表 `handle_team_execute` 的 `_legacy_exec` 那套「偵測 raw text prompt 寫 y/n 到 stdin」的假設，對目前這個 CLI 版本（2.1.206）的 headless `-p` 模式並不成立；真正能做到互動核准的只有 pooled SDK 的 `can_use_tool` callback（`_pooled_exec`），代表選項 2 實際上需要把整個 Team Run 執行引擎（parallel/sequential/consensus）從「逐步驟重開 raw subprocess」遷移成「透過 `SessionPool`/`ClaudeSDKClient` 執行」，工程量遠比原估的「中等」大。
 
-對照組：同一個檔案系統裡，`main.py` 的 `/api/team/execute`（`handle_team_execute`，另一條「團隊對話」相關路徑）已經做了完整的權限核准轉發——無論是舊的 stdin y/n 偵測模式（`_legacy_exec`）還是新的 pooled SDK `can_use_tool` callback 模式（`_pooled_exec`），都會把 `permission_request` 事件透過 SSE 推給前端，前端也確實有處理這個事件型別（`app.ts:3619`）。**但 `_handleTeamRunEvent()`（Team Run 進度面板專用的 SSE handler，`app.ts:2178`）完全沒有 `permission_request` 這個 case** —— 就算現在補上後端轉發，前端目前也接不住。
+使用者確認方向後採**選項 3**：直接開放 `--permission-mode acceptEdits`。動手前先用真實 CLI 驗證 `acceptEdits` 底下的實際行為（同一個任務、同一台機器，分別測未設定 permission-mode 與設定 `acceptEdits` 兩種情況）：在非敏感路徑（一般專案目錄）下，`acceptEdits` 讓 `Write` 與 `Bash` 兩種工具呼叫都直接成功、`permission_denials` 為空；Claude Code 自身對 `.claude/` 等敏感路徑的硬性保護則完全不受這個 flag 影響、依然生效（這也解釋了為什麼一開始在 `.claude/jobs/...` 底下測試時 `acceptEdits` 看起來「沒用」——那是另一層跟 permission-mode 無關的路徑保護）。
 
-**這是產品/安全層級的決策，不是我可以單方面決定的修法**，列出三個選項供選擇：
-1. **維持現狀（最安全，維持現況）**：Team Run 只適合「分析、規劃、產出文字報告」這類任務，不適合「直接改代碼」；在 UI 上加提示告知使用者這個限制。零開發成本。
-2. **補齊權限轉發（最一致，工程量中等）**：仿照 `/api/team/execute` 的模式，`_agent_run_capture` 改用 `stdin=PIPE` + 偵測/轉發 `permission_request` 事件，前端 `_handleTeamRunEvent()` 也要補上核准/拒絕 UI（Team Run 進度面板目前沒有這塊）。維持現有安全模型（使用者仍要逐一核准），但要多做一輪前後端功能。
-3. **針對 Team Run 開放 `--permission-mode acceptEdits`（或更寬鬆）**：讓 team member 能自動完成檔案編輯類操作而不逐一詢問，最貼近「team 協作直接把活幹完」的產品直覺，但等於放寬了這條路徑的安全模型（跟 T1/T2/T16-18 這幾輪特別在意的「使用者親自核准敏感操作」原則有出入），需要使用者明確拍板才能做。
+**修法**：`_agent_run_capture()` 新增 `permission_mode` 參數，預設 `"acceptEdits"`，組 CLI 指令時帶上 `--permission-mode <value>`；`handle_team_run_post()` 從請求 body 讀取可選的 `permission_mode`（預設 `acceptEdits`），比照既有 `_is_safe_id` 一類輸入驗證慣例，用白名單（`acceptEdits`/`auto`/`bypassPermissions`/`manual`/`dontAsk`/`plan`，來自 `claude --help` 列出的合法值）擋掉不合法的值，存進 `run["permission_mode"]`；`_execute_team_run_core()` 讀取 `run.get("permission_mode", "acceptEdits")` 並傳給所有 `_agent_run_capture` 呼叫點（consensus 4 處、parallel/sequential 各 1 處）。新增 `tests/test_team_run_permission_mode.py`（4 個測試）：驗證 `_agent_run_capture` 預設會帶 `--permission-mode acceptEdits`、可被明確覆寫、`handle_team_run_post` 正確存進 run state、不合法值會被 400 擋下。
+
+**尚未處理（跟這個修法無直接關係，先記錄）**：`/api/team/execute` 那條路徑已有的 `permission_request`/核准 UI 沒有變動；如果之後想讓使用者能針對 Team Run 個別任務選擇更嚴格的模式（例如敏感專案想維持逐一核准），`permission_mode` 已經是可從請求 body 傳入的參數，前端只要在 Team Run 面板加一個下拉選單即可，這次沒有一併加。
 
 ### 🔴 發現 4（已修復並補上回歸測試）｜`_execute_team_run()` 用 `except Exception: pass` 整個吞掉核心邏輯的例外，run 永久卡在「執行中」+ 記憶體洩漏
 
@@ -445,6 +444,8 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 - **安全性（發現 7）**：LLM 自己的文字輸出可以繞過使用者核准，直接核准任意 pending 權限請求——已移除該機制。
 - **可用性（發現 8，本輪與發現 6 並列最嚴重）**：「💬 團隊對話」——三條 team 協作路徑裡唯一有真正 UI 入口的一條——第一輪對話 100% 觸發 `NameError`，是修發現 7 的回歸測試時意外抓到的，舊的整合測試斷言太弱從未發現過。
 
-剩下唯一未解決的是**發現 2**：`/api/team/run` 的工具權限核准機制。原本評估的「補齊權限轉發」修法（比照 `handle_team_execute` 的 `_legacy_exec` stdin y/n 模式）經**實測驗證後發現行不通**——用真實 `claude` CLI（2.1.206）測試過，即使 `stdin=PIPE`（而非 `DEVNULL`），headless `-p` 模式也**不會**產生可偵測、可回應的互動式權限提示，CLI 只會等待 stdin 3 秒後直接自主判斷（對敏感路徑自動拒絕），`_legacy_exec` 那套「偵測 raw text prompt 寫 y/n 到 stdin」的假設本身可能已經對目前的 CLI 版本失效。真正能做到互動式核准的只有 pooled SDK 的 `can_use_tool` callback（`_pooled_exec` 那條路徑）——代表要修發現 2，需要把整個 Team Run 執行引擎（`_agent_run_capture`／parallel／sequential／consensus）從「每步驟重開一個 raw subprocess」遷移成「透過 `SessionPool`／`ClaudeSDKClient` 執行」，工程量比原本估的「中等」大得多。這個修正後的成本評估會影響發現 2 的選項排序，尚待使用者確認方向。
+- **權限模型（發現 2）**：`/api/team/run` 完全無法執行需要核准的操作。原本評估的「補齊權限轉發」修法（比照 `handle_team_execute` 的 `_legacy_exec` stdin y/n 模式）動手前先實測驗證，發現**行不通**——即使 `stdin=PIPE`，headless `-p` 模式也不會產生可偵測、可回應的互動式權限提示，真正能做互動核准的只有 pooled SDK 的 `can_use_tool` callback，代表要做完整權限轉發需要把整個 Team Run 執行引擎遷移到 SessionPool，工程量遠比原估大。使用者確認方向後採**開放 `--permission-mode acceptEdits`**：已用真實 CLI 驗證 acceptEdits 底下 Write/Bash 都能正常執行、`.claude/` 等敏感路徑的硬性保護不受影響——已修復。
 
-建議在推進「封裝成多環境軟體／支援 Codex 版本」之前，先決定發現 2 的方向——因為不管選哪個選項，都會影響到之後 Codex backend adapter 要不要／怎麼支援同一種 permission-relay 機制；也建議找時間補一輪真實瀏覽器端對端測試，把發現 6 的修復實際驗證過一次。
+本輪 8 個發現全數處理完畢：7 個已修復並補上回歸測試（177 個測試全過，含真實呼叫 `claude` CLI 的整合測試），僅**發現 6**（HR 自動組隊前端進度顯示）因為背景執行環境無 GUI，需要找有畫面的環境手動驗證一次才能算完全確認。
+
+建議下一步：找時間補一輪真實瀏覽器端對端測試（`claude-in-chrome` 或 Playwright），把發現 6 的修復實際點過一次驗證；封裝成多環境軟體／支援 Codex 版本現在可以繼續推進——Team 協作的核心執行引擎與權限模型這輪都已經過實測驗證與修復。
