@@ -191,9 +191,10 @@ export class ClaudeService {
     return this.http.delete<{ ok: boolean }>(`${this.api}/teams/${id}`);
   }
 
-  runTeam(teamId: string, task: string, model?: string, cwd?: string, team?: any): Observable<{ ok: boolean; run_id: string }> {
+  runTeam(teamId: string, task: string, model?: string, cwd?: string, team?: any, agentEngine?: string): Observable<{ ok: boolean; run_id: string }> {
     return this.http.post<{ ok: boolean; run_id: string }>(`${this.api}/team/run`, {
       team_id: teamId, task, model: model ?? '', cwd: cwd ?? '', team,
+      agent_engine: agentEngine ?? '',
     });
   }
 

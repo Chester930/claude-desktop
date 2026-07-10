@@ -222,6 +222,10 @@ def _agent_dict(f: Path) -> dict:
         "mcp":           fm.get("mcp", [])    if isinstance(fm.get("mcp"), list)    else [],
         "output_memory": fm.get("output_memory", []) if isinstance(fm.get("output_memory"), list) else [],
         "tools":         fm.get("tools", ""),
+        # 可插拔 agent engine（見 engines/registry.py）：個別 agent 可以在
+        # frontmatter 宣告要用哪個引擎執行（例如 "codex"），留空代表沒指定，
+        # 由呼叫端的預設值或全域預設決定。
+        "engine":        fm.get("engine", "") if isinstance(fm.get("engine"), str) else "",
     }
 
 

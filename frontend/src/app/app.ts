@@ -2174,7 +2174,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (tabId === this.activeChatId()) this.shouldScroll = true;
     this.tabStreaming(tabId, true);
 
-    this.claude.runTeam(teamId, task, model, cwd, inlineTeam).subscribe({
+    const agentEngine = this.settings.get().agentEngine;
+    this.claude.runTeam(teamId, task, model, cwd, inlineTeam, agentEngine).subscribe({
       next: (r) => {
         const runId = r.run_id;
         this.tabMessages(tabId, msgs => {

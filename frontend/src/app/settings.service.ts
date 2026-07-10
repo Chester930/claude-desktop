@@ -18,11 +18,17 @@ export interface AppSettings {
   projectDir: string;
   apiKeyCmd: string;
   claudeHome: string;   // override ~/.claude (leave blank for default)
-  // #16 Multi-provider
+  // #16 Multi-provider（純聊天，走 /api/chat/provider，沒有工具呼叫、
+  // 沒有 Agent/Team/Memory——跟下面的 agentEngine 是完全不同的兩個機制，
+  // 不要混用）
   provider: 'claude' | 'openai' | 'openrouter' | 'gemini' | 'custom';
   providerApiUrl: string;
   providerApiKey: string;
   providerModel: string;
+  // Team Run 等協作功能實際執行任務用的 CLI 引擎（見 backend/engines/）。
+  // 個別 agent 可以在自己的 frontmatter 用 engine: 覆寫，這裡只是沒指定
+  // 時的預設值。Codex 這邊尚未用真實 CLI 驗證過。
+  agentEngine: 'claude' | 'codex';
   // #19 i18n
   lang: 'zh' | 'en';
   // 開機自動啟動
@@ -54,6 +60,7 @@ const DEFAULTS: AppSettings = {
   providerApiUrl: '',
   providerApiKey: '',
   providerModel: '',
+  agentEngine: 'claude',
   lang: 'zh',
   openAtLogin: false,
 };

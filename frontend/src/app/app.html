@@ -339,6 +339,20 @@
           </div>
         </div>
 
+        <!-- Pluggable agent engine（Team Run 等協作功能實際執行任務用的 CLI） -->
+        <div class="modal-section">
+          <div class="modal-section-header">Agent Engine</div>
+          <div class="modal-form">
+            <label>執行引擎
+              <select [(ngModel)]="settingsForm.agentEngine">
+                <option value="claude">Claude Code CLI（預設）</option>
+                <option value="codex">OpenAI Codex CLI（尚未驗證，實驗性）</option>
+              </select>
+              <small>Team 協作任務實際呼叫哪個 CLI 執行；個別 agent 可在自己的 frontmatter 用 <code>engine:</code> 覆寫，混用不同引擎的成員。</small>
+            </label>
+          </div>
+        </div>
+
         <!-- #18 Telegram Bot gateway -->
         <div class="modal-section">
           <div class="modal-section-header">
