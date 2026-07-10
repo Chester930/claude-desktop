@@ -9,6 +9,8 @@ ClaudeEngine 是既有 _agent_run_capture() 邏輯的忠實搬遷，用跟之前
 的行為完全一致（需要真的 codex CLI 才能驗證），但至少證明解析邏輯跟
 「我們以為 CLI 會輸出什麼」是一致的。
 """
+import json
+
 import pytest
 
 from engines import claude_engine, codex_engine
@@ -205,6 +207,65 @@ async def test_codex_engine_turn_failed_becomes_error(monkeypatch):
 
     assert result.error is not None
     assert "sandbox denied" in result.error
+
+
+async def test_codex_engine_real_invalid_model_scenario(monkeypatch):
+    """2026-07-11：用真實 codex CLI（已登入帳號）實測「不存在的 model 名稱」
+    這個錯誤路徑，鎖定觀察到的真實行為，避免之後回歸：
+    (1) 失敗前會先出現一到多個非致命的 item.completed/error 警告（例如
+        model metadata fallback、skills budget），這些要照樣經 on_text 送出、
+        不能被吞掉；
+    (2) 最終的 turn.failed 事件裡 error.message 欄位本身是「一段 JSON 文字」
+        （OpenAI API 回傳的 400 錯誤被 Codex CLI 原封不動塞進字串），不是
+        一個乾淨的 error 物件——RunResult.error 只需要把整段內容原樣保留
+        供除錯查看，不需要也不應該試圖再往下解析這層巢狀 JSON；
+    (3) thread.started 給的 session_id 即使最後失敗仍要保留（呼叫端可能想
+        用來 resume 或除錯），不能因為失敗就清空。
+    """
+    real_error_message = (
+        '{"type":"error","status":400,"error":{"type":"invalid_request_error",'
+        '"message":"The \'this-model-definitely-does-not-exist-xyz123\' model '
+        'is not supported when using Codex with a ChatGPT account."}}'
+    )
+    lines = [
+        b'{"type":"thread.started","thread_id":"sid-real-invalid-model"}\n',
+        b'{"type":"turn.started"}\n',
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "error", "message": "Model metadata not found, defaulting to fallback."},
+        }).encode("utf-8") + b"\n",
+        json.dumps({
+            "type": "item.completed",
+            "item": {"type": "error", "message": "Exceeded skills context budget of 2%."},
+        }).encode("utf-8") + b"\n",
+        json.dumps({
+            "type": "turn.failed",
+            "error": {"message": real_error_message},
+        }).encode("utf-8") + b"\n",
+    ]
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return _FakeProc(lines)
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    received = []
+
+    async def on_text(chunk):
+        received.append(chunk)
+
+    result = await codex_engine.run_turn(
+        prompt="hello", cwd="/tmp", model="this-model-definitely-does-not-exist-xyz123",
+        permission_mode="workspace-write", resume_session_id=None, api_key="", on_text=on_text,
+    )
+
+    assert len(received) == 2
+    assert "Model metadata not found" in received[0]
+    assert "Exceeded skills context budget" in received[1]
+    assert result.session_id == "sid-real-invalid-model"
+    assert result.error is not None
+    assert "this-model-definitely-does-not-exist-xyz123" in result.error
+    assert "invalid_request_error" in result.error
 
 
 async def test_codex_engine_uses_resume_subcommand(monkeypatch):

@@ -346,9 +346,9 @@
             <label>執行引擎
               <select [(ngModel)]="settingsForm.agentEngine">
                 <option value="claude">Claude Code CLI（預設）</option>
-                <option value="codex">OpenAI Codex CLI（尚未驗證，實驗性）</option>
+                <option value="codex">OpenAI Codex CLI</option>
               </select>
-              <small>Team 協作任務實際呼叫哪個 CLI 執行；個別 agent 可在自己的 frontmatter 用 <code>engine:</code> 覆寫，混用不同引擎的成員。</small>
+              <small>Team 協作任務實際呼叫哪個 CLI 執行；個別 agent 可在自己的 frontmatter 用 <code>engine:</code> 覆寫，混用不同引擎的成員。Codex 需先 <code>codex login</code>；Windows 上 <code>workspace-write</code> sandbox 目前無法執行 shell 指令（Codex CLI 本身的限制）。</small>
             </label>
           </div>
         </div>
