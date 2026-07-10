@@ -373,9 +373,11 @@ except Exception:
 
 **修法**：比照既有 `TimeoutError` 分支的收尾邏輯，`except Exception as e:` 補上 `_log()` 記錄例外內容、設定 `status="error"`、`_finished_at`、`summary` 帶錯誤文字、送出 `"done"` SSE 事件（讓 stream 正常關閉、前端看得到失敗訊息、GC 機制能正常回收）。新增 `tests/test_team_run_error_handling.py`（2 個測試）：monkeypatch `_execute_team_run_core` 主動拋例外，驗證 run 會正確變成 `"error"` 而非卡死、且事後可被 GC 回收。`pytest tests/` 167 個測試全過。
 
-### 🟡 發現 5（未修復，低優先級，UI 目前不可觸達）｜consensus 執行模式在成員數 >2 時會錯亂
+### 🟢 發現 5（已修復並補上回歸測試）｜consensus 執行模式在成員數 >2 時會錯亂
 
-`_execute_team_run_core()` 的 consensus 分支寫死只處理前 2 位成員（`agent_a = steps[0]`, `agent_b = steps[1]`），第 3、4 步驟用 `if len(steps) < 3/4: steps.append(...)` 才新增 —— 但如果 team 本來就有 ≥3 位成員（`handle_team_run_post` 已經照 member 數量建好對應筆數的 `steps`），第 3 位成員原本的 `steps[2]` 會被直接**覆寫**成 `agent_a` 的 revision 結果（`step_start` 事件回報的 agent 名字跟原本存在 `steps[2]["agent"]` 的名字對不上，UI 會顯示錯的成員名稱），第 4 位以後的成員則永遠停在 `"pending"`，即使整個 run 的 `status` 已經變成 `"done"`，看起來會像「卡住了」。目前前端 Team 編輯器（`app.html:2365-2366`）只提供 `parallel`／`sequential` 兩個選項，`consensus` 沒有從 UI 暴露、HR Agent 產生的 plan 也不會用到這個模式，所以目前只能透過直接編輯 team YAML 檔手動觸發，優先級較低，暫不處理，先記錄。
+`_execute_team_run_core()` 的 consensus 分支原本寫死只處理前 2 位成員（`agent_a = steps[0]`, `agent_b = steps[1]`），第 3、4 步驟用 `if len(steps) < 3/4: steps.append(...)` 才新增 —— 但如果 team 本來就有 ≥3 位成員（`handle_team_run_post` 已經照 member 數量建好對應筆數的 `steps`），第 3 位成員原本的 `steps[2]` 會被直接**覆寫**成 `agent_a` 的 revision 結果（`step_start` 事件回報的 agent 名字跟原本存在 `steps[2]["agent"]` 的名字對不上，UI 會顯示錯的成員名稱），第 4 位以後的成員則永遠停在 `"pending"`，即使整個 run 的 `status` 已經變成 `"done"`，看起來會像「卡住了」。雖然目前前端 Team 編輯器只提供 `parallel`／`sequential` 兩個選項、UI 不可觸達，但既然是明確的邏輯 bug，直接修掉。
+
+**修法**：consensus 分支一開始就把 `run["steps"]` 換成 consensus 專用的固定 4 步驟結構（Coder 草稿／Auditor 審查／Coder 修正／Leader 總結），不再挪用其他成員原本的 step slot；移除原本 `if len(steps) < 3/4: steps.append(...)` 的條件式補丁。新增 `tests/test_team_run_consensus_members.py`：模擬 4 位成員的 team 跑 consensus 模式，驗證最終只產生 4 個正確歸屬的 step、且第 3、4 位成員（`ThirdAgent`/`FourthAgent`）從未被實際呼叫。
 
 ### 🔴 發現 6（已修復並驗證編譯，本輪最嚴重的發現）｜HR 自動組隊點下「▶ 開始執行」後，畫面上完全沒有任何進度顯示——功能本身看起來像壞的
 
@@ -398,18 +400,31 @@ except Exception:
 
 另外附帶記錄：`openTeamRun()`/`activateTeam()` 被刪除後，「直接對某個存檔 team 發任務」這個 ROADMAP 提到的入口目前完全沒有 UI 按鈕可以觸發（刪除前也是如此，只是刪除前連死碼都還在）。如果之後想要在 Team 卡片上加一個「▶ 執行任務」按鈕重新開放這條路徑，`_dispatchTeamRun()` 已經是通用的，直接接一個新按鈕呼叫它即可；這屬於要不要加新 UI 入口的產品決定，這次沒有一併加。
 
-### 🔴 發現 7（未修復，安全性問題，需要使用者拍板，非本輪自動修復範圍）｜LLM 自己輸出的文字可以不經使用者同意，直接核准任意 pending 權限請求
+### 🟢 發現 7（已修復並補上回歸測試，採用選項 1）｜LLM 自己輸出的文字可以不經使用者同意，直接核准任意 pending 權限請求
 
-複查第三條 team 協作路徑「💬 團隊對話」（`selectTeamLeader()` → `/api/team/chat` → `handle_team_chat()`）時發現：組長 agent 的回覆文字如果符合 `\[APPROVE:\s*([a-zA-Z0-9_-]+)\]` 這個正規表示式（`main.py:946`），系統會直接把對應的 `pending_permissions[req_id]["decision"] = "approve"`（`main.py:946-954`），**完全不經過使用者點擊確認**——跟 `handle_team_authorize()`（`main.py:1389`，使用者在前端點「✓ 允許」按鈕時走的正規核准端點）做的是一模一樣的事，差別只在於這條路徑的觸發者是 **LLM 自己生成的文字**，不是使用者的滑鼠點擊。
+複查第三條 team 協作路徑「💬 團隊對話」（`selectTeamLeader()` → `/api/team/chat` → `handle_team_chat()`）時發現：組長 agent 的回覆文字如果符合 `\[APPROVE:\s*([a-zA-Z0-9_-]+)\]` 這個正規表示式（`main.py:946`，修復前），系統會直接把對應的 `pending_permissions[req_id]["decision"] = "approve"`，**完全不經過使用者點擊確認**——跟 `handle_team_authorize()`（`main.py:1389`，使用者在前端點「✓ 允許」按鈕時走的正規核准端點）做的是一模一樣的事，差別只在於這條路徑的觸發者是 **LLM 自己生成的文字**，不是使用者的滑鼠點擊。
 
-`pending_permissions` 是模組層級的全域 dict，key 只是一個 8 字元的 hex request_id，**沒有依 `client_id`／`team_id`／session 做任何 ownership 隔離**（`handle_team_authorize()` 本身也是同樣的設計：只檢查 `request_id not in pending_permissions`，不檢查是誰的請求）。這代表：如果使用者同時開著兩個分頁跑不同的 team（例如分頁 A 的某個 member 透過 `/api/team/execute` 正在等待一個危險操作的核准，分頁 B 的團隊組長在討論一個會讀取外部內容的任務——網頁、檔案、使用者貼上的文字），只要分頁 B 組長輸出的文字裡剛好出現（不管是不小心、被使用者刻意誘導、還是被組長讀到的外部內容 prompt injection 出來）`[APPROVE: <分頁A那個 req_id>]` 這個字串，分頁 A 的危險操作就會被靜默核准——使用者從頭到尾沒有點過任何確認按鈕。
+`pending_permissions` 是模組層級的全域 dict，key 只是一個 8 字元的 hex request_id，**沒有依 `client_id`／`team_id`／session 做任何 ownership 隔離**。這代表：如果使用者同時開著兩個分頁跑不同的 team（例如分頁 A 的某個 member 透過 `/api/team/execute` 正在等待一個危險操作的核准，分頁 B 的團隊組長在討論一個會讀取外部內容的任務——網頁、檔案、使用者貼上的文字），只要分頁 B 組長輸出的文字裡剛好出現（不管是不小心、被使用者刻意誘導、還是被組長讀到的外部內容 prompt injection 出來）`[APPROVE: <分頁A那個 req_id>]` 這個字串，分頁 A 的危險操作就會被靜默核准——使用者從頭到尾沒有點過任何確認按鈕。這跟 T1（MCP 敏感操作授權閘門形同虛設）在精神上是同一類問題。
 
-嚴重度介於「單一本機使用者信任邊界內」（跟這幾輪健檢已經接受的「同機都算受信任」的整體立場一致，不算是外部攻擊者跨機器的提權）跟「繞過系統刻意設計的人工核准關卡」之間——`can_use_tool`/`permission_request` 這整套機制存在的目的就是要讓危險操作經過使用者親眼確認，而這條路徑讓 LLM 自己的輸出（可能被 prompt injection 操縱）就能繞過這道關卡，這跟 T1（MCP 敏感操作授權閘門形同虛設）在精神上是同一類問題，只是攻擊面小很多（需要同時有其他 pending 請求、需要 req_id 被猜到或洩漏）。
+複查所有 persona prompt 樣板（leader/member 兩種角色的系統提示）後確認：**模型從來沒有被告知 `[APPROVE: xxx]` 這個語法**（只有 `[CREATE_PROJECT: ...]` 有在 prompt 裡教過模型）——代表這是一段模型正常情況下絕不會主動輸出的死語法，唯一會觸發的情境就是被 prompt injection 誘導，沒有任何正常使用情境會用到它。
 
-**這是安全性決策，不在本輪自動修復範圍**，列出選項供拍板：
-1. **直接移除 `[APPROVE: xxx]` 這個自動解析機制**：核准一律只能透過使用者親自點擊 `handle_team_authorize()`。最安全，但拿掉了「組長討論完直接放行」這個看起來像是刻意設計的功能。
-2. **限縮範圍**：`[APPROVE: xxx]` 只能核准「同一個 `client_id`／team 底下自己成員的請求」，不能核准全域任意 req_id。工程量小，保留原意但堵住跨 session 的洞。
-3. **維持現狀**：接受這是本機信任模型下可接受的風險（跟 T2 選擇「應用層加固、不動 docker.sock 掛載」是類似的取捨邏輯）。
+**修法（選項 1：直接移除）**：直接刪掉 `handle_team_chat()` 裡解析 `[APPROVE: xxx]` 並設定 `decision = "approve"` 的整段程式碼。核准一律只能透過使用者親自點擊「✓ 允許」呼叫 `handle_team_authorize()`。新增 `tests/test_team_chat_no_llm_auto_approve.py`：模擬組長輸出剛好包含 `[APPROVE: fake-req-1]` 字串，驗證對應的 pending_permissions 紀錄不會被靜默核准（`decision` 仍是 `None`）。
+
+**修復過程中意外抓到的獨立重大 bug（發現 8）**：見下方。
+
+### 🔴 發現 8（已修復並補上回歸測試，本輪與發現 6 並列最嚴重）｜「💬 團隊對話」第一輪對話 100% 觸發 NameError，整條功能等於是壞的
+
+寫發現 7 的回歸測試時（用 mock 過的 subprocess 呼叫 `/api/team/chat`），斷言失敗，回應內容是：
+
+```
+data: {"type": "error", "text": "name 'all_members_list' is not defined"}
+```
+
+複查 `handle_team_chat()` 的 `_build_full_prompt()`（`main.py:716`）：呼叫 `build_team_memory_context(team_id, all_members_list, agent_id, cwd, ...)`，但 `all_members_list` **在整個 `handle_team_chat()` 裡從未被定義過**——唯一存在的是 `member_agent_ids`（`main.py:693`，`[m["agent"] for m in members]`），顯然是一次變數改名重構時漏改了一處。`_build_full_prompt()` 會在**每一次「第一輪對話」或「還沒有 persisted session」時**被呼叫——也就是說，「💬 團隊對話」這個功能幾乎每一次真實使用都會先撞上 `NameError`，跟 T19（`wrap_cmd` 從未 import，team 執行引擎 100% 壞掉）是同一類「看起來已經上線、實際上一叫就炸」的問題，而且這條路徑是三條 team 協作路徑裡唯一有真正 UI 按鈕（`selectTeamLeader()`）可以觸發的。
+
+**先前的整合測試為什麼沒抓到**：`tests/test_backend.py::test_team_chat_endpoint` 對 `/api/team/chat` 發送真實請求，但只斷言 `resp.status == 200` 和 `"data:" in body`。`handle_team_chat()` 把所有例外都用 `except Exception as e: ... {"type": "error", ...}` 包成一個「正常的」SSE `data:` 事件回傳——HTTP 層看起來永遠是 200、body 永遠含有 `"data:"`，就算內部整個 `NameError` 炸掉，這個測試也會判定通過。是本輪寫發現 7 的回歸測試時用了更嚴格的斷言（明確排除 `"type": "error"`），才意外揪出這個已經存在的重大 bug。
+
+**修法**：`all_members_list` 改成 `member_agent_ids`（一行修正）。新增 `tests/test_team_chat_first_turn_nameerror.py`：mock subprocess 模擬第一輪對話，明確斷言回應不含任何錯誤事件、且組長的真實回覆有正常送達。同時補強 `tests/test_backend.py::test_team_chat_endpoint`（既有測試，走真實 `claude` CLI 呼叫）的斷言，排除 `"type": "error"`／`NameError`，關掉「測試綠燈但功能其實是壞的」這個漏洞——已用真實 CLI 呼叫重跑過一次驗證通過（59 秒，含真實 API 呼叫）。
 
 ### 已排除的假設（複查後確認不是問題）
 
@@ -421,6 +436,15 @@ except Exception:
 
 ### 本輪結論
 
-Team 協作系統的**資料模型與 CRUD**（P1/P2 後端）沒發現新問題；**執行引擎**這次抓到兩個已修復的邏輯 bug（HR 自動組隊 `execution_mode` 被忽略、例外吞噬導致 run 永久卡死+洩漏記憶體）；**前端**抓到一個影響範圍最大的問題——HR 自動組隊「開始執行」之後畫面上完全沒有任何進度顯示，功能從使用者角度看起來像壞的（發現 6），已修復並通過編譯，但強烈建議合併前找有畫面的環境實際點過一次再上線。另外抓到一個「最主要的 team 協作入口做不了真實工具操作」的架構性限制（發現 2），這個需要使用者對安全模型拍板才能往下推進。
+本輪一共發現 8 個問題，7 個已修復（發現 1、4、5、6、7、8 為邏輯/可用性/安全 bug，已修復並補上回歸測試；發現 6 額外需要真人在有畫面環境驗證一次），只有**發現 2**（`/api/team/run` 完全沒有工具權限核准機制）仍待使用者對安全模型拍板才能繼續：
+
+- **execution_mode 相關（發現 1）**：HR 自動組隊從完成以來實際上從未依設計循序執行過，且 HR prompt 從未輸出這個欄位——兩層都修了。
+- **穩健性（發現 4）**：team run 核心邏輯任何未預期例外都會讓 run 永久卡死並洩漏記憶體——已修復。
+- **正確性（發現 5）**：consensus 模式成員數 >2 時 UI 會顯示錯誤成員、部分成員永遠卡在 pending——已修復。
+- **前端可用性（發現 6，本輪影響面最大）**：HR 自動組隊「開始執行」後畫面完全沒有進度顯示，功能看起來像壞的——已修復，**強烈建議合併前找有畫面的環境實際點過一次**（唯一無法在背景環境自動驗證的修復）。
+- **安全性（發現 7）**：LLM 自己的文字輸出可以繞過使用者核准，直接核准任意 pending 權限請求——已移除該機制。
+- **可用性（發現 8，本輪與發現 6 並列最嚴重）**：「💬 團隊對話」——三條 team 協作路徑裡唯一有真正 UI 入口的一條——第一輪對話 100% 觸發 `NameError`，是修發現 7 的回歸測試時意外抓到的，舊的整合測試斷言太弱從未發現過。
+
+剩下唯一未解決的是**發現 2**：`/api/team/run` 的工具權限核准機制。原本評估的「補齊權限轉發」修法（比照 `handle_team_execute` 的 `_legacy_exec` stdin y/n 模式）經**實測驗證後發現行不通**——用真實 `claude` CLI（2.1.206）測試過，即使 `stdin=PIPE`（而非 `DEVNULL`），headless `-p` 模式也**不會**產生可偵測、可回應的互動式權限提示，CLI 只會等待 stdin 3 秒後直接自主判斷（對敏感路徑自動拒絕），`_legacy_exec` 那套「偵測 raw text prompt 寫 y/n 到 stdin」的假設本身可能已經對目前的 CLI 版本失效。真正能做到互動式核准的只有 pooled SDK 的 `can_use_tool` callback（`_pooled_exec` 那條路徑）——代表要修發現 2，需要把整個 Team Run 執行引擎（`_agent_run_capture`／parallel／sequential／consensus）從「每步驟重開一個 raw subprocess」遷移成「透過 `SessionPool`／`ClaudeSDKClient` 執行」，工程量比原本估的「中等」大得多。這個修正後的成本評估會影響發現 2 的選項排序，尚待使用者確認方向。
 
 建議在推進「封裝成多環境軟體／支援 Codex 版本」之前，先決定發現 2 的方向——因為不管選哪個選項，都會影響到之後 Codex backend adapter 要不要／怎麼支援同一種 permission-relay 機制；也建議找時間補一輪真實瀏覽器端對端測試，把發現 6 的修復實際驗證過一次。

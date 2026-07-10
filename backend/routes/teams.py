@@ -381,7 +381,25 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
     if mode == "consensus" and len(steps) >= 2:
         agent_a = steps[0]["agent"]
         agent_b = steps[1]["agent"]
-        
+        leader  = run.get("leader") or agent_a
+
+        # 健檢修復：consensus 是固定 4 步驟流程（Coder 草稿 → Auditor 審查 →
+        # Coder 修正 → Leader 總結），只會用到 agent_a/agent_b/leader 三個
+        # 角色，跟「有幾位成員就有幾個 step」的 parallel/sequential 假設不
+        # 相容。team 成員數 ≥3 時，原本的寫法會直接覆寫第 3 位成員原本的
+        # steps[2]（step_start 事件回報的 agent 名字跟 steps[2]["agent"] 對
+        # 不上，UI 顯示錯的成員名稱），第 4 位以後的成員則永遠停在
+        # "pending"，即使整個 run 已經 "done"，看起來像卡住了。改成一開始
+        # 就把 run["steps"] 換成 consensus 專用的固定 4 步驟結構，不再重用
+        # 其他成員原本的 step slot。
+        steps = [
+            {"agent": agent_a, "role": "Coder (Initial Draft)",           "status": "pending", "output": ""},
+            {"agent": agent_b, "role": "Auditor (Review)",                "status": "pending", "output": ""},
+            {"agent": agent_a, "role": "Coder (Revision)",                "status": "pending", "output": ""},
+            {"agent": leader,  "role": "Team Leader (Consensus Summary)", "status": "pending", "output": ""},
+        ]
+        run["steps"] = steps
+
         # 1. Initial Draft (Agent A)
         _tr_emit(run_id, {"type": "step_start", "step": 0, "agent": agent_a, "role": "Coder (Initial Draft)"})
         mem_a = await _get_agent_memory_prompt(team_id, all_member_ids, agent_a, cwd, build_team_mem)
@@ -424,9 +442,6 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             return
 
         # 3. Revision (Agent A)
-        if len(steps) < 3:
-            steps.append({"agent": agent_a, "role": "Coder (Revision)", "status": "pending", "output": ""})
-        
         _tr_emit(run_id, {"type": "step_start", "step": 2, "agent": agent_a, "role": "Coder (Revision)"})
         prompt_3_parts = []
         if mem_a:
@@ -449,10 +464,6 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             return
 
         # 4. Consensus Summary (Leader)
-        leader = run.get("leader") or agent_a
-        if len(steps) < 4:
-            steps.append({"agent": leader, "role": "Team Leader (Consensus Summary)", "status": "pending", "output": ""})
-            
         _tr_emit(run_id, {"type": "step_start", "step": 3, "agent": leader, "role": "Team Leader (Consensus Summary)"})
         mem_leader = await _get_agent_memory_prompt(team_id, all_member_ids, leader, cwd, build_team_mem)
         prompt_4_parts = []
