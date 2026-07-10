@@ -329,7 +329,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
     global_bus.publish("team:run_start", {"run_id": run_id, "task": task})
     
     old_snap = _take_workspace_snapshot(cwd)
-    TEAMS_DIR, AGENTS_DIR = _dirs()
+    _, AGENTS_DIR = _dirs()
     run = _team_runs[run_id]
     steps = run["steps"]
     
@@ -349,16 +349,14 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
     except Exception:
         pass
 
-    team_info = {}
-    if team_id:
-        try:
-            f_team = TEAMS_DIR / f"{team_id}.yaml"
-            if f_team.exists():
-                team_info = _team_dict(f_team)
-        except Exception:
-            pass
-
-    mode = team_info.get("execution_mode", "parallel") if team_info else "parallel"
+    # 健檢修復：execution_mode/leader 改用 handle_team_run_post 當下就存進
+    # run state 的值（見該函式），不再靠 team_id 回頭查 TEAMS_DIR 的 yaml 檔。
+    # 舊寫法對 inline team payload（HR Agent 自動組隊 submitHRTeamRun() 送出
+    # 的 plan 沒有 "id" 欄位）永遠查不到 team_info，導致 execution_mode 靜默
+    # fallback 成 "parallel"——即使 HR Agent 的 prompt 明確要求「循序執行、
+    # 前一位輸出傳給下一位」，實際卻用 asyncio.gather 平行跑，member 之間的
+    # input_memory/output_memory 讀寫會有 race（讀到的時候上一位可能還沒寫完）。
+    mode = run.get("execution_mode", "parallel")
 
     if mode == "consensus" and len(steps) >= 2:
         agent_a = steps[0]["agent"]
@@ -431,7 +429,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             return
 
         # 4. Consensus Summary (Leader)
-        leader = team_info.get("leader") or agent_a
+        leader = run.get("leader") or agent_a
         if len(steps) < 4:
             steps.append({"agent": leader, "role": "Team Leader (Consensus Summary)", "status": "pending", "output": ""})
             
@@ -768,6 +766,10 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
         "task":    task,
         "cwd":     cwd,
         "status":  "running",
+        # 健檢修復：於 dispatch 當下就把 execution_mode/leader 存進 run state，
+        # 見 _execute_team_run_core 內的說明。
+        "execution_mode": team.get("execution_mode", "parallel"),
+        "leader":         team.get("leader", ""),
         "steps": [
             {
                 "agent":         m["agent"],

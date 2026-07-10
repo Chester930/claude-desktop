@@ -316,3 +316,48 @@ curl/腳本），docker-compose.yml 的 `prod` profile 又把 ngrok 對外網路
 `routes/run_artifacts.py` 的路徑穿越修復重新驗證仍然有效；`message_bus.py`／`watcher.py` 沒有超出第一輪已修復範圍的問題；`electron/preload.js` 暴露的介面精簡安全；`database.py` 的 `_analyze_mcp_entry` 邏輯繁瑣但功能正確。
 
 pytest tests/ 162 個測試全過；`tsc --noEmit`／`ng build` 全過；`docker build`/`docker run`/`docker compose config` 皆已實際驗證通過（非僅語法檢查）。
+
+---
+
+## 十一、2026-07-10 team 協作優化健檢
+
+> **背景**：前兩輪健檢以安全性為主軸。這一輪針對「team 協作」本身的**功能正確性**做專項複查——起因是 T19 顯示 team 執行引擎直到最近才發現 `wrap_cmd` 從未 import、100% 壞掉，代表兩輪安全健檢都沒有真正驗證過 team 協作的行為是否正確。用真人的 `claude` CLI（已登入、有實際額度）做過一次真實 subprocess 行為驗證（非僅讀原始碼猜測），其餘用 pytest 直接呼叫核心函式驗證（不重跑真的 subprocess，避免每個案例都燒 API 額度）。
+
+### 🔴 發現 1（已修復並補上回歸測試）｜HR Agent 自動組隊 100% 忽略 execution_mode，永遠平行跑
+
+`_execute_team_run_core()`（`routes/teams.py`）原本靠 `run["team_id"]` 回頭去 `TEAMS_DIR` 讀對應 yaml 檔案取得 `execution_mode`／`leader`。但 `POST /api/team/run` 的 inline team payload（**HR Agent 自動組隊 `submitHRTeamRun()` 是唯一使用者**，`_run_hr_agent()` 產出的 plan JSON 沒有 `"id"` 欄位）永遠沒有對應的 `team_id`，導致 `if team_id:` 判斷直接跳過，`team_info` 維持空字典，`mode` 靜默 fallback 成 `"parallel"`。
+
+矛盾點：`_run_hr_agent()` 的 prompt（`routes/agents.py`）明確要求「挑選 Agent 組成一個**循序執行**的團隊」、「前一個 Agent 的輸出將作為下一個 Agent 的輸入」——但實際執行時，**HR 自動組隊產生的每一個 team run，不分內容，一律用 `asyncio.gather` 平行跑**：
+1. 完全沒有「前一位輸出傳給下一位」這件事（parallel 分支沒有 `prev_output` 串接邏輯，只有 sequential 分支才有）。
+2. HR plan 裡設計好的 `input_memory`/`output_memory` 跨步驟串接會有 race condition——下游 member 有可能在上游 member 把 `output_memory` 寫進 `.md` 檔之前就已經開始讀了（`asyncio.gather` 讓所有 step 同時起跑）。
+
+換句話說：ROADMAP Phase 4 的旗艦功能「HR Agent 自動組隊」，從 P4 完成以來實際上從未依照設計跑過。
+
+**修法**：`execution_mode`／`leader` 改成在 `handle_team_run_post` 當下（此時 `team` dict 已經正確解析好，不管是 inline payload 還是存檔 team，都能拿到請求裡實際的值）就直接存進 `run` state；`_execute_team_run_core` 改讀 `run["execution_mode"]`／`run["leader"]`，不再靠 `team_id` 回頭查檔（也移除了執行時多一次不必要的磁碟 I/O）。已存檔 team（有 `id`）的既有行為不變，因為 `_team_dict()` 回傳的 dict 本來就含 `execution_mode`，`handle_team_run_post` 一樣拿得到。
+
+新增 `tests/test_team_run_execution_mode.py`（3 個測試）：直接呼叫 `_execute_team_run_core()` 用 monkeypatch 過的 `_agent_run_capture` 驗證 inline payload 的 `execution_mode: "sequential"` 真的會讓 step 2 的 prompt 收到 step 1 的輸出；順手更新 `tests/test_upgrade.py::TestAdversarialDebate`（原本手動建構 run state 時沒帶 `execution_mode`/`leader`，靠舊的 team_id 回頭查檔行為才能通過，改成比照 `handle_team_run_post` 實際會產生的資料直接帶上）。`pytest tests/` 165 個測試全過。
+
+### 🟠 發現 2（未修復，需要產品/安全判斷，見下方待決策）｜`/api/team/run` 完全沒有工具權限核准機制
+
+用真實 `claude -p` CLI 直接重現 `_agent_run_capture()`（`routes/teams.py`）目前的 subprocess 呼叫方式驗證過（非猜測）：`cmd = [claude_bin, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]`，**沒有 `--permission-mode` flag，`stdin=asyncio.subprocess.DEVNULL`（無法回應任何核准提示）**。實測結果：CLI 不會卡住等待，而是**直接把需要核准的工具呼叫自動判定為拒絕**（`permission_denials` 裡記一筆，回傳文字說明「請求被系統阻擋」），process 正常以 `exit 0` 結束。
+
+問題是：這代表**「發任務給 Team」進度面板（`POST /api/team/run`，P2-F4/F5，前端 `runTeam()`/`streamTeamRun()`）這個最主要的 team 協作入口，實質上做不了任何需要核准的真實操作**（寫檔、跑指令等）——每個 team member 遇到這類操作都會被 CLI 靜默拒絕，只能回報「無法執行」。
+
+對照組：同一個檔案系統裡，`main.py` 的 `/api/team/execute`（`handle_team_execute`，另一條「團隊對話」相關路徑）已經做了完整的權限核准轉發——無論是舊的 stdin y/n 偵測模式（`_legacy_exec`）還是新的 pooled SDK `can_use_tool` callback 模式（`_pooled_exec`），都會把 `permission_request` 事件透過 SSE 推給前端，前端也確實有處理這個事件型別（`app.ts:3619`）。**但 `_handleTeamRunEvent()`（Team Run 進度面板專用的 SSE handler，`app.ts:2178`）完全沒有 `permission_request` 這個 case** —— 就算現在補上後端轉發，前端目前也接不住。
+
+**這是產品/安全層級的決策，不是我可以單方面決定的修法**，列出三個選項供選擇：
+1. **維持現狀（最安全，維持現況）**：Team Run 只適合「分析、規劃、產出文字報告」這類任務，不適合「直接改代碼」；在 UI 上加提示告知使用者這個限制。零開發成本。
+2. **補齊權限轉發（最一致，工程量中等）**：仿照 `/api/team/execute` 的模式，`_agent_run_capture` 改用 `stdin=PIPE` + 偵測/轉發 `permission_request` 事件，前端 `_handleTeamRunEvent()` 也要補上核准/拒絕 UI（Team Run 進度面板目前沒有這塊）。維持現有安全模型（使用者仍要逐一核准），但要多做一輪前後端功能。
+3. **針對 Team Run 開放 `--permission-mode acceptEdits`（或更寬鬆）**：讓 team member 能自動完成檔案編輯類操作而不逐一詢問，最貼近「team 協作直接把活幹完」的產品直覺，但等於放寬了這條路徑的安全模型（跟 T1/T2/T16-18 這幾輪特別在意的「使用者親自核准敏感操作」原則有出入），需要使用者明確拍板才能做。
+
+### 🟡 發現 3（未修復，低優先級，UI 目前不可觸達）｜consensus 執行模式在成員數 >2 時會錯亂
+
+`_execute_team_run_core()` 的 consensus 分支寫死只處理前 2 位成員（`agent_a = steps[0]`, `agent_b = steps[1]`），第 3、4 步驟用 `if len(steps) < 3/4: steps.append(...)` 才新增 —— 但如果 team 本來就有 ≥3 位成員（`handle_team_run_post` 已經照 member 數量建好對應筆數的 `steps`），第 3 位成員原本的 `steps[2]` 會被直接**覆寫**成 `agent_a` 的 revision 結果（`step_start` 事件回報的 agent 名字跟原本存在 `steps[2]["agent"]` 的名字對不上，UI 會顯示錯的成員名�ds），第 4 位以後的成員則永遠停在 `"pending"`，即使整個 run 的 `status` 已經變成 `"done"`，看起來會像「卡住了」。目前前端 Team 編輯器（`app.html:2365-2366`）只提供 `parallel`／`sequential` 兩個選項，`consensus` 沒有從 UI 暴露、HR Agent 產生的 plan 也不會用到這個模式，所以目前只能透過直接編輯 team YAML 檔手動觸發，優先級較低，暫不處理，先記錄。
+
+### 前端複查範圍與限制
+
+`tsc --noEmit` / `ng build` 全過。程式碼層面複查了 Team Run／Team Chat／HR Agent 三條前端路徑的事件處理完整性（發現 2 提到的 `permission_request` 缺口）；**受限於這是無 GUI 的背景執行環境（無法起 Electron 視窗），沒有做真實瀏覽器互動的端對端測試**，這部分若要做，建議在有畫面的環境用 `claude-in-chrome` 或 Playwright 補一輪。
+
+### 本輪結論
+
+Team 協作系統的**資料模型與 CRUD**（P1/P2 後端）沒發現新問題；**執行引擎**這次抓到一個確定會影響 ROADMAP 旗艦功能（HR 自動組隊）的邏輯 bug，已修復並補測試；另外抓到一個「最主要的 team 協作入口做不了真實工具操作」的架構性限制，這個需要使用者對安全模型拍板才能往下推進。建議在推進「封裝成多環境軟體／支援 Codex 版本」之前，先決定發現 2 的方向——因為不管選哪個選項，都會影響到之後 Codex backend adapter 要不要／怎麼支援同一種 permission-relay 機制。
