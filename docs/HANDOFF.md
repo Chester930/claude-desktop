@@ -335,7 +335,9 @@ pytest tests/ 162 個測試全過；`tsc --noEmit`／`ng build` 全過；`docker
 
 **修法**：`execution_mode`／`leader` 改成在 `handle_team_run_post` 當下（此時 `team` dict 已經正確解析好，不管是 inline payload 還是存檔 team，都能拿到請求裡實際的值）就直接存進 `run` state；`_execute_team_run_core` 改讀 `run["execution_mode"]`／`run["leader"]`，不再靠 `team_id` 回頭查檔（也移除了執行時多一次不必要的磁碟 I/O）。已存檔 team（有 `id`）的既有行為不變，因為 `_team_dict()` 回傳的 dict 本來就含 `execution_mode`，`handle_team_run_post` 一樣拿得到。
 
-新增 `tests/test_team_run_execution_mode.py`（3 個測試）：直接呼叫 `_execute_team_run_core()` 用 monkeypatch 過的 `_agent_run_capture` 驗證 inline payload 的 `execution_mode: "sequential"` 真的會讓 step 2 的 prompt 收到 step 1 的輸出；順手更新 `tests/test_upgrade.py::TestAdversarialDebate`（原本手動建構 run state 時沒帶 `execution_mode`/`leader`，靠舊的 team_id 回頭查檔行為才能通過，改成比照 `handle_team_run_post` 實際會產生的資料直接帶上）。`pytest tests/` 165 個測試全過。
+新增 `tests/test_team_run_execution_mode.py`（3 個測試）：直接呼叫 `_execute_team_run_core()` 用 monkeypatch 過的 `_agent_run_capture` 驗證 inline payload 的 `execution_mode: "sequential"` 真的會讓 step 2 的 prompt 收到 step 1 的輸出；順手更新 `tests/test_upgrade.py::TestAdversarialDebate`（原本手動建構 run state 時沒帶 `execution_mode`/`leader`，靠舊的 team_id 回頭查檔行為才能通過，改成比照 `handle_team_run_post` 實際會產生的資料直接帶上）。
+
+**追加修復（同一發現的另一半，複查上面的修法時發現還不夠）**：上面的修法只解決了「execution_mode 有值時會被正確套用」，但 `_run_hr_agent()`（`routes/agents.py`）的 prompt/JSON schema 從頭到尾**沒有要求模型輸出 `execution_mode` 欄位**——代表就算修好了套用機制，HR Agent 實際產生的 plan 還是永遠沒有這個欄位，套用端一樣只能 fallback 成預設的 `"parallel"`，等於白修。補上：① prompt 明確要求固定填 `"sequential"`、JSON Schema 範例加上這個欄位；② 解析完 JSON 後再補一層防呆（`_with_sequential_default`），模型偶爾漏填時後端直接補上 `"sequential"`，不 100% 依賴模型照 schema 輸出。新增 `tests/test_hr_dispatch_execution_mode.py`（3 個測試，含模擬模型漏填欄位、模型有填、輸出包 markdown fence 三種情境）。`pytest tests/` 170 個測試全過。
 
 ### 🟠 發現 2（未修復，需要產品/安全判斷，見下方待決策）｜`/api/team/run` 完全沒有工具權限核准機制
 
