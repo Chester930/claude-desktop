@@ -521,13 +521,19 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 
 `後端 /api/status 健康檢查`、`後端 /api/profiles 回傳清單`、`設定頁包含 Provider 選單` 這幾個測試在跑「全部一起」時偶爾會隨機挑一兩個 timeout，但單獨或小批次重跑時穩定通過，且每次失敗的是不同測試——判斷是 Playwright 多個 worker 同時打真實的、有大量真實使用資料（`active_sessions: 39`）的 live 後端造成的資源競爭，不是程式碼問題，不需要修。
 
-### 新發現、確認為真實 bug（跟這次 Codex 工作無關，未修復）：`team-run-progress.spec.ts` 的 HR 自動組隊流程壞了
+### 更正（2026-07-11 續）：上面那個「HR 自動組隊流程壞了」的結論是誤判，根本原因是環境太舊，不是程式碼 bug
 
-用獨立診斷腳本（帶 console/network log）重現 `frontend/e2e/team-run-progress.spec.ts` 的完整流程後確認：`dispatchHR()` → 開啟計畫 modal → 點「▶ 開始執行」→ `submitHRTeamRun()` 這條路徑，網路層完全正確（`POST /api/hr/dispatch` → `POST /api/team/run` → `GET .../stream` → `GET .../artifacts` 全部依序正確送出且被正確攔截/回應），但畫面上**完全沒有任何訊息渲染出來**（`.msg-assistant-group` count 是 0，聊天區仍停在空狀態歡迎畫面），而且照程式碼邏輯應該被清空的輸入框（`submitHRTeamRun()` 裡的 `this.inputText = ''`）在點擊後仍然保留原本打的文字——這兩個現象合在一起，代表 `submitHRTeamRun()`／`_dispatchTeamRun()` 這條路徑目前的實際執行狀態跟原始碼讀起來的邏輯對不上，需要更深入的除錯（可能是 `activeChatId()`／`tabMessages()` 的 tab 狀態管理，或這兩個函式之間發生了非預期的互動）。
+用同一支診斷腳本（帶 console/network log）指向 `localhost:4200`（Docker 容器）重現時，確實觀察到網路層正常、但畫面完全沒有訊息渲染、輸入框也沒清空。原本以為是真實 regression，但深入追查後發現：
 
-**已排除是這次 Codex 工作造成的**：用 `git log -p -- frontend/src/app/app.ts` 確認過 `_dispatchTeamRun()` 這次 session 唯一的改動只有新增 `const agentEngine = this.settings.get().agentEngine;` 這一行以及把它多傳一個參數給 `runTeam()`，是乾淨的兩行新增，沒有動到訊息渲染／tab 狀態管理的任何邏輯。這個 bug 在這次改動之前就已經存在（`docs/HANDOFF.md` 十一節「發現 6」記錄的是修復當下用 Playwright 驗證通過，代表這個 bug 是在那之後、這次 Codex 工作之前的某個時間點被引入的，確切是哪次改動需要用 `git bisect` 才能定位）。
+1. **Docker 前端容器（`claude-desktop-frontend-dev`）掛載的是主要 checkout（`D:\Users\666\Desktop\claude-desktop\frontend`），不是這個 worktree**（`docker inspect` 的 `Mounts` 證實）。也就是說整段除錯期間，`localhost:4200` 服務的其實是完全不同的一份原始碼。
+2. 主要 checkout 的本地 `master` 分支落後 `origin/master` **9 個 commit**，剛好完全缺少 PR #5 的全部 8 項修復——包括 `5f23489`，這個 commit 正是十一節「發現 6」用來修「HR 自動組隊沒有進度顯示」問題的那次修復本身！換句話說，`localhost:4200` 這段期間跑的是**發現 6 修復之前**的舊版程式碼，`submitHRTeamRun()`/`_dispatchTeamRun()` 那時候還是壞的（甚至 `activateTeam()`/`openTeamRun()`/`teamRunOpen` 那些已經在最新版被清掉的死碼都還在）。
+3. 額外發現：Docker 容器的檔案監看器（Watchpack）啟動時會噴 `ENOMEM: not enough memory, scandir '/app/src'`，重啟容器後這個錯誤依然會重現——**代表這個容器的 hot-reload 完全失效**，任何原始碼修改都不會自動反映到執行中的頁面，唯一能看到最新效果的方法是手動 `docker restart claude-desktop-frontend-dev` 強迫它整個重新編譯。
 
-**下一步**：這是獨立於 Codex/pluggable engine 工作之外的一個真實前端 bug，需要單獨開一輪除錯（建議先用 `git bisect` 配合這支診斷腳本的邏輯縮小範圍，腳本邏輯見對話紀錄，之後可以另存成 `backend/scripts` 或 `frontend/e2e` 底下的診斷工具）。
+改用這個 worktree 自己啟動的隔離 `ng serve --port 4201`（真正跑最新程式碼，不經過 Docker）重跑同一支診斷腳本後，**HR 自動組隊流程完全正常**：輸入框正確清空、`.msg-assistant-group` 正確渲染出 1 則訊息、team run 進度與「執行完成」摘要都正確顯示。證實現在的程式碼（`origin/master` 加上這個分支的乾淨改動）本身完全沒問題，十一節發現 6 的修復也依然有效。
+
+**下一步（環境維護，不是程式碼修復）**：
+- 主要 checkout（`D:\Users\666\Desktop\claude-desktop`）需要 `git pull` 到最新 `origin/master`，才會真的拿到 PR #5 的修復，Docker 服務的 UI 才會是正確的版本。
+- Docker 前端容器的 Watchpack ENOMEM 問題建議另外調查（可能是容器記憶體上限設太低，或是 `/app/src` 底下有異常大量的檔案/inotify watch 超過限制），目前的暫時解法是每次改完前端原始碼要 `docker restart claude-desktop-frontend-dev` 才看得到效果。
 
 ### 待使用者決定，未動手（可能是刻意簡化、也可能是意外遺失的功能）
 
