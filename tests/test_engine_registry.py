@@ -463,6 +463,107 @@ async def test_codex_engine_passes_through_danger_full_access(monkeypatch):
     assert cmd[cmd.index("--sandbox") + 1] == "danger-full-access"
 
 
+async def test_codex_engine_image_attachments_use_dash_i_flag(monkeypatch, tmp_path):
+    """2026-07-11：一開始誤判 Codex 沒有附件參數，經使用者提醒後查證
+    `codex exec --help`/`codex exec resume --help` 才發現兩者都原生支援
+    -i/--image（可重複），不需要在附件跟 Codex 之間二選一。"""
+    img1 = tmp_path / "screenshot.png"
+    img1.write_bytes(b"fake-png-bytes")
+    img2 = tmp_path / "photo.jpg"
+    img2.write_bytes(b"fake-jpg-bytes")
+
+    captured = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc([])
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await codex_engine.run_turn(
+        prompt="describe these images", cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id=None, api_key="", on_text=lambda c: None,
+        attachments=[str(img1), str(img2)],
+    )
+
+    cmd = list(captured["args"])
+    image_flag_values = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-i"]
+    assert str(img1) in image_flag_values
+    assert str(img2) in image_flag_values
+
+
+async def test_codex_engine_text_attachment_content_reaches_stdin(monkeypatch, tmp_path):
+    """純文字附件（.txt/.md/.py/.ts/.js/.json，前端 accept 屬性允許的非圖片
+    格式）沒有對應的 CLI flag，直接讀內容折進 prompt、透過 stdin 送出——
+    Codex 本來就是純文字輸入，不需要額外機制。"""
+    txt = tmp_path / "notes.txt"
+    txt.write_text("這是附件內容", encoding="utf-8")
+
+    created_proc = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        proc = _FakeProc([])
+        created_proc["proc"] = proc
+        return proc
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await codex_engine.run_turn(
+        prompt="summarize this", cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id=None, api_key="", on_text=lambda c: None,
+        attachments=[str(txt)],
+    )
+
+    written = created_proc["proc"].stdin.written.decode("utf-8")
+    assert "summarize this" in written
+    assert "這是附件內容" in written
+    assert "notes.txt" in written
+
+
+async def test_codex_engine_resume_also_supports_image_flag(monkeypatch, tmp_path):
+    """已驗證 codex exec resume --help 也列出 -i/--image，跟 fresh call 一樣
+    支援，resume 分支不能漏掉這個 flag。"""
+    img = tmp_path / "shot.png"
+    img.write_bytes(b"fake")
+
+    captured = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc([])
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await codex_engine.run_turn(
+        prompt="continue", cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id="sid-abc", api_key="", on_text=lambda c: None,
+        attachments=[str(img)],
+    )
+
+    cmd = list(captured["args"])
+    assert "-i" in cmd
+    assert cmd[cmd.index("-i") + 1] == str(img)
+
+
+async def test_codex_engine_nonexistent_attachment_silently_skipped(monkeypatch):
+    captured = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc([])
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await codex_engine.run_turn(
+        prompt="hi", cwd="/tmp", model="", permission_mode="workspace-write",
+        resume_session_id=None, api_key="", on_text=lambda c: None,
+        attachments=["/does/not/exist.png"],
+    )
+
+    cmd = list(captured["args"])
+    assert "-i" not in cmd
+
+
 async def test_codex_engine_sets_codex_api_key_env_var(monkeypatch):
     captured = {}
 

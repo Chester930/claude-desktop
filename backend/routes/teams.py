@@ -19,7 +19,7 @@ from pathlib import Path
 from aiohttp import web
 
 # Helpers and DB imports
-from helpers import _team_dict, _write_team_yaml, _agent_dict, safe_kill_process
+from helpers import _team_dict, _write_team_yaml, _agent_dict, _read_skills_content, safe_kill_process
 from database import (
     _memory_dir,
     _team_memory_dir,
@@ -41,6 +41,11 @@ def _get_main_module():
 def _dirs():
     import database as _db
     return _db.TEAMS_DIR, _db.AGENTS_DIR
+
+
+def _skills_dir():
+    import database as _db
+    return _db.SKILLS_DIR
 
 
 def _is_safe_id(name: str) -> bool:
@@ -148,6 +153,7 @@ async def _agent_run_capture(
     agent_file = AGENTS_DIR / f"{agent_id}.md"
     agent_body = ""
     agent_own_engine = ""
+    skills_content = ""
     if _is_safe_id(agent_id) and agent_file.exists():
         try:
             raw_text = agent_file.read_text(encoding="utf-8")
@@ -159,7 +165,11 @@ async def _agent_run_capture(
         except Exception:
             pass
         try:
-            agent_own_engine = _agent_dict(agent_file).get("engine", "")
+            # 只解析一次 frontmatter，engine 跟 skills 都從同一個 dict 拿，
+            # 避免重複讀檔/parse。
+            agent_meta = _agent_dict(agent_file)
+            agent_own_engine = agent_meta.get("engine", "")
+            skills_content = _read_skills_content(_skills_dir(), agent_meta.get("skills", []))
         except Exception:
             pass
 
@@ -167,6 +177,12 @@ async def _agent_run_capture(
     full_prompt = prompt
     if agent_body:
         full_prompt = f"[代理人：{agent_id}]\n{agent_body}\n\n---\n\n{full_prompt}"
+    if skills_content:
+        # Skill 內容以前只當 metadata 標籤存在，從沒被讀出來塞進 prompt，
+        # 真正生效與否完全依賴底層 CLI 自己原生的 slash-skill 機制（兩邊
+        # CLI 讀的路徑還不一樣，Codex 那條已知目前是壞的）。這裡改成 app
+        # 自己讀內容手動折進去，讓 skill 對兩個引擎都真正生效。
+        full_prompt = f"[Skills]\n{skills_content}\n\n---\n\n{full_prompt}"
     if soul:
         full_prompt = f"[System Persona]\n{soul}\n\n{full_prompt}"
 

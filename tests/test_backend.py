@@ -193,27 +193,46 @@ class TestAgentCRUD:
         assert body2["description"] == "更新後的描述"
 
     async def test_update_agent_skills(self, client, sample_agent):
-        resp = await client.put(
-            "/api/agents/test-agent",
-            json={"skills": ["skill-a", "skill-b"]},
-        )
-        assert resp.status == 200
-        # 讀回確認
-        resp2 = await client.get("/api/agents/test-agent")
-        body2 = await resp2.json()
-        assert "skill-a" in body2.get("skills", [])
+        """sample_agent 是 session-scoped fixture，共用同一份 test-agent.md
+        物理檔案——同樣的理由見 test_update_agent_engine 的說明，用
+        try/finally 把 skills 還原成 fixture 原本的 [test-skill]，避免
+        污染後面共用 test-agent 的測試。"""
+        try:
+            resp = await client.put(
+                "/api/agents/test-agent",
+                json={"skills": ["skill-a", "skill-b"]},
+            )
+            assert resp.status == 200
+            # 讀回確認
+            resp2 = await client.get("/api/agents/test-agent")
+            body2 = await resp2.json()
+            assert "skill-a" in body2.get("skills", [])
+        finally:
+            await client.put("/api/agents/test-agent", json={"skills": ["test-skill"]})
 
     async def test_update_agent_engine(self, client, sample_agent):
         """2026-07-11：Agent 編輯器 UI 加了引擎選擇下拉選單，engine 欄位要
-        能透過 PUT /api/agents/{id} 寫進 frontmatter。"""
-        resp = await client.put(
-            "/api/agents/test-agent",
-            json={"engine": "codex"},
-        )
-        assert resp.status == 200
-        resp2 = await client.get("/api/agents/test-agent")
-        body2 = await resp2.json()
-        assert body2.get("engine") == "codex"
+        能透過 PUT /api/agents/{id} 寫進 frontmatter。
+
+        sample_agent 是 session-scoped fixture，物理檔案 test-agent.md 整個
+        測試 session 只建立一次、後面所有測試共用同一份。這裡的 PUT 會真的
+        把 engine: codex 寫進那份共用檔案——如果不還原，後面任何假設
+        test-agent 沒有宣告 engine（預期走 Claude）的測試（例如
+        test_team_chat_first_turn_nameerror.py／
+        test_team_chat_no_llm_auto_approve.py）會被這裡留下的髒狀態影響，
+        意外路由到 Codex 導致失敗。用 try/finally 確保不管斷言成不成功，
+        都會把 engine 欄位還原成空字串。"""
+        try:
+            resp = await client.put(
+                "/api/agents/test-agent",
+                json={"engine": "codex"},
+            )
+            assert resp.status == 200
+            resp2 = await client.get("/api/agents/test-agent")
+            body2 = await resp2.json()
+            assert body2.get("engine") == "codex"
+        finally:
+            await client.put("/api/agents/test-agent", json={"engine": ""})
 
     async def test_update_agent_invalid_engine_400(self, client, sample_agent):
         resp = await client.put(

@@ -556,8 +556,39 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 
 `pytest tests/` **210 個測試全過**（新增：HR 派發路由到 Codex、HR 派發／Team Run 的 Anthropic key 不外洩到 Codex、Agent PUT/POST 帶合法與不合法 `engine` 值）。`tsc --noEmit`／`ng build` 全過。
 
-### 仍待處理
+### 仍待處理（十四節當下）
 
 - `main.py` 的 pooled SDK 路徑（`handle_chat`/`handle_team_chat`/`handle_team_execute`）仍然只支援 Claude——這條路徑用 Anthropic 自家 SDK 做長駐連線，Codex 沒有對應物，維持這輪核准的 plan 排除範圍，暫不處理。
 - PR #6 的 base branch 仍未從 `worktree-cozy-dancing-dragon` 改成 `master`——本機已經 rebase 乾淨（見對話紀錄），但 `git push --force-with-lease` 被使用者的安全 hook 擋下，需要使用者自己執行 push（或調整 hook）才能完成最後這一步。
 - 主要 checkout（`D:\Users\666\Desktop\claude-desktop`）仍然落後 `origin/master`，建議找時間 `git pull`（見十三節）。
+
+（後續更新：PR #6 已由使用者自行 push + 改 base 後合併進 `master`；主要 checkout 也已 `git pull` 並重啟 Docker 前端容器同步。以上三項在十五節動工前都已經解決。）
+
+## 十五、2026-07-11 續篇三 — 補上主聊天室／團隊對話的引擎路由 + Skills 內容注入（依十四節建議繼續，經 plan mode 正式核准）
+
+延續十四節的「仍待處理」，這輪把 `handle_chat`／`handle_team_chat`／`handle_team_execute` 這三個原本完全沒接引擎路由的進入點都補齊了，順便修好 Skills 內容從來沒被真正注入 prompt 的問題。過程正式走過 plan mode（研究 → 設計 → 使用者核准），計畫檔見 `C:\Users\666\.claude\plans\cozy-dancing-dragon.md` 續篇段落。
+
+### 修法總覽
+
+1. **`backend/helpers.py::_read_skills_content()`**：讀取 Agent 引用的每個 skill 的實際 body 內容（不只是 metadata），比照既有 `_read_agent_body()` 的做法。接進 4 個原本就會折疊 agent body/soul 的 prompt 組裝點：`routes/teams.py::_agent_run_capture()`、`main.py` 的 `handle_chat`/`handle_team_chat`/`handle_team_execute` 三個 prompt builder。Skill 內容從此對 Claude／Codex 兩邊都真正生效，不再依賴任何一邊 CLI 自己原生、彼此不相容的 slash-skill 載入機制。
+
+2. **`backend/main.py::_resolve_agent_engine_and_key()`**：新增共用 helper，比照 `_agent_run_capture()` 已驗證過的模式（讀 agent frontmatter 的 `engine:` → 解析成實際引擎 → 非 claude 引擎一律不傳 Anthropic key，避免誤植進 `CODEX_API_KEY`）。`handle_chat`／`handle_team_chat` 的 `run_single_agent()`／`handle_team_execute` 的 `run_agent_executor()` 都在 `if use_pool:` 判斷之前插入引擎閘門：`engine.name != "claude"` 時完全跳過 SessionPool/ClaudeSDKClient（Anthropic 自家 SDK，其他引擎沒有對應物），直接呼叫 `engines/<name>_engine.py::run_turn()`；是 `claude` 或沒有 activated agent 時，維持既有行為 100% 不變。三處都沿用各自既有的 SSE envelope 格式（`handle_chat` 用 `assistant` 事件、`handle_team_chat` 用 `text`/`agent_start`/`agent_done`、`handle_team_execute` 用 `exec_text`/`exec_start`/`exec_done`），前端完全不用改一行。
+
+3. **附件支援（`codex_engine.py::run_turn()`）**：一開始誤判「Codex 沒有附件參數」，經使用者追問「但是真的不行嗎?」後查證 `codex exec --help`／`codex exec resume --help`，才發現兩者都原生支援 `-i, --image <FILE>...`（可重複）。前端的附件選擇器只允許 `image/*` 跟幾種純文字格式（`.txt/.md/.py/.ts/.js/.json`），所以圖片走 `-i` flag、文字類直接讀內容折進 prompt（透過 stdin 送出，Codex 本來就是純文字輸入）就能達到跟 Claude（`--input-file`）對等的附件支援，不需要在「附件」和「Codex」之間二選一，也不需要犧牲任何一邊的功能。`handle_team_execute` 本來就沒有 attachments 概念（跟另外兩個進入點不一樣），這裡有踩到一個自己犯的小 bug——一開始誤把 `attachments=attachments` 也傳進 `handle_team_execute` 的引擎呼叫，會直接 `NameError`，在寫回歸測試時就發現並修掉了，沒有流出到正式測試或 E2E 驗證階段。
+
+### 意外抓到一個真實的、跟這次改動本身無關的既有 bug
+
+`tests/test_backend.py::test_update_agent_engine`（十四節新增）PUT 了 `engine: codex`到 `sample_agent` 這個 **session-scoped**（整個測試 session 只建立一次、後面所有測試共用同一份實體檔案）fixture 上，卻沒有還原——這在十四節當下沒被抓到，是因為那時候還沒有任何測試會真的因為 `test-agent` 帶著 `engine: codex`而表現出不同行為。這輪一接上 `handle_team_chat` 的引擎路由後，`tests/test_team_chat_first_turn_nameerror.py`／`tests/test_team_chat_no_llm_auto_approve.py`（兩者都假設 `test-agent` 沒有宣告 engine、會走 Claude legacy subprocess）在跑「全套測試」時開始不穩定失敗——因為前面某個順序更早的測試已經把共用的 `test-agent.md` 永久改成 `engine: codex`，導致這兩個測試意外被路由到 Codex，而它們的 mock（只 monkeypatch `main.asyncio.create_subprocess_exec`）沒有覆蓋 Codex 那條路徑，直接噴 `AttributeError: '_FakeProc' object has no attribute 'stdin'`。
+
+單獨跑這兩個測試檔案、或跟少量檔案一起跑都不會重現，只有在跑接近全套測試時才會出現——是典型的「測試順序污染共用 session-scoped fixture 檔案」問題。修法：`test_update_agent_engine`／`test_update_agent_skills`（兩者都會永久修改共用的 `test-agent.md`）都加上 `try/finally`，測試結束後把欄位還原成 fixture 原本的值。這個問題今後任何會 PUT 資料到 `sample_agent`/`sample_team`/`sample_skill` 這幾個 session-scoped fixture 的新測試都要注意，比照這裡的 try/finally 模式處理，否則風險是「單獨跑測試永遠是綠的，只有全套跑才會隨機紅」，很難排查。
+
+### 測試覆蓋
+
+- `pytest tests/`：**229 個測試全過**。新增：`tests/test_read_skills_content.py`（7 個，`_read_skills_content()` 單元測試）、`tests/test_agent_run_capture_skills.py`（3 個，Team Run 的 skill 注入回歸測試，含 Claude／Codex 兩種引擎）、`tests/test_handle_chat_engine_routing.py`（2 個）、`tests/test_handle_team_chat_engine_routing.py`（1 個）、`tests/test_handle_team_execute_engine_routing.py`（2 個，含驗證 `attachments` 不會被誤傳進這條路徑）、`tests/test_engine_registry.py` 新增 5 個附件相關測試（圖片走 `-i`、純文字折進 stdin、resume 子指令也支援 `-i`、不存在的附件靜默略過）。
+- **真實 Codex CLI 端對端測試**：在隔離的暫存 `~/.claude` 目錄（獨立 port 8767，不影響使用者的正式環境）建立一個 `engine: codex` 且引用一個自訂 skill 的 agent，這個 skill 的內容裡藏了一個模型不可能自己猜到的假密語（`MOONLIGHT-42`）。直接在（模擬的）主聊天室對這個 agent 提問「今天的通關密語是什麼」，真實 Codex CLI 正確回答出 `MOONLIGHT-42`——這同時證明了兩件事：(1) 請求真的被路由到 Codex 執行（回覆裡還帶著只有 `codex_engine.py` 會產生的 `[codex: Exceeded skills context budget...]` 提示字樣），(2) skill 的實際內容真的被讀出來注入了 prompt，不是像以前一樣只是個 metadata 標籤。
+
+### 仍待處理
+
+- MCP 的「單一來源 + 同步到 Claude／Codex 原生格式」——十四節就已經排除在外，維持排除，範圍明顯更大（兩邊目前都只有讀取能力），且有更多開放式設計決策（自動同步 vs 手動按鈕、衝突處理等）需要另外一輪 plan mode 討論。
+- `main.py` 的 pooled SDK（`SessionPool`/`ClaudeSDKClient`）本身仍然是 Claude 專屬——Codex-routed 的對話一律退回一次性 subprocess 呼叫（跟 Team Run 現有行為一致），不會有長駐連線的效能優化，也沒有即時的 `can_use_tool` 權限核准 UI（`handle_team_execute` 尤其明顯，Codex-routed 團隊成員只能靠 `--sandbox <mode>` 控制，跳過即時核准流程）——這是已經接受的既有權衡，不是這輪的缺陷。
+- 同一場對話中途切換 agent 的 `engine:` 設定，理論上可能導致 `resume_session_id` 傳給錯的引擎（`active_sessions` 沒有記錄「這個 session id 是哪個引擎產生的」）——這次沒有特別處理，先接受，之後如果真的遇到再補。
