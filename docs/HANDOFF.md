@@ -503,4 +503,33 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 - `_run_hr_agent()`（HR 自動組隊）跟 `main.py` 的 pooled SDK 路徑（`handle_chat`/`handle_team_chat`/`handle_team_execute`）目前仍然只支援 Claude，套用同一個 `engines/` 抽象是下一輪的候選項目。
 - Team/Agent 編輯器 UI 目前只能用 frontmatter 手動打 `engine: codex`，還沒有下拉選單——下一輪可以加。
 - `danger-full-access` sandbox 等級、以及 `CODEX_API_KEY` env var 認證路徑（這次用的是已登入憑證 `~/.codex/auth.json`，沒有走 env var）仍未實測，需要使用者明確授權後再驗證。
-- `frontend/e2e/app.spec.ts` 的 `.icon-btn[title*="設定"]` selector 已經跟現在的 DOM 結構脫節，8 個測試會 timeout——需要更新成透過使用者選單開啟設定（`.umenu-item`，見上方前端 parity 檢查段落），跟這次的 Codex 工作本身無關。
+
+## 十三、2026-07-11 續篇 — `frontend/e2e/app.spec.ts` 修復進度 + 新發現一個真實 pre-existing bug
+
+延續十二節記錄的「`.icon-btn[title*="設定"]` selector 脫節」問題，這次實際動手修復並用真實瀏覽器（Playwright）反覆驗證，過程中意外連帶發現一個 Docker 環境問題跟一個真實、跟這次 Codex 工作完全無關的既有 UI bug。
+
+### Docker 環境曾經整個沒回應（已排除，跟這次改動無關）
+
+跑 e2e 測試時發現使用者本機 `localhost:4200`/`8765`（Docker 跑的 `claude-desktop-frontend-dev`/`claude-desktop-backend-dev` 容器）整個沒回應，連 `docker ps` 都會 hang——判斷是 Docker Desktop 背景服務本身卡住（不是容器掛了，容器程序照樣顯示 running，只是完全不回應）。經使用者同意後重啟 Docker Desktop（`Stop-Process` 全部 docker 相關程序後重新 `Start-Process "Docker Desktop.exe"`），約 5 秒後所有容器依重啟策略自動回復健康狀態，前後端都恢復正常回應。這是環境問題，不是這次任何程式碼改動造成的。
+
+### 已修復並驗證：兩個真的只是選擇器過時的測試
+
+1. **設定按鈕**：`app.html` 已經沒有 `.icon-btn[title*="設定"]` 這個元素了——某次改版把設定入口移進使用者選單（`.umenu-trigger` 按鈕「你 Claude Code 使用者 ⌄」→ 選單裡的 `.umenu-item`「⚙ 設定」）。影響 5 個測試（開關設定 modal、Provider 選單、Telegram 區塊、語言切換選項、Debug 診斷按鈕），全部改成先點使用者選單再點設定項目，已用真實瀏覽器反覆驗證通過。
+2. **Skills 分頁按鈕文字**：`.tab-bar button` 的文字從某個版本的 "Skills" 改成全大寫 "SKILL"（沒有字尾 s），導致 `hasText: 'Skills'` 的子字串比對完全比不中。改成 `hasText: /Skill/i` 後驗證通過。
+
+### 確認為既有環境雜訊、非真實 bug：backend 高負載造成的隨機 flaky
+
+`後端 /api/status 健康檢查`、`後端 /api/profiles 回傳清單`、`設定頁包含 Provider 選單` 這幾個測試在跑「全部一起」時偶爾會隨機挑一兩個 timeout，但單獨或小批次重跑時穩定通過，且每次失敗的是不同測試——判斷是 Playwright 多個 worker 同時打真實的、有大量真實使用資料（`active_sessions: 39`）的 live 後端造成的資源競爭，不是程式碼問題，不需要修。
+
+### 新發現、確認為真實 bug（跟這次 Codex 工作無關，未修復）：`team-run-progress.spec.ts` 的 HR 自動組隊流程壞了
+
+用獨立診斷腳本（帶 console/network log）重現 `frontend/e2e/team-run-progress.spec.ts` 的完整流程後確認：`dispatchHR()` → 開啟計畫 modal → 點「▶ 開始執行」→ `submitHRTeamRun()` 這條路徑，網路層完全正確（`POST /api/hr/dispatch` → `POST /api/team/run` → `GET .../stream` → `GET .../artifacts` 全部依序正確送出且被正確攔截/回應），但畫面上**完全沒有任何訊息渲染出來**（`.msg-assistant-group` count 是 0，聊天區仍停在空狀態歡迎畫面），而且照程式碼邏輯應該被清空的輸入框（`submitHRTeamRun()` 裡的 `this.inputText = ''`）在點擊後仍然保留原本打的文字——這兩個現象合在一起，代表 `submitHRTeamRun()`／`_dispatchTeamRun()` 這條路徑目前的實際執行狀態跟原始碼讀起來的邏輯對不上，需要更深入的除錯（可能是 `activeChatId()`／`tabMessages()` 的 tab 狀態管理，或這兩個函式之間發生了非預期的互動）。
+
+**已排除是這次 Codex 工作造成的**：用 `git log -p -- frontend/src/app/app.ts` 確認過 `_dispatchTeamRun()` 這次 session 唯一的改動只有新增 `const agentEngine = this.settings.get().agentEngine;` 這一行以及把它多傳一個參數給 `runTeam()`，是乾淨的兩行新增，沒有動到訊息渲染／tab 狀態管理的任何邏輯。這個 bug 在這次改動之前就已經存在（`docs/HANDOFF.md` 十一節「發現 6」記錄的是修復當下用 Playwright 驗證通過，代表這個 bug 是在那之後、這次 Codex 工作之前的某個時間點被引入的，確切是哪次改動需要用 `git bisect` 才能定位）。
+
+**下一步**：這是獨立於 Codex/pluggable engine 工作之外的一個真實前端 bug，需要單獨開一輪除錯（建議先用 `git bisect` 配合這支診斷腳本的邏輯縮小範圍，腳本邏輯見對話紀錄，之後可以另存成 `backend/scripts` 或 `frontend/e2e` 底下的診斷工具）。
+
+### 待使用者決定，未動手（可能是刻意簡化、也可能是意外遺失的功能）
+
+- **Memory 頁籤**：`app.html` 的 `.tab-bar` 現在只有 TEAM/AGENT/SKILL/MCP/Scheduling，沒有 Memory。但 Settings modal 的說明文字（`app.html` 行 2039 附近）仍寫著「以 key-value 形式存在右側 Memory 頁籤」——文件跟實際 UI 不一致。是功能被拿掉了、還是搬到別的地方了，需要使用者確認。
+- **匯出格式下拉選單**：`.export-format-select`（`.md`/`.json`/`.txt` 三選一）在 `app.html` 已經完全找不到，只剩 `app.scss` 裡的死 CSS class。目前 topbar 上只有一個單一的「匯出對話」（⬇）按鈕（`exportChat()`），看起來像是簡化成固定格式匯出，但不確定是否為刻意設計。
