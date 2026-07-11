@@ -50,6 +50,14 @@ engines/codex_engine.py — OpenAI Codex CLI 的 AgentEngine 實作。
   正確帶出完整 API 錯誤內容，失敗前的非致命 `item.type=="error"` 警告跟
   `session_id` 都正確保留，不需要額外處理。
 
+- **附件支援**：一開始誤判成「Codex 沒有附件參數」，經使用者提醒後查證
+  `codex exec --help`／`codex exec resume --help` 才發現兩者都有
+  `-i, --image <FILE>...`，原生支援圖片附件。前端的附件選擇器只允許
+  `image/*` 跟幾種純文字格式（`.txt/.md/.py/.ts/.js/.json`，見
+  `frontend/src/app/app.html`），所以圖片走 `-i` flag、文字類直接讀內容
+  折進 prompt（不需要額外機制，Codex 本來就是純文字輸入）就能達到跟
+  Claude（`--input-file`）對等的附件支援，不需要犧牲任何一邊。
+
 尚未驗證（文件記載，還沒實測）：
 - 認證：`CODEX_API_KEY=<key>` 環境變數，只在 `codex exec` 模式生效——這次
   實測用的是已經 `codex login` 過的憑證（`~/.codex/auth.json`），沒有走
@@ -96,6 +104,44 @@ def _normalize_sandbox_mode(permission_mode: str) -> str:
     return DEFAULT_PERMISSION_MODE
 
 
+# 前端附件選擇器（frontend/src/app/app.html 的 <input accept=...>）只允許
+# image/* 跟這幾種純文字格式，所以這裡窮舉比對副檔名就夠了，不需要真的去嗅探
+# MIME type。
+_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"})
+_TEXT_EXTS = frozenset({".txt", ".md", ".py", ".ts", ".js", ".json"})
+
+
+def _split_attachments(attachments: "list[str] | None") -> "tuple[list[str], list[str]]":
+    """把附件路徑分成「圖片」（走 -i flag）跟「純文字」（讀內容折進 prompt）
+    兩類。已驗證 codex exec 跟 codex exec resume 都原生支援 -i/--image，
+    不需要在「附件」和「Codex」之間二選一。"""
+    images: list[str] = []
+    texts: list[str] = []
+    for att in attachments or []:
+        if not att or not Path(att).exists():
+            continue
+        ext = Path(att).suffix.lower()
+        if ext in _IMAGE_EXTS:
+            images.append(att)
+        elif ext in _TEXT_EXTS:
+            texts.append(att)
+        # 其他副檔名：前端 accept 屬性本來就不允許選到，防禦性地靜默略過。
+    return images, texts
+
+
+def _inject_text_attachments(prompt: str, text_attachments: "list[str]") -> str:
+    if not text_attachments:
+        return prompt
+    parts = [prompt]
+    for att in text_attachments:
+        try:
+            content = Path(att).read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        parts.append(f"\n\n[附件：{Path(att).name}]\n```\n{content}\n```\n")
+    return "".join(parts)
+
+
 async def run_turn(
     *,
     prompt: str,
@@ -107,10 +153,13 @@ async def run_turn(
     on_text,
     on_process=None,
     is_cancelled=None,
+    attachments: "list[str] | None" = None,
 ) -> RunResult:
     codex_bin = _codex_bin()
     safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
     sandbox_mode = _normalize_sandbox_mode(permission_mode)
+    image_attachments, text_attachments = _split_attachments(attachments)
+    prompt = _inject_text_attachments(prompt, text_attachments)
 
     # 已驗證（真實 CLI）：team run 的 prompt 是多行字串（agent frontmatter
     # body、memory context、任務描述用 "\n\n" 接起來）。Windows 上 codex 是
@@ -139,6 +188,11 @@ async def run_turn(
         cmd = [codex_bin, "exec", "-", "--json", "--sandbox", sandbox_mode, "--cd", safe_cwd, "--skip-git-repo-check"]
         if model:
             cmd += ["--model", model]
+
+    # 已驗證（codex exec --help／codex exec resume --help）：兩個子指令都原生
+    # 支援 -i/--image，可重複使用，圖片路徑直接原樣傳。
+    for img in image_attachments:
+        cmd += ["-i", img]
 
     env = {**os.environ}
     if api_key:

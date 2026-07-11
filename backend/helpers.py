@@ -79,6 +79,39 @@ def _read_agent_body(agent_file: Path) -> str:
         return ""
 
 
+def _read_skills_content(skills_dir: Path, skill_ids: list) -> str:
+    """讀取 Agent 引用的 skill 實際內容（不只 metadata），折進 prompt 用。
+
+    Agent 的 skills: [...] 欄位之前只當標籤存進 metadata，從沒有人把 skill
+    檔案的實際內容讀出來——真正生效與否完全依賴底層 CLI 自己原生的
+    slash-skill 機制（Claude 認得 ~/.claude/skills/，Codex 認的是不同路徑
+    ~/.agents/skills/ 且已知目前是壞的）。這裡讓 app 自己讀內容、手動塞進
+    prompt，比照 _read_agent_body() 對 agent body 的做法，讓 skill 對兩個
+    引擎都真正生效，不再依賴任何一邊 CLI 的原生載入機制。
+    """
+    if not skill_ids or not skills_dir:
+        return ""
+    sections = []
+    for sid in skill_ids:
+        if not isinstance(sid, str) or not sid or "/" in sid or "\\" in sid or ".." in sid:
+            continue
+        f = skills_dir / f"{sid}.md"
+        if not f.exists():
+            d = skills_dir / sid
+            found = None
+            for c in (d / "SKILL.md", d / "README.md"):
+                if c.exists():
+                    found = c
+                    break
+            if found is None:
+                continue
+            f = found
+        body = _read_agent_body(f)
+        if body:
+            sections.append(f"[Skill: {sid}]\n{body}")
+    return "\n\n---\n\n".join(sections)
+
+
 # ── YAML frontmatter parse / write ───────────────────────────────────────────
 
 def _parse_yaml_list(lines: list, start: int):

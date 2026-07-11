@@ -140,7 +140,7 @@ _usage_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
-from helpers import _read_agent_body, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, wrap_cmd
+from helpers import _read_agent_body, _read_skills_content, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, wrap_cmd
 
 import atexit
 import signal
@@ -218,6 +218,32 @@ def get_agent_soul(agent_id: str) -> str:
         return f.read_text(encoding="utf-8").strip() if f.exists() else ""
     except Exception:
         return ""
+
+
+def _resolve_agent_engine_and_key(agent_id: str):
+    """比照 routes/teams.py::_agent_run_capture() 已經驗證過的模式：讀
+    agent 自己 frontmatter 宣告的 engine:，解析成實際引擎模組，並決定
+    api_key 要不要傳（resolve_key() 只解析 Anthropic key，非 claude 引擎
+    一律傳空字串，避免誤植進 CODEX_API_KEY 蓋掉正常的 codex login 憑證）。
+
+    handle_chat／handle_team_chat／handle_team_execute 這三個進入點原本
+    完全沒有讀取 agent 的 engine: 欄位，寫死呼叫 Claude——這個 helper是
+    補上這個缺口用的共用邏輯，避免三處各自重複實作。沒有 agent_id（沒有
+    activated agent）時自然解析成預設引擎 "claude"，維持既有行為不變。
+    """
+    from engines.registry import resolve_engine_name, get_engine
+
+    agent_own_engine = ""
+    if agent_id:
+        agent_file = AGENTS_DIR / f"{agent_id}.md"
+        if agent_file.exists():
+            try:
+                agent_own_engine = _agent_dict(agent_file).get("engine", "")
+            except Exception:
+                pass
+    engine = get_engine(resolve_engine_name(agent_own_engine, ""))
+    engine_api_key = _resolve_api_key() if engine.name == "claude" else ""
+    return engine, engine_api_key
 
 
 def load_schedules() -> list:
@@ -482,6 +508,13 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                             body = parts[2].strip()
                     if body:
                         fm = f"[代理人：{agent}]\n{body}\n\n---\n\n{fm}"
+                    # Skill 內容以前只當 metadata 標籤存在，從沒被讀出來
+                    # 塞進 prompt，真正生效與否完全依賴底層 CLI 自己原生
+                    # 的 slash-skill 機制。這裡改成 app 自己讀內容手動折
+                    # 進去，讓 skill 對兩個引擎都真正生效。
+                    skills_content = _read_skills_content(SKILLS_DIR, _agent_dict(agent_file).get("skills", []))
+                    if skills_content:
+                        fm = f"[Skills]\n{skills_content}\n\n---\n\n{fm}"
                 except Exception:
                     pass
         return fm
@@ -612,8 +645,41 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             if proc and proc.returncode is None:
                 safe_kill_process(proc)
 
+    async def _run_engine_turn(engine, engine_api_key: str, full_message: str) -> None:
+        """Agent 自己宣告了非 Claude 的 engine: 時走這裡——完全跳過
+        SessionPool/ClaudeSDKClient（Anthropic 自家 SDK，其他引擎沒有對應
+        物），直接呼叫 engines/<name>_engine.py 的 run_turn()。事件格式
+        沿用 _run_pooled() 已經在用、前端也已經在消費的 envelope，前端
+        完全不用改。"""
+        async def _on_text(chunk: str) -> None:
+            env_msg = {"type": "assistant", "message": {"content": [{"type": "text", "text": chunk}]}}
+            await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
+
+        def _on_process(proc) -> None:
+            active_procs[client_id] = proc
+
+        try:
+            result = await engine.run_turn(
+                prompt=full_message, cwd=cwd, model=model, permission_mode=permission_mode,
+                resume_session_id=active_sessions.get(client_id), api_key=engine_api_key,
+                on_text=_on_text, on_process=_on_process, attachments=attachments,
+            )
+        finally:
+            active_procs.pop(client_id, None)
+
+        if result.session_id:
+            active_sessions[client_id] = result.session_id
+        if result.error:
+            payload = json.dumps({"type": "error", "text": result.error})
+            await response.write(f"data: {payload}\n\n".encode())
+
+    engine, engine_api_key = _resolve_agent_engine_and_key(agent)
+
     try:
-        if use_pool:
+        if engine.name != "claude":
+            full_message = message if client_id in active_sessions else await _build_full_message()
+            await _run_engine_turn(engine, engine_api_key, full_message)
+        elif use_pool:
             needs_full_rebuild = not (in_pool_now or has_persisted)
             prompt_to_send = await _build_full_message() if needs_full_rebuild else message
             resume_target = None if (in_pool_now or needs_full_rebuild) else active_sessions.get(client_id)
@@ -755,6 +821,9 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
                 body = _read_agent_body(agent_file_path)
                 if body:
                     fp = f"[代理人定義：{agent_id}]\n{body}\n\n---\n\n{fp}"
+                skills_content = _read_skills_content(SKILLS_DIR, _agent_dict(agent_file_path).get("skills", []))
+                if skills_content:
+                    fp = f"[Skills]\n{skills_content}\n\n---\n\n{fp}"
             return fp
 
         async def _exec_cmd(fp: str, resume_sid: "str | None") -> tuple[list[str], str, bool]:
@@ -873,9 +942,54 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
             return collected, new_sid
 
+        async def _exec_engine_turn(fp: str, resume_sid: "str | None") -> tuple[list[str], str]:
+            """Agent 自己宣告了非 Claude 的 engine: 時走這裡——完全跳過
+            SessionPool/ClaudeSDKClient（Anthropic 自家 SDK，其他引擎沒有
+            對應物），直接呼叫 engines/<name>_engine.py 的 run_turn()。
+            事件格式沿用 _exec_cmd() 既有的 SSE envelope，前端不用改。"""
+            await response.write(f"data: {json.dumps({'type': 'agent_start', 'agent': agent_id})}\n\n".encode())
+            collected: list[str] = []
+
+            async def _on_text(chunk: str) -> None:
+                collected.append(chunk)
+                await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': chunk})}\n\n".encode())
+
+            def _on_process(proc) -> None:
+                active_procs[client_id] = proc
+
+            try:
+                result = await engine.run_turn(
+                    prompt=fp, cwd=cwd, model=model, permission_mode=permission_mode,
+                    resume_session_id=resume_sid, api_key=engine_api_key,
+                    on_text=_on_text, on_process=_on_process, attachments=attachments,
+                )
+            finally:
+                active_procs.pop(client_id, None)
+
+            if result.session_id:
+                active_sessions[session_key] = result.session_id
+            if result.error:
+                err_text = f"[Error: {result.error}]"
+                collected.append(err_text)
+                await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': err_text})}\n\n".encode())
+
+            await response.write(f"data: {json.dumps({'type': 'agent_done', 'agent': agent_id})}\n\n".encode())
+            return collected, result.session_id
+
         has_persisted = session_key in active_sessions
         in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(session_key)
         use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
+        engine, engine_api_key = _resolve_agent_engine_and_key(agent_id)
+
+        if engine.name != "claude":
+            if not has_persisted or is_first_turn:
+                full_prompt = await _build_full_prompt(prompt_text)
+                resume_sid  = None
+            else:
+                full_prompt = prompt_text
+                resume_sid  = active_sessions.get(session_key)
+            collected_list, new_session_id = await _exec_engine_turn(full_prompt, resume_sid)
+            return "".join(collected_list), new_session_id
 
         if use_pool:
             needs_full_rebuild = not (in_pool_now or has_persisted)
@@ -1109,6 +1223,10 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             )
             if agent_body:
                 prompt = f"[你的代理人特徵與能力]\n{agent_body}\n\n---\n\n{prompt}"
+            if agent_file.exists():
+                skills_content = _read_skills_content(SKILLS_DIR, _agent_dict(agent_file).get("skills", []))
+                if skills_content:
+                    prompt = f"[Skills]\n{skills_content}\n\n---\n\n{prompt}"
             soul = get_agent_soul(agent_id)
             if soul:
                 prompt = f"[System Persona]\n{soul}\n\n{prompt}"
@@ -1321,9 +1439,69 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
             return "".join(collected)
 
+        async def _exec_engine_turn(prompt: str, resume_sid: "str | None") -> str:
+            """Agent 自己宣告了非 Claude 的 engine: 時走這裡——完全跳過
+            SessionPool/ClaudeSDKClient。這裡的即時權限核准 UI
+            （pending_permissions／can_use_tool callback）對 Codex 沒有
+            對應物，Codex-routed 的團隊成員會跳過這個即時核准流程，只能靠
+            --sandbox <mode> 控制，這是既有、已接受的權衡（同一個權衡
+            _agent_run_capture 早就接受過）。事件格式沿用 _legacy_exec()
+            既有的 exec_text/exec_start/exec_done SSE envelope，前端不用改。
+            """
+            await response.write(f"data: {json.dumps({'type': 'exec_start', 'agent': agent_id})}\n\n".encode())
+            try:
+                log_file.write_text("", encoding="utf-8")
+            except Exception:
+                pass
+
+            collected: list[str] = []
+
+            async def _on_text(chunk: str) -> None:
+                collected.append(chunk)
+                try:
+                    with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+                        f.write(chunk + "\n")
+                except Exception:
+                    pass
+                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': chunk})}\n\n".encode())
+
+            def _on_process(proc) -> None:
+                active_procs[proc_key] = proc
+
+            try:
+                # handle_team_execute 本來就沒有 attachments 概念（跟
+                # handle_chat／handle_team_chat 不一樣），這裡不用傳。
+                result = await engine.run_turn(
+                    prompt=prompt, cwd=project_path, model=model, permission_mode=permission_mode,
+                    resume_session_id=resume_sid, api_key=engine_api_key,
+                    on_text=_on_text, on_process=_on_process,
+                )
+            finally:
+                active_procs.pop(proc_key, None)
+
+            if result.session_id:
+                active_sessions[exec_key] = result.session_id
+            if result.error:
+                err_text = f"[Error: {result.error}]"
+                collected.append(err_text)
+                await response.write(f"data: {json.dumps({'type': 'exec_text', 'agent': agent_id, 'text': err_text})}\n\n".encode())
+
+            await response.write(f"data: {json.dumps({'type': 'exec_done', 'agent': agent_id})}\n\n".encode())
+            return "".join(collected)
+
         has_persisted = exec_key in active_sessions
         in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(proc_key)
         use_pool = HAS_AGENT_SDK and _team_pool is not None
+        engine, engine_api_key = _resolve_agent_engine_and_key(agent_id)
+
+        if engine.name != "claude":
+            if not has_persisted:
+                prompt = _build_full_exec_prompt()
+                resume_sid = None
+            else:
+                prompt = f"請繼續完成上述任務。追加說明：\n{agent_task}"
+                resume_sid = active_sessions.get(exec_key)
+            return await _exec_engine_turn(prompt, resume_sid)
 
         if use_pool:
             needs_full_rebuild = not (in_pool_now or has_persisted)
@@ -3372,13 +3550,14 @@ def build_app() -> web.Application:
     import sys
     sys.path.append(str(Path(__file__).parent))
     try:
-        from routes import register_agent_routes, register_skill_routes, register_team_routes
+        from routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes
     except ImportError:
-        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes
+        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes
 
     register_agent_routes(app, cors.add)
     register_skill_routes(app, cors.add)
     register_team_routes(app, cors.add)
+    register_mcp_server_routes(app, cors.add)
 
     async def cleanup_processes(app_ref):
         _log("[cleanup] Shutting down, cleaning up all active processes...")
