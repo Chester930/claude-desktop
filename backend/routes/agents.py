@@ -97,8 +97,12 @@ async def handle_agent_put(request: web.Request) -> web.Response:
     if not f.exists():
         return web.json_response({"error": "not found"}, status=404)
     data = await request.json()
+    if data.get("engine"):
+        from engines.registry import ENGINES
+        if data["engine"] not in ENGINES:
+            return web.json_response({"error": "invalid engine"}, status=400)
     fm = _parse_full_frontmatter(f)
-    for field in ("name", "description", "soul", "skills", "memory", "mcp", "output_memory", "tools"):
+    for field in ("name", "description", "soul", "skills", "memory", "mcp", "output_memory", "tools", "engine"):
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
@@ -112,14 +116,20 @@ async def handle_agent_post(request: web.Request) -> web.Response:
     name = _re.sub(r"[^\w-]", "-", raw).lower().strip("-")
     if not name:
         return web.json_response({"error": "invalid name"}, status=400)
+    engine = data.get("engine", "")
+    if engine:
+        from engines.registry import ENGINES
+        if engine not in ENGINES:
+            return web.json_response({"error": "invalid engine"}, status=400)
     AGENTS_DIR.mkdir(parents=True, exist_ok=True)
     f = AGENTS_DIR / f"{name}.md"
     if f.exists():
         return web.json_response({"error": "already exists"}, status=409)
     desc = data.get("description", "")
+    engine_line = f"engine: {engine}\n" if engine else ""
     f.write_text(
         f"---\nname: {name}\ndescription: {desc}\ntools: Read, Grep, Glob\n"
-        f"soul: \nskills: []\nmemory: []\nmcp: []\noutput_memory: []\n---\n\n## {name}\n\n{desc}\n",
+        f"soul: \nskills: []\nmemory: []\nmcp: []\noutput_memory: []\n{engine_line}---\n\n## {name}\n\n{desc}\n",
         encoding="utf-8"
     )
     return web.json_response({"ok": True, "id": name})
