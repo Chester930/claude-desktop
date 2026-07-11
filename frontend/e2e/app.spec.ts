@@ -47,7 +47,8 @@ test.describe('Claude Desktop — 基本流程', () => {
 
   test('開關設定 modal', async ({ page }) => {
     await page.goto('/');
-    await page.locator('.icon-btn[title*="設定"]').first().click();
+    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-item', { hasText: '設定' }).click();
     await expect(page.locator('.modal-backdrop')).toBeVisible();
     await expect(page.locator('.modal')).toBeVisible();
     await page.keyboard.press('Escape');
@@ -58,7 +59,7 @@ test.describe('Claude Desktop — 基本流程', () => {
     // Skip onboarding overlay (appears at 600ms) so it doesn't block clicks
     await page.addInitScript(() => localStorage.setItem('claude_onboarding_done', '1'));
     await page.goto('/');
-    await page.locator('.tab-bar button', { hasText: 'Skills' }).click();
+    await page.locator('.tab-bar button', { hasText: /Skill/i }).click();
     const searchInput = page.locator('.right-panel-search-input');
     await expect(searchInput).toBeVisible();
     await searchInput.fill('tdd');
@@ -87,7 +88,8 @@ test.describe('Claude Desktop — P3 功能', () => {
 
   test('設定頁包含 Provider 選單', async ({ page }) => {
     await page.goto('/');
-    await page.locator('.icon-btn[title*="設定"]').first().click();
+    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-item', { hasText: '設定' }).click();
     // Provider section header exists
     const headers = page.locator('.modal-section-header');
     const texts = await headers.allTextContents();
@@ -100,7 +102,8 @@ test.describe('Claude Desktop — P3 功能', () => {
 
   test('設定頁包含 Telegram 區塊', async ({ page }) => {
     await page.goto('/');
-    await page.locator('.icon-btn[title*="設定"]').first().click();
+    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-item', { hasText: '設定' }).click();
     const headers = page.locator('.modal-section-header');
     const texts = await headers.allTextContents();
     expect(texts.some(t => t.includes('Telegram'))).toBe(true);
@@ -109,7 +112,8 @@ test.describe('Claude Desktop — P3 功能', () => {
 
   test('設定頁有語言切換選項', async ({ page }) => {
     await page.goto('/');
-    await page.locator('.icon-btn[title*="設定"]').first().click();
+    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-item', { hasText: '設定' }).click();
     const headers = page.locator('.modal-section-header, label');
     const texts = await headers.allTextContents();
     expect(texts.some(t => t.includes('Language') || t.includes('語言'))).toBe(true);
@@ -118,7 +122,8 @@ test.describe('Claude Desktop — P3 功能', () => {
 
   test('設定頁底部有 Debug 診斷按鈕', async ({ page }) => {
     await page.goto('/');
-    await page.locator('.icon-btn[title*="設定"]').first().click();
+    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-item', { hasText: '設定' }).click();
     // The debug dump button has a specific title
     await expect(page.locator('button[title*="下載診斷"]')).toBeVisible();
     await page.keyboard.press('Escape');

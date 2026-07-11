@@ -61,7 +61,7 @@ async def test_agent_run_capture_respects_explicit_permission_mode(monkeypatch):
 
 
 async def test_team_run_post_defaults_permission_mode_to_accept_edits(client, monkeypatch):
-    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd, permission_mode="acceptEdits"):
+    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd, permission_mode="acceptEdits", default_engine=""):
         return f"output-from-{agent_id}"
 
     monkeypatch.setattr(teams_module, "_agent_run_capture", fake_agent_run_capture)

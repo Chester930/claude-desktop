@@ -19,7 +19,7 @@ from pathlib import Path
 from aiohttp import web
 
 # Helpers and DB imports
-from helpers import _team_dict, _write_team_yaml, _agent_dict, safe_kill_process, wrap_cmd
+from helpers import _team_dict, _write_team_yaml, _agent_dict, safe_kill_process
 from database import (
     _memory_dir,
     _team_memory_dir,
@@ -131,11 +131,23 @@ async def _agent_run_capture(
     agent_id: str, prompt: str,
     model: str, cwd: str,
     permission_mode: str = "acceptEdits",
+    default_engine: str = "",
 ) -> str:
+    """
+    可插拔 agent engine：實際呼叫哪個 CLI（Claude / Codex / ...）、怎麼組
+    flags、怎麼解析輸出，全部封裝在 engines/<name>_engine.py 裡（見該套件的
+    docstring）。這裡只負責：組 prompt（agent frontmatter body + soul）、
+    決定要用哪個引擎（agent 自己 frontmatter 宣告的 `engine:` 優先，其次是
+    這個 run 的預設值）、呼叫 engine.run_turn()、把串流文字轉發成既有的
+    SSE step_text 事件、追蹤 process 以供 cancel/timeout 使用。
+    """
+    from engines.registry import resolve_engine_name, get_engine
+
     _, AGENTS_DIR = _dirs()
-    claude_bin, resolve_key = _claude_bin_and_key()
+    _, resolve_key = _claude_bin_and_key()
     agent_file = AGENTS_DIR / f"{agent_id}.md"
     agent_body = ""
+    agent_own_engine = ""
     if _is_safe_id(agent_id) and agent_file.exists():
         try:
             raw_text = agent_file.read_text(encoding="utf-8")
@@ -146,6 +158,10 @@ async def _agent_run_capture(
                 agent_body = raw_text
         except Exception:
             pass
+        try:
+            agent_own_engine = _agent_dict(agent_file).get("engine", "")
+        except Exception:
+            pass
 
     soul = _get_agent_soul(agent_id)
     full_prompt = prompt
@@ -154,75 +170,54 @@ async def _agent_run_capture(
     if soul:
         full_prompt = f"[System Persona]\n{soul}\n\n{full_prompt}"
 
-    cmd = [claude_bin, "-p", full_prompt, "--output-format", "stream-json", "--verbose"]
-    if model and model not in ("sonnet", ""):
-        cmd += ["--model", model]
-    # 健檢修復（發現 2）：headless -p 模式下 stdin 沒有互動核准通道
-    # （已用真實 CLI 驗證：即使 stdin=PIPE，遇到需要核准的工具呼叫也只會在
-    # 3 秒後自動判斷，不會等待/接受 y/n 輸入），team member 原本 100% 無法
-    # 執行任何 Write/Edit/Bash 等需要核准的操作，只能做純文字分析。改成預設
-    # 帶 --permission-mode acceptEdits，讓 team member 真正能協作完成任務；
-    # 已用真實 CLI 驗證 acceptEdits 底下 Write/Bash 都能正常執行（零
-    # permission_denials），Claude Code 自身對敏感路徑（如 .claude/ 設定目
-    # 錄）的硬性保護不受此 flag 影響、依然生效。
-    if permission_mode:
-        cmd += ["--permission-mode", permission_mode]
-
-    env = {**os.environ}
-    api_key = resolve_key()
-    if api_key:
-        env["ANTHROPIC_API_KEY"] = api_key
-
     if _team_runs.get(run_id, {}).get("status") == "cancelled":
         return "[Team Run 已取消]"
 
-    safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
-    output_parts: list[str] = []
-    proc = None
-    try:
-        cmd = wrap_cmd(cmd[0], cmd[1:])
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            stdin=asyncio.subprocess.DEVNULL,
-            cwd=safe_cwd,
-            env=env,
-        )
+    engine = get_engine(resolve_engine_name(agent_own_engine, default_engine))
+
+    async def _on_text(chunk: str) -> None:
+        _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": chunk})
+
+    proc_holder: dict = {}
+
+    def _on_process(proc) -> None:
+        proc_holder["proc"] = proc
         _register_team_proc(run_id, proc)
 
-        async for line in proc.stdout:
-            if _team_runs.get(run_id, {}).get("status") == "cancelled":
-                safe_kill_process(proc)
-                break
+    def _is_cancelled() -> bool:
+        return _team_runs.get(run_id, {}).get("status") == "cancelled"
 
-            raw = line.decode("utf-8", errors="replace").strip()
-            if not raw:
-                continue
-            try:
-                ev = json.loads(raw)
-                chunk = ""
-                if ev.get("type") == "assistant":
-                    for block in ev.get("message", {}).get("content", []):
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            chunk += block["text"]
-                elif ev.get("type") == "text":
-                    chunk = ev.get("text", "")
-                if chunk:
-                    output_parts.append(chunk)
-                    _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": chunk})
-            except json.JSONDecodeError:
-                pass
-        await proc.wait()
-    except Exception as e:
-        err = f"\n[Error running {agent_id}: {e}]\n"
-        output_parts.append(err)
-        _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": err})
+    # resolve_key() 只解析 Anthropic API key（_resolve_api_key()，main.py
+    # 唯一的 key 解析器）。之前這裡不分引擎一律傳進去——如果使用者設定了
+    # Anthropic key、又選了 Codex 引擎，會把 Anthropic key 誤植進
+    # codex_engine.py 的 CODEX_API_KEY 環境變數，蓋掉正常運作的
+    # `codex login` 憑證。只有 engine.name == "claude" 時才適用這把 key；
+    # 其他引擎目前沒有對應的 key 設定欄位，統一傳空字串、讓 CLI 退回自己
+    # 已登入的憑證（這也是目前唯一實測過能正常運作的路徑）。
+    engine_api_key = resolve_key() if engine.name == "claude" else ""
+
+    try:
+        result = await engine.run_turn(
+            prompt=full_prompt,
+            cwd=cwd,
+            model=model,
+            permission_mode=permission_mode,
+            resume_session_id=None,
+            api_key=engine_api_key,
+            on_text=_on_text,
+            on_process=_on_process,
+            is_cancelled=_is_cancelled,
+        )
     finally:
-        if proc is not None:
-            _unregister_team_proc(run_id, proc)
+        if "proc" in proc_holder:
+            _unregister_team_proc(run_id, proc_holder["proc"])
 
-    return "".join(output_parts)
+    if result.error:
+        err = f"\n[Error running {agent_id}: {result.error}]\n"
+        _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": err})
+        return result.output + err
+
+    return result.output
 
 
 def _take_workspace_snapshot(cwd: str) -> dict[str, float]:
@@ -389,6 +384,9 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
     # input_memory/output_memory 讀寫會有 race（讀到的時候上一位可能還沒寫完）。
     mode = run.get("execution_mode", "parallel")
     permission_mode = run.get("permission_mode", "acceptEdits")
+    # 可插拔 agent engine 的 run 層級預設值；個別 agent frontmatter 的
+    # `engine:` 宣告優先於這個值（見 _agent_run_capture／engines/registry.py）。
+    agent_engine_default = run.get("agent_engine", "")
 
     if mode == "consensus" and len(steps) >= 2:
         agent_a = steps[0]["agent"]
@@ -421,7 +419,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         prompt_1_parts.append(f"[任務]\n{task}\n\n請根據任務，產出你的初始設計方案（Initial Draft）。")
         prompt_1 = "\n\n".join(prompt_1_parts)
         
-        draft = await _agent_run_capture(run_id, 0, agent_a, prompt_1, model, cwd, permission_mode)
+        draft = await _agent_run_capture(run_id, 0, agent_a, prompt_1, model, cwd, permission_mode, agent_engine_default)
         steps[0]["output"] = draft
         steps[0]["status"] = "done"
         _tr_emit(run_id, {"type": "step_done", "step": 0})
@@ -444,7 +442,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         )
         prompt_2 = "\n\n".join(prompt_2_parts)
         
-        feedback = await _agent_run_capture(run_id, 1, agent_b, prompt_2, model, cwd, permission_mode)
+        feedback = await _agent_run_capture(run_id, 1, agent_b, prompt_2, model, cwd, permission_mode, agent_engine_default)
         steps[1]["output"] = feedback
         steps[1]["status"] = "done"
         _tr_emit(run_id, {"type": "step_done", "step": 1})
@@ -466,7 +464,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         )
         prompt_3 = "\n\n".join(prompt_3_parts)
         
-        revised = await _agent_run_capture(run_id, 2, agent_a, prompt_3, model, cwd, permission_mode)
+        revised = await _agent_run_capture(run_id, 2, agent_a, prompt_3, model, cwd, permission_mode, agent_engine_default)
         steps[2]["output"] = revised
         steps[2]["status"] = "done"
         _tr_emit(run_id, {"type": "step_done", "step": 2})
@@ -491,7 +489,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
         )
         prompt_4 = "\n\n".join(prompt_4_parts)
         
-        summary = await _agent_run_capture(run_id, 3, leader, prompt_4, model, cwd, permission_mode)
+        summary = await _agent_run_capture(run_id, 3, leader, prompt_4, model, cwd, permission_mode, agent_engine_default)
         steps[3]["output"] = summary
         steps[3]["status"] = "done"
         _tr_emit(run_id, {"type": "step_done", "step": 3})
@@ -569,7 +567,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
             prompt_parts.append(f"---\n## 任務\n\n{task}")
             prompt = "\n\n".join(prompt_parts)
 
-            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd, permission_mode)
+            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd, permission_mode, agent_engine_default)
             step["output"] = output
             step["status"] = "done"
             _tr_emit(run_id, {"type": "step_done", "step": i})
@@ -640,7 +638,7 @@ async def _execute_team_run_core(run_id: str, task: str, model: str, cwd: str) -
 
             prompt = "\n\n".join(prompt_parts)
 
-            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd, permission_mode)
+            output = await _agent_run_capture(run_id, i, agent_id, prompt, model, cwd, permission_mode, agent_engine_default)
             step["output"] = output
             step["status"] = "done"
             prev_output = output
@@ -768,7 +766,16 @@ async def handle_team_delete(request: web.Request) -> web.Response:
 
 # ── Team Run handlers ─────────────────────────────────────────────────────────
 
-_VALID_PERMISSION_MODES = {"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"}
+# 白名單取兩個引擎各自合法值的聯集（見 engines/claude_engine.py、
+# engines/codex_engine.py 的 VALID_PERMISSION_MODES）——同一個 team 可能
+# 混用 Claude/Codex 成員，request 層級的 permission_mode 因此可能是任一邊
+# 的字彙，不能只認 Claude 那組。個別引擎收到不屬於自己字彙的值時，會在
+# run_turn() 內部 fallback 成自己的預設值（見 codex_engine._normalize_sandbox_mode）
+# 而不是報錯，所以這裡的白名單只需要擋掉「兩邊都不認得」的垃圾值。
+from engines.registry import ENGINES as _ENGINES
+_VALID_PERMISSION_MODES = frozenset().union(
+    *(getattr(_e, "VALID_PERMISSION_MODES", frozenset()) for _e in _ENGINES.values())
+)
 
 
 async def handle_team_run_post(request: web.Request) -> web.Response:
@@ -782,6 +789,9 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
     permission_mode = data.get("permission_mode", "acceptEdits")
     if permission_mode not in _VALID_PERMISSION_MODES:
         return web.json_response({"error": "invalid permission_mode"}, status=400)
+    agent_engine = data.get("agent_engine", "")
+    if agent_engine and agent_engine not in _ENGINES:
+        return web.json_response({"error": "invalid agent_engine"}, status=400)
 
     if not task:
         return web.json_response({"error": "task required"}, status=400)
@@ -823,6 +833,9 @@ async def handle_team_run_post(request: web.Request) -> web.Response:
         # Write/Edit/Bash 等操作，而不是被 headless -p 模式無條件自動拒絕。
         # 見 _agent_run_capture 內的說明。
         "permission_mode": permission_mode,
+        # 可插拔 agent engine 的 run 層級預設值（空字串代表沒指定，個別 agent
+        # frontmatter 的 engine: 宣告優先於這個值）。見 engines/registry.py。
+        "agent_engine": agent_engine,
         "steps": [
             {
                 "agent":         m["agent"],

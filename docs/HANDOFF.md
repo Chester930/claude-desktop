@@ -456,3 +456,108 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 **測試覆蓋**：177 個 pytest 測試全過（含 2 個真實呼叫 `claude` CLI 的整合測試）；`tsc --noEmit`/`ng build` 全過；新增 `frontend/e2e/team-run-progress.spec.ts`（Playwright headless Chromium，mock 網路層、不需真實 CLI，驗證發現 6 的修復在真實 DOM 渲染正確）。Team 協作系統這輪從資料模型、執行引擎、權限模型到前端渲染都有實測或自動化測試覆蓋，不再有「只驗證到編譯通過」的修復。
 
 建議下一步：封裝成多環境軟體／支援 Codex 版本現在可以繼續推進——Team 協作的核心執行引擎、權限模型、前端渲染這輪都已經過實測驗證與修復；若要更完整的前端覆蓋，可以考慮把 `frontend/e2e/` 這套 Playwright 基礎設施接進 CI（目前看起來是手動執行）。
+
+## 十二、2026-07-10／07-11 Pluggable Agent Engine（Claude / Codex 可切換架構）— 用真實 CLI 完整驗證
+
+### 背景
+
+使用者最終目標：軟體要能同時支援 Claude Code CLI 與 Codex CLI，而且是**可切換／可混用**的架構（同一個 team 裡允許有些成員用 Claude、有些用 Codex），不是各自獨立的 fork。詳細設計見 `C:\Users\666\.claude\plans\cozy-dancing-dragon.md`（plan mode 產出，已核准）。這輪的目標是：拿到真實已登入的 Codex CLI 帳號後，把 Codex 這一側從「根據官方文件寫的第一版、標註未驗證」升級成跟 Claude 側同等級的「已用真實 CLI 反覆驗證」。
+
+### 已完成的架構（`backend/engines/` package）
+
+- `base.py`：`RunResult(output, session_id, error)`，duck-typing 慣例（不用 ABC），每個 engine module 對外暴露 `name`／`DEFAULT_PERMISSION_MODE`／`VALID_PERMISSION_MODES`／`run_turn()`。
+- `claude_engine.py`：`_agent_run_capture()` 原本邏輯的忠實搬遷，行為不變。
+- `codex_engine.py`：組 `codex exec`／`codex exec resume`，解析 `--json` JSONL 事件。
+- `registry.py`：`resolve_engine_name(frontmatter_engine, request_engine)`，優先序 frontmatter > request > 預設（`"claude"`）。
+- 設定面：agent frontmatter 的 `engine:` 欄位、app 設定裡的「Agent Engine」下拉選單（`frontend/src/app/app.html`、`settings.service.ts`）、`/api/team/run` 的 `agent_engine` 請求欄位。
+
+只動了 Team Run 執行引擎（`_agent_run_capture`）這一條路徑；`_run_hr_agent()`（`routes/agents.py`）跟 `main.py` 的 pooled SDK 路徑刻意留到下一輪（見核准的 plan 文件，範圍排除說明）。
+
+### 用真實 Codex CLI（0.144.1，已登入真實帳號）驗證出的結果
+
+1. **`codex exec` 預設要求在 git repo 裡執行**，不然整個 turn 安靜結束、`output`/`session_id` 都是空字串、不丟例外——非常容易誤判成「成功但沒反應」。修法：無條件加 `--skip-git-repo-check`（Team Run 的 `cwd` 不保證是 git repo）。
+2. **`codex exec resume` 是子指令、且不接受 `--sandbox`/`--cd`**（`codex exec resume --help` 證實），塞了會直接整個失敗。修法：resume 分支只帶 `--json`/`--skip-git-repo-check`（+ 可選 `--model`），跟一般呼叫的 flag 集合分開組。
+3. **關鍵 bug（本輪最嚴重的發現）：Windows 上多行 prompt 當 CLI 引數傳會被 `cmd.exe` 損壞。** `codex` 在 Windows 是 npm `.cmd` shim，既有的 `wrap_cmd()` 會包一層 `cmd /c` 才能執行；但 `cmd.exe` 對「一個引數裡包含換行字元」的處理是壞的。真實 Team Run 的 prompt 一定是多行（agent frontmatter body、memory context、任務描述用 `\n\n` 接起來），實測會被截斷成只剩 `"[Memory Context]"` 這一行，且 Codex 會整個退回互動式人類可讀輸出、完全不是 `--json` 要求的 JSONL。**這個 bug 會讓所有真實 Team Run + Codex 場景回傳空白輸出**，用簡短單行測試 prompt 完全測不出來，只有用真實情境的多行 prompt 端對端測試才踩得到。修法：改用 Codex 官方文件記載的方式——CLI 引數位置填 `"-"`，實際 prompt 透過 `stdin` 傳（`stdin=PIPE` 取代 `stdin=DEVNULL`）。修完後用真實 HTTP 端對端測試（`POST /api/team/run` → SSE stream）確認輸出正確。
+4. **文件沒提到的 item type：`item.type == "error"`**（例如 skills context budget 超過的警告）——不是致命錯誤，turn 後面照樣正常結束，改成跟一般文字一樣用 `[codex: ...]` 包起來透過 `on_text` 送出，不吞掉。
+5. **CLI 層級失敗（例如 resume 收到不支援的 flag）不會有 JSON 事件，只印純文字到 stdout 然後非零結束碼**——原本的解析器對這種情況完全沒反應，回傳看似成功的空白 `RunResult`。修法：process 非零結束碼、且完全沒解析到任何 JSON 事件時，視為失敗。
+6. **錯誤路徑（invalid model name）用真實帳號實測**：`turn.failed` 事件正確被捕捉，`RunResult.error` 帶著 OpenAI API 回傳的完整 400 錯誤內容（`invalid_request_error`）；失敗前出現的非致命 `item.type=="error"` 警告（model metadata fallback、skills budget）也都正確經 `on_text` 送出，沒有被吞掉；`session_id` 即使最後失敗仍保留。**這條路徑不需要任何程式碼修正**，已有的 `turn.failed` 處理邏輯本身就是對的——用一個鎖定這個真實觀察行為的永久回歸測試補上（`test_codex_engine_real_invalid_model_scenario`）。
+7. **Sandbox 等級**：`workspace-write` 已驗證可用。`danger-full-access` 一開始沒測——Claude Code 自己的安全分類器判斷使用者先前的「開放所有權限」授權沒有明確點名這個危險 flag，主動擋下並向使用者說明，沒有嘗試繞過；使用者後續明確授權（「同意測試 danger-full-access」）後才實測。實測結果：在隔離的暫存目錄裡，請 Codex 用 shell 指令寫檔案、再讀回內容，**成功**——這證實了 `danger-full-access` 是目前 Windows 上唯一能讓 Codex 執行 Bash/shell 指令的 sandbox 等級（`workspace-write` 底下 shell 指令會因 `CreateProcessAsUserW failed: 5` 被拒絕，見下方第 8 點），已加上永久回歸測試（`test_codex_engine_passes_through_danger_full_access`）鎖定 `--sandbox` 參數正確原樣傳遞、不會被 `_normalize_sandbox_mode()` 誤判成不合法值退回預設。
+8. **已知限制（Codex CLI 本身的 bug，不是這個 app 的問題）**：Windows 上 `workspace-write` sandbox 允許檔案寫入，但 Shell/Bash 指令執行會失敗（`CreateProcessAsUserW failed: 5 (存取被拒)`）。已經在 Settings 的 Agent Engine 說明文字裡註記提醒使用者。
+9. **混用引擎（發現 4 對應的原始需求）**：同一個 team、`parallel` 執行模式、一個成員 frontmatter 宣告 `engine: codex`、一個宣告 `engine: claude`，兩邊都用真實帳號各自正確路由到對應 CLI（codex 側回覆帶著只有 `codex_engine.py` 會產生的 `[codex: ...]` 提示字樣，claude 側乾淨沒有）。已把這個場景固定成 mock 測試（`tests/test_team_run_mixed_engine.py`）永久保護，不用每次都燒真實額度驗證。
+
+### 前端 parity 檢查（2026-07-11）
+
+- `tsc --noEmit` / `ng build` 全過，`agentEngine` 設定欄位（`AppSettings` 介面、Settings modal 下拉選單、`runTeam()` 帶入 `agent_engine`）編譯正常。
+- 確認 SSE 事件層（`routes/teams.py::_tr_emit()` 送的 `step_start`/`step_text`/`step_done`/`done`）完全跟引擎無關——事件內容只由 `agent_id`／累積的文字／`chunk` 這些一般變數組成，不含任何 Claude 或 Codex 專屬的東西。既有的 `frontend/e2e/team-run-progress.spec.ts`（mock 掉網路層）不需要為了 Codex 額外調整，因為前端從來不知道、也不需要知道是哪個引擎產生的 SSE 事件。
+- 用一支獨立的 Playwright 腳本（非委交進 committed 測試檔）在隔離的 `ng serve --port 4201` + 隔離的 `python scripts/probe...` 後端（8766）上，真的點開 Settings modal、找到新的「Agent Engine」區塊，確認下拉選單有 `claude`/`codex` 兩個選項、預設值是 `claude`、選了 `codex` 之後 `<select>` 的值真的會變成 `codex`（能切回 `claude`）——DOM 層面的真實驗證，不只是程式碼審查。
+- **意外發現一個跟這次功能無關的既有問題**：`frontend/e2e/app.spec.ts` 有 8 個測試全部用 `.icon-btn[title*="設定"]` 這個 locator 找設定按鈕，但目前 `app.html` 裡已經沒有這個元素了——設定按鈕在某次重構後被移到使用者選單（`.umenu-item`，`(click)="openSettings()"`）裡，`app.spec.ts` 沒有跟著更新，導致這 8 個測試現在全部會 timeout 失敗（跟 Codex/pluggable engine 這次的改動完全無關，我沒有動過設定按鈕的 DOM 結構）。這輪沒有修（不在這次任務範圍內），記錄在這裡供下次處理。
+
+### 測試覆蓋（本輪結束時）
+
+- `pytest tests/` 全套 202 個測試全過，含 `tests/test_engine_registry.py`（`resolve_engine_name` 優先序、`ClaudeEngine`/`CodexEngine` 對真實觀察過的 JSONL 事件格式的解析、真實 invalid-model 錯誤情境的永久回歸測試）跟 `tests/test_team_run_mixed_engine.py`（混用引擎路由）。
+- `tsc --noEmit` / `ng build` 全過。
+- Playwright 端對端：既有 `team-run-progress.spec.ts` 這條 SSE 渲染測試跟引擎選擇無關、不需調整；Agent Engine 下拉選單本身用獨立腳本在真實瀏覽器（Chromium）驗證過。
+
+### 建議下一步
+
+- `_run_hr_agent()`（HR 自動組隊）跟 `main.py` 的 pooled SDK 路徑（`handle_chat`/`handle_team_chat`/`handle_team_execute`）目前仍然只支援 Claude，套用同一個 `engines/` 抽象是下一輪的候選項目。
+- Team/Agent 編輯器 UI 目前只能用 frontmatter 手動打 `engine: codex`，還沒有下拉選單——下一輪可以加。
+- `danger-full-access` sandbox 等級已於 2026-07-11 用真實帳號驗證完成（見十二節第 7 點）。`CODEX_API_KEY` env var 認證路徑（這次用的是已登入憑證 `~/.codex/auth.json`，沒有走 env var）仍未實測。
+
+## 十三、2026-07-11 續篇 — `frontend/e2e/app.spec.ts` 修復進度 + 新發現一個真實 pre-existing bug
+
+延續十二節記錄的「`.icon-btn[title*="設定"]` selector 脫節」問題，這次實際動手修復並用真實瀏覽器（Playwright）反覆驗證，過程中意外連帶發現一個 Docker 環境問題跟一個真實、跟這次 Codex 工作完全無關的既有 UI bug。
+
+### Docker 環境曾經整個沒回應（已排除，跟這次改動無關）
+
+跑 e2e 測試時發現使用者本機 `localhost:4200`/`8765`（Docker 跑的 `claude-desktop-frontend-dev`/`claude-desktop-backend-dev` 容器）整個沒回應，連 `docker ps` 都會 hang——判斷是 Docker Desktop 背景服務本身卡住（不是容器掛了，容器程序照樣顯示 running，只是完全不回應）。經使用者同意後重啟 Docker Desktop（`Stop-Process` 全部 docker 相關程序後重新 `Start-Process "Docker Desktop.exe"`），約 5 秒後所有容器依重啟策略自動回復健康狀態，前後端都恢復正常回應。這是環境問題，不是這次任何程式碼改動造成的。
+
+### 已修復並驗證：兩個真的只是選擇器過時的測試
+
+1. **設定按鈕**：`app.html` 已經沒有 `.icon-btn[title*="設定"]` 這個元素了——某次改版把設定入口移進使用者選單（`.umenu-trigger` 按鈕「你 Claude Code 使用者 ⌄」→ 選單裡的 `.umenu-item`「⚙ 設定」）。影響 5 個測試（開關設定 modal、Provider 選單、Telegram 區塊、語言切換選項、Debug 診斷按鈕），全部改成先點使用者選單再點設定項目，已用真實瀏覽器反覆驗證通過。
+2. **Skills 分頁按鈕文字**：`.tab-bar button` 的文字從某個版本的 "Skills" 改成全大寫 "SKILL"（沒有字尾 s），導致 `hasText: 'Skills'` 的子字串比對完全比不中。改成 `hasText: /Skill/i` 後驗證通過。
+
+### 確認為既有環境雜訊、非真實 bug：backend 高負載造成的隨機 flaky
+
+`後端 /api/status 健康檢查`、`後端 /api/profiles 回傳清單`、`設定頁包含 Provider 選單` 這幾個測試在跑「全部一起」時偶爾會隨機挑一兩個 timeout，但單獨或小批次重跑時穩定通過，且每次失敗的是不同測試——判斷是 Playwright 多個 worker 同時打真實的、有大量真實使用資料（`active_sessions: 39`）的 live 後端造成的資源競爭，不是程式碼問題，不需要修。
+
+### 更正（2026-07-11 續）：上面那個「HR 自動組隊流程壞了」的結論是誤判，根本原因是環境太舊，不是程式碼 bug
+
+用同一支診斷腳本（帶 console/network log）指向 `localhost:4200`（Docker 容器）重現時，確實觀察到網路層正常、但畫面完全沒有訊息渲染、輸入框也沒清空。原本以為是真實 regression，但深入追查後發現：
+
+1. **Docker 前端容器（`claude-desktop-frontend-dev`）掛載的是主要 checkout（`D:\Users\666\Desktop\claude-desktop\frontend`），不是這個 worktree**（`docker inspect` 的 `Mounts` 證實）。也就是說整段除錯期間，`localhost:4200` 服務的其實是完全不同的一份原始碼。
+2. 主要 checkout 的本地 `master` 分支落後 `origin/master` **9 個 commit**，剛好完全缺少 PR #5 的全部 8 項修復——包括 `5f23489`，這個 commit 正是十一節「發現 6」用來修「HR 自動組隊沒有進度顯示」問題的那次修復本身！換句話說，`localhost:4200` 這段期間跑的是**發現 6 修復之前**的舊版程式碼，`submitHRTeamRun()`/`_dispatchTeamRun()` 那時候還是壞的（甚至 `activateTeam()`/`openTeamRun()`/`teamRunOpen` 那些已經在最新版被清掉的死碼都還在）。
+3. 額外發現：Docker 容器的檔案監看器（Watchpack）啟動時會噴 `ENOMEM: not enough memory, scandir '/app/src'`，重啟容器後這個錯誤依然會重現——**代表這個容器的 hot-reload 完全失效**，任何原始碼修改都不會自動反映到執行中的頁面，唯一能看到最新效果的方法是手動 `docker restart claude-desktop-frontend-dev` 強迫它整個重新編譯。
+
+改用這個 worktree 自己啟動的隔離 `ng serve --port 4201`（真正跑最新程式碼，不經過 Docker）重跑同一支診斷腳本後，**HR 自動組隊流程完全正常**：輸入框正確清空、`.msg-assistant-group` 正確渲染出 1 則訊息、team run 進度與「執行完成」摘要都正確顯示。證實現在的程式碼（`origin/master` 加上這個分支的乾淨改動）本身完全沒問題，十一節發現 6 的修復也依然有效。
+
+**下一步（環境維護，不是程式碼修復）**：
+- 主要 checkout（`D:\Users\666\Desktop\claude-desktop`）需要 `git pull` 到最新 `origin/master`，才會真的拿到 PR #5 的修復，Docker 服務的 UI 才會是正確的版本。
+- Docker 前端容器的 Watchpack ENOMEM 問題建議另外調查（可能是容器記憶體上限設太低，或是 `/app/src` 底下有異常大量的檔案/inotify watch 超過限制），目前的暫時解法是每次改完前端原始碼要 `docker restart claude-desktop-frontend-dev` 才看得到效果。
+
+### 待使用者決定，未動手（可能是刻意簡化、也可能是意外遺失的功能）
+
+- **Memory 頁籤**：`app.html` 的 `.tab-bar` 現在只有 TEAM/AGENT/SKILL/MCP/Scheduling，沒有 Memory。但 Settings modal 的說明文字（`app.html` 行 2039 附近）仍寫著「以 key-value 形式存在右側 Memory 頁籤」——文件跟實際 UI 不一致。是功能被拿掉了、還是搬到別的地方了，需要使用者確認。
+- **匯出格式下拉選單**：`.export-format-select`（`.md`/`.json`/`.txt` 三選一）在 `app.html` 已經完全找不到，只剩 `app.scss` 裡的死 CSS class。目前 topbar 上只有一個單一的「匯出對話」（⬇）按鈕（`exportChat()`），看起來像是簡化成固定格式匯出，但不確定是否為刻意設計。
+
+## 十四、2026-07-11 續篇二 — 依十二/十三節建議繼續優化與修復
+
+延續十二、十三節列出的待辦，這輪把「建議下一步」清單裡可以做的項目都做完了。
+
+### 已完成
+
+1. **`_run_hr_agent()`（HR 自動組隊派發）遷移到 `engines/` 抽象**：原本寫死呼叫 `claude -p ... --output-format text`，改用 `engines/registry.py`，`POST /api/hr/dispatch` 新增可選 `engine` 欄位，前端 Settings 的 Agent Engine 選擇現在也會套用到 HR 派發本身（不只是派發出來的 team run）。
+2. **修復一個真實 bug：Anthropic API key 誤植進 Codex 環境變數**——`resolve_key()`（`main._resolve_api_key()`）只解析 Anthropic key，但 `routes/teams.py::_agent_run_capture()` 跟 `routes/agents.py::_run_hr_agent()` 之前都不分引擎一律把這把 key 傳給 `engine.run_turn()`。如果使用者設定了 Anthropic key、又選 Codex 引擎，會把 Anthropic key 誤植進 `codex_engine.py` 的 `CODEX_API_KEY` 環境變數，蓋掉正常運作的 `codex login` 憑證。這個 bug 存在於這次 pluggable engine 架構自己的程式碼裡（不是外部相依問題），已修好並用 3 個永久回歸測試鎖定。
+3. **Agent 編輯器 UI 加上「執行引擎」下拉選單**：`engine:` frontmatter 欄位終於可以直接從 UI 設定（跟隨全域設定／Claude／Codex 三選一），不用再手動編輯 frontmatter。已用隔離的 `ng serve`（避開 Docker 的舊程式碼問題）實際驗證下拉選單渲染、選擇、儲存送出的 payload 都正確。
+4. **Team 編輯器刻意沒加類似欄位**：查證後發現目前完全沒有任何 UI 入口能直接「執行」一個已存檔的 Team（`activateTeam()`/`openTeamRun()` 這條路徑在十一節發現 6 已經確認是死碼並移除，唯一能觸發 `/api/team/run` 的只有 HR 自動組隊）。在這個前提下，Team 層級的引擎預設欄位現在加了也不會被任何東西讀取，是無效果的 UI，這次刻意不做，避免重蹈「加了功能但沒有真正的使用路徑」的覆轍。
+5. **`CODEX_API_KEY` env var 認證路徑**：使用者確認目前用 `codex login` 的方式登入，不需要另外設定 API key，這條路徑對目前的實際使用情境不適用，決定不繼續投入時間驗證。Code-level 行為（`codex_engine.py` 正確把 `api_key` 參數設進 `CODEX_API_KEY` 環境變數）已有既有的 mock 測試鎖定，這部分維持現狀。
+
+### 測試覆蓋（這輪結束時）
+
+`pytest tests/` **210 個測試全過**（新增：HR 派發路由到 Codex、HR 派發／Team Run 的 Anthropic key 不外洩到 Codex、Agent PUT/POST 帶合法與不合法 `engine` 值）。`tsc --noEmit`／`ng build` 全過。
+
+### 仍待處理
+
+- `main.py` 的 pooled SDK 路徑（`handle_chat`/`handle_team_chat`/`handle_team_execute`）仍然只支援 Claude——這條路徑用 Anthropic 自家 SDK 做長駐連線，Codex 沒有對應物，維持這輪核准的 plan 排除範圍，暫不處理。
+- PR #6 的 base branch 仍未從 `worktree-cozy-dancing-dragon` 改成 `master`——本機已經 rebase 乾淨（見對話紀錄），但 `git push --force-with-lease` 被使用者的安全 hook 擋下，需要使用者自己執行 push（或調整 hook）才能完成最後這一步。
+- 主要 checkout（`D:\Users\666\Desktop\claude-desktop`）仍然落後 `origin/master`，建議找時間 `git pull`（見十三節）。

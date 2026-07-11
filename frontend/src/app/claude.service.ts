@@ -7,6 +7,7 @@ import { SettingsService } from './settings.service';
 export interface Agent {
   id: string; name: string; description: string;
   soul: string; skills: string[]; memory: string[]; mcp: string[]; output_memory: string[]; tools: string;
+  engine?: string;
 }
 export interface Skill {
   id: string; name: string; description: string; type?: string;
@@ -191,14 +192,15 @@ export class ClaudeService {
     return this.http.delete<{ ok: boolean }>(`${this.api}/teams/${id}`);
   }
 
-  runTeam(teamId: string, task: string, model?: string, cwd?: string, team?: any): Observable<{ ok: boolean; run_id: string }> {
+  runTeam(teamId: string, task: string, model?: string, cwd?: string, team?: any, agentEngine?: string): Observable<{ ok: boolean; run_id: string }> {
     return this.http.post<{ ok: boolean; run_id: string }>(`${this.api}/team/run`, {
       team_id: teamId, task, model: model ?? '', cwd: cwd ?? '', team,
+      agent_engine: agentEngine ?? '',
     });
   }
 
-  dispatchHR(task: string): Observable<any> {
-    return this.http.post<any>(`${this.api}/hr/dispatch`, { task });
+  dispatchHR(task: string, engine?: string): Observable<any> {
+    return this.http.post<any>(`${this.api}/hr/dispatch`, { task, engine: engine ?? '' });
   }
 
   getTeamRun(runId: string): Observable<TeamRun> {

@@ -21,7 +21,7 @@ pytestmark = pytest.mark.asyncio
 async def test_consensus_with_four_members_produces_exactly_four_correct_steps(monkeypatch):
     call_log = []
 
-    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd, permission_mode="acceptEdits"):
+    async def fake_agent_run_capture(run_id, step_idx, agent_id, prompt, model, cwd, permission_mode="acceptEdits", default_engine=""):
         call_log.append((step_idx, agent_id))
         return f"output-{step_idx}-{agent_id}"
 

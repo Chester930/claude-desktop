@@ -1773,7 +1773,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const s = this.souls().find(x => x.id === soulId);
       this.agentEditorSoulContent = s ? s.content : '';
     } else {
-      this.agentEditorData.set({ name: '', description: '', soul: '', skills: [], memory: [], mcp: [], output_memory: [], tools: 'Read, Grep, Glob' });
+      this.agentEditorData.set({ name: '', description: '', soul: '', skills: [], memory: [], mcp: [], output_memory: [], tools: 'Read, Grep, Glob', engine: '' });
       this.agentEditorIsNew.set(true);
       this.agentEditorSoulContent = '';
     }
@@ -2174,7 +2174,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (tabId === this.activeChatId()) this.shouldScroll = true;
     this.tabStreaming(tabId, true);
 
-    this.claude.runTeam(teamId, task, model, cwd, inlineTeam).subscribe({
+    const agentEngine = this.settings.get().agentEngine;
+    this.claude.runTeam(teamId, task, model, cwd, inlineTeam, agentEngine).subscribe({
       next: (r) => {
         const runId = r.run_id;
         this.tabMessages(tabId, msgs => {
@@ -2252,7 +2253,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.hrLoading.set(true);
     this.hrError.set(null);
 
-    this.claude.dispatchHR(task).subscribe({
+    const agentEngine = this.settings.get().agentEngine;
+    this.claude.dispatchHR(task, agentEngine).subscribe({
       next: (plan) => {
         this.hrLoading.set(false);
         if (plan.error) {
