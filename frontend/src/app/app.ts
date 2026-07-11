@@ -1773,7 +1773,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       const s = this.souls().find(x => x.id === soulId);
       this.agentEditorSoulContent = s ? s.content : '';
     } else {
-      this.agentEditorData.set({ name: '', description: '', soul: '', skills: [], memory: [], mcp: [], output_memory: [], tools: 'Read, Grep, Glob' });
+      this.agentEditorData.set({ name: '', description: '', soul: '', skills: [], memory: [], mcp: [], output_memory: [], tools: 'Read, Grep, Glob', engine: '' });
       this.agentEditorIsNew.set(true);
       this.agentEditorSoulContent = '';
     }

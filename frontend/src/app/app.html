@@ -2188,6 +2188,16 @@
               (input)="agentEditorData.set({...agentEditorData(), description: $any($event.target).value})"
               placeholder="這個 Agent 的用途"></textarea>
           </label>
+          <label class="editor-label">執行引擎
+            <select class="editor-input"
+              [value]="agentEditorData().engine || ''"
+              (change)="agentEditorData.set({...agentEditorData(), engine: $any($event.target).value})">
+              <option value="">（跟隨全域設定）</option>
+              <option value="claude">Claude Code CLI</option>
+              <option value="codex">OpenAI Codex CLI</option>
+            </select>
+            <small>留空則使用 Settings 裡的 Agent Engine 全域預設；個別 Agent 可在此覆寫，讓同一個 team 混用不同引擎。</small>
+          </label>
           <label class="editor-label">靈魂人格設定 (Soul Persona)
             <textarea class="memory-editor"
               [(ngModel)]="agentEditorSoulContent"

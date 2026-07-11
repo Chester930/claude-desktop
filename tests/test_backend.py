@@ -203,6 +203,42 @@ class TestAgentCRUD:
         body2 = await resp2.json()
         assert "skill-a" in body2.get("skills", [])
 
+    async def test_update_agent_engine(self, client, sample_agent):
+        """2026-07-11：Agent 編輯器 UI 加了引擎選擇下拉選單，engine 欄位要
+        能透過 PUT /api/agents/{id} 寫進 frontmatter。"""
+        resp = await client.put(
+            "/api/agents/test-agent",
+            json={"engine": "codex"},
+        )
+        assert resp.status == 200
+        resp2 = await client.get("/api/agents/test-agent")
+        body2 = await resp2.json()
+        assert body2.get("engine") == "codex"
+
+    async def test_update_agent_invalid_engine_400(self, client, sample_agent):
+        resp = await client.put(
+            "/api/agents/test-agent",
+            json={"engine": "not-a-real-engine"},
+        )
+        assert resp.status == 400
+
+    async def test_create_agent_with_engine(self, client, tmp_claude_home):
+        import main
+        main.AGENTS_DIR = tmp_claude_home / "agents"
+        payload = {"name": "codex-only-agent", "description": "用 Codex 執行", "engine": "codex"}
+        resp = await client.post("/api/agents", json=payload)
+        assert resp.status == 200
+        resp2 = await client.get("/api/agents/codex-only-agent")
+        body2 = await resp2.json()
+        assert body2.get("engine") == "codex"
+
+    async def test_create_agent_with_invalid_engine_400(self, client, tmp_claude_home):
+        import main
+        main.AGENTS_DIR = tmp_claude_home / "agents"
+        payload = {"name": "bad-engine-agent", "description": "d", "engine": "not-a-real-engine"}
+        resp = await client.post("/api/agents", json=payload)
+        assert resp.status == 400
+
     async def test_delete_agent(self, client, tmp_claude_home):
         import main
         main.AGENTS_DIR = tmp_claude_home / "agents"
