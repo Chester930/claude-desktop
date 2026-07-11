@@ -1,9 +1,10 @@
 """
 engines/codex_engine.py — OpenAI Codex CLI 的 AgentEngine 實作。
 
-2026-07-10 更新：已用真實 `codex` CLI（0.144.1，真實登入帳號）驗證過一輪
-（`scripts/probe_codex_cli.py`），下面「已驗證」段落是實測結果；沒有標記
-「已驗證」的細節（主要是 resume 子指令底下 flags 的實際行為）還沒測過。
+2026-07-10／07-11 更新：已用真實 `codex` CLI（0.144.1，真實登入帳號）反覆
+驗證過（`scripts/probe_codex_cli.py`、真實 Team Run 端對端測試、混用引擎
+測試、錯誤路徑測試、sandbox 等級測試），下面「已驗證」段落是實測結果；
+完整過程見 `docs/HANDOFF.md` 十二節。
 
 已驗證（真實 CLI 輸出，非猜測）：
 - `codex exec` 預設**要求在 git repo 裡執行**，不然會印
@@ -22,27 +23,34 @@ engines/codex_engine.py — OpenAI Codex CLI 的 AgentEngine 實作。
   回覆、`turn.completed` 正常結束），所以不當作 `RunResult.error`，改成
   跟一般文字一樣透過 `on_text` 送出（用 `[codex: ...]` 包起來），避免這類
   非致命訊息被靜默吃掉。
-- `stdin=asyncio.subprocess.DEVNULL`（已經這樣做）搭配一個位置參數形式的
-  prompt 沒有任何卡住的問題；CLI 本身會印一行「Reading additional input
-  from stdin...」的說明訊息，純粹是資訊性文字，不影響執行。
 - Windows 上 `codex` 是 npm `.cmd` shim（`where codex` 會看到
   `codex.cmd`），沒有套用既有的 `wrap_cmd()`（helpers.py）的話
   `asyncio.create_subprocess_exec` 會直接 `FileNotFoundError`（這裡本來
   就有呼叫 `wrap_cmd`，這點原本就是對的，不是這次修的）。
+- **Prompt 一律透過 stdin 傳（`stdin=PIPE`，CLI 引數位置填 `"-"`）**，不是
+  當 CLI 引數傳——Windows 上 `wrap_cmd()` 會包一層 `cmd /c`，`cmd.exe` 對
+  「引數裡包含換行字元」的處理是壞的，多行 prompt（真實 Team Run 一定是
+  多行）當引數傳會被截斷/損壞，甚至讓 Codex 整個退回互動式人類可讀輸出、
+  不是 `--json` 要求的 JSONL。改用官方文件記載的 stdin 方式後完全修復，
+  已用真實端對端 Team Run 測試驗證過。
+- `codex exec resume <SESSION_ID> "-"` 已驗證是**子指令**（不是 flag），
+  且**不接受** `--sandbox`/`--cd`（`codex exec resume --help` 證實，塞了
+  會直接整個失敗）；`--json`/`--skip-git-repo-check`/`--model` 這些則可以
+  照樣加，程式碼已依此分開組 flag 集合。
+- **Sandbox 等級**：`workspace-write` 已驗證可用（Write 正常，但 Windows
+  上 Bash/shell 指令會失敗，`CreateProcessAsUserW failed: 5 (存取被拒)`
+  ——這是 Codex CLI 本身在 Windows 上的已知限制，不是這個 app 的問題）。
+  **`danger-full-access` 已驗證可用**：同樣情境下改用這個等級，Bash/shell
+  指令可以正常執行（實測請 Codex 用 shell 指令寫檔案、再讀回內容，成功），
+  代表 Windows 上如果需要 Codex 執行 Bash 指令，`danger-full-access` 是
+  目前唯一能繞過該限制的做法（使用上要謹慎，這個等級完全沒有沙盒限制）。
+- 混用引擎（同一個 team 裡部分成員 `engine: claude`、部分 `engine: codex`）
+  已用真實帳號驗證過各自正確路由到對應 CLI。
+- 錯誤路徑（`turn.failed`，例如不存在的 model 名稱）已驗證：`RunResult.error`
+  正確帶出完整 API 錯誤內容，失敗前的非致命 `item.type=="error"` 警告跟
+  `session_id` 都正確保留，不需要額外處理。
 
 尚未驗證（文件記載，還沒實測）：
-- Session resume 是**子指令**、不是 flag：
-  `codex exec resume --last "..."` 或 `codex exec resume <SESSION_ID> "..."`
-  （`SESSION_ID` 格式是 UUID，來自 `thread.started` 的 `thread_id`）。
-  resume 子指令底下 `--json`/`--sandbox`/`--model`/`--cd`/
-  `--skip-git-repo-check` 這些 flag 能不能照樣加、還是會被忽略／繼承原
-  session 設定——這裡先假設可以照樣加，`scripts/probe_codex_cli.py
-  --test-resume` 可以驗證，還沒實際跑過這個選項。
-- 官方文件說 `codex exec` 不會暫停等待互動核准，唯一的安全控制是
-  `--sandbox` 等級，`workspace-write` 對應 Claude 那邊選的 `acceptEdits`
-  ——這次實測任務很單純（純文字回覆），沒有真的觸發需要核准的操作
-  （Write/Bash），這部分的核准行為本身還沒有像 Claude `acceptEdits` 那樣
-  做過正面驗證。
 - 認證：`CODEX_API_KEY=<key>` 環境變數，只在 `codex exec` 模式生效——這次
   實測用的是已經 `codex login` 過的憑證（`~/.codex/auth.json`），沒有走
   這個 env var 路徑，這部分還沒驗證過。

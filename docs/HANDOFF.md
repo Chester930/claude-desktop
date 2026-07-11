@@ -481,7 +481,7 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 4. **文件沒提到的 item type：`item.type == "error"`**（例如 skills context budget 超過的警告）——不是致命錯誤，turn 後面照樣正常結束，改成跟一般文字一樣用 `[codex: ...]` 包起來透過 `on_text` 送出，不吞掉。
 5. **CLI 層級失敗（例如 resume 收到不支援的 flag）不會有 JSON 事件，只印純文字到 stdout 然後非零結束碼**——原本的解析器對這種情況完全沒反應，回傳看似成功的空白 `RunResult`。修法：process 非零結束碼、且完全沒解析到任何 JSON 事件時，視為失敗。
 6. **錯誤路徑（invalid model name）用真實帳號實測**：`turn.failed` 事件正確被捕捉，`RunResult.error` 帶著 OpenAI API 回傳的完整 400 錯誤內容（`invalid_request_error`）；失敗前出現的非致命 `item.type=="error"` 警告（model metadata fallback、skills budget）也都正確經 `on_text` 送出，沒有被吞掉；`session_id` 即使最後失敗仍保留。**這條路徑不需要任何程式碼修正**，已有的 `turn.failed` 處理邏輯本身就是對的——用一個鎖定這個真實觀察行為的永久回歸測試補上（`test_codex_engine_real_invalid_model_scenario`）。
-7. **Sandbox 等級**：`workspace-write` 已驗證可用。`danger-full-access` 這次沒測——Claude Code 自己的安全分類器判斷使用者先前的「開放所有權限」授權沒有明確點名這個危險 flag，主動擋下並向使用者說明，沒有嘗試繞過。之後需要驗證的話要使用者明確點名這個 flag 才能過。
+7. **Sandbox 等級**：`workspace-write` 已驗證可用。`danger-full-access` 一開始沒測——Claude Code 自己的安全分類器判斷使用者先前的「開放所有權限」授權沒有明確點名這個危險 flag，主動擋下並向使用者說明，沒有嘗試繞過；使用者後續明確授權（「同意測試 danger-full-access」）後才實測。實測結果：在隔離的暫存目錄裡，請 Codex 用 shell 指令寫檔案、再讀回內容，**成功**——這證實了 `danger-full-access` 是目前 Windows 上唯一能讓 Codex 執行 Bash/shell 指令的 sandbox 等級（`workspace-write` 底下 shell 指令會因 `CreateProcessAsUserW failed: 5` 被拒絕，見下方第 8 點），已加上永久回歸測試（`test_codex_engine_passes_through_danger_full_access`）鎖定 `--sandbox` 參數正確原樣傳遞、不會被 `_normalize_sandbox_mode()` 誤判成不合法值退回預設。
 8. **已知限制（Codex CLI 本身的 bug，不是這個 app 的問題）**：Windows 上 `workspace-write` sandbox 允許檔案寫入，但 Shell/Bash 指令執行會失敗（`CreateProcessAsUserW failed: 5 (存取被拒)`）。已經在 Settings 的 Agent Engine 說明文字裡註記提醒使用者。
 9. **混用引擎（發現 4 對應的原始需求）**：同一個 team、`parallel` 執行模式、一個成員 frontmatter 宣告 `engine: codex`、一個宣告 `engine: claude`，兩邊都用真實帳號各自正確路由到對應 CLI（codex 側回覆帶著只有 `codex_engine.py` 會產生的 `[codex: ...]` 提示字樣，claude 側乾淨沒有）。已把這個場景固定成 mock 測試（`tests/test_team_run_mixed_engine.py`）永久保護，不用每次都燒真實額度驗證。
 
@@ -502,7 +502,7 @@ data: {"type": "error", "text": "name 'all_members_list' is not defined"}
 
 - `_run_hr_agent()`（HR 自動組隊）跟 `main.py` 的 pooled SDK 路徑（`handle_chat`/`handle_team_chat`/`handle_team_execute`）目前仍然只支援 Claude，套用同一個 `engines/` 抽象是下一輪的候選項目。
 - Team/Agent 編輯器 UI 目前只能用 frontmatter 手動打 `engine: codex`，還沒有下拉選單——下一輪可以加。
-- `danger-full-access` sandbox 等級、以及 `CODEX_API_KEY` env var 認證路徑（這次用的是已登入憑證 `~/.codex/auth.json`，沒有走 env var）仍未實測，需要使用者明確授權後再驗證。
+- `danger-full-access` sandbox 等級已於 2026-07-11 用真實帳號驗證完成（見十二節第 7 點）。`CODEX_API_KEY` env var 認證路徑（這次用的是已登入憑證 `~/.codex/auth.json`，沒有走 env var）仍未實測。
 
 ## 十三、2026-07-11 續篇 — `frontend/e2e/app.spec.ts` 修復進度 + 新發現一個真實 pre-existing bug
 

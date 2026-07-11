@@ -440,6 +440,29 @@ async def test_codex_engine_normalizes_unknown_sandbox_value_to_default(monkeypa
     assert cmd[cmd.index("--sandbox") + 1] == codex_engine.DEFAULT_PERMISSION_MODE == "workspace-write"
 
 
+async def test_codex_engine_passes_through_danger_full_access(monkeypatch):
+    """2026-07-11：用真實已登入帳號實測過 danger-full-access——這是目前
+    Windows 上唯一能讓 Codex 執行 Bash/shell 指令的 sandbox 等級（
+    workspace-write 底下 shell 指令會因 CreateProcessAsUserW 被拒絕失敗，
+    見 codex_engine.py 檔頭），所以 --sandbox 要原樣把它傳給 CLI、不能被
+    _normalize_sandbox_mode() 誤判成不合法值而退回預設。"""
+    captured = {}
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        captured["args"] = args
+        return _FakeProc([])
+
+    monkeypatch.setattr(codex_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    await codex_engine.run_turn(
+        prompt="hi", cwd="/tmp", model="", permission_mode="danger-full-access",
+        resume_session_id=None, api_key="", on_text=lambda c: None,
+    )
+
+    cmd = captured["args"]
+    assert cmd[cmd.index("--sandbox") + 1] == "danger-full-access"
+
+
 async def test_codex_engine_sets_codex_api_key_env_var(monkeypatch):
     captured = {}
 
