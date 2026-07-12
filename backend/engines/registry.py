@@ -27,5 +27,20 @@ def resolve_engine_name(frontmatter_engine: str, request_engine: str) -> str:
     return DEFAULT_ENGINE_NAME
 
 
+def resolve_engine_name_gated(frontmatter_engine: str, request_engine: str, mode: str) -> str:
+    """疊加在 resolve_engine_name() 之上的「模式鎖定」層。mode 是
+    database.get_engine_mode() 的回傳值（已正規化成 'claude'/'codex'/'both'
+    三選一）：
+    - 'claude' / 'codex'：直接回傳該值，frontmatter_engine／request_engine
+      完全不看——這是刻意的行為收斂，不是優先序調整。鎖定生效時，agent
+      自己的 engine: 宣告在執行期是死的，即使 UI 還讓人看到它。
+    - 'both'：原封不動 delegate 給 resolve_engine_name()，行為與這次改動
+      之前完全相同。
+    """
+    if mode in ("claude", "codex"):
+        return mode
+    return resolve_engine_name(frontmatter_engine, request_engine)
+
+
 def get_engine(engine_name: str):
     return ENGINES.get(engine_name, ENGINES[DEFAULT_ENGINE_NAME])

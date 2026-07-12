@@ -142,6 +142,17 @@ def _load_config() -> dict:
 def _save_config(cfg: dict) -> None:
     _safe_write_text(CONFIG_FILE, json.dumps(cfg, ensure_ascii=False, indent=2))
 
+_VALID_ENGINE_MODES = frozenset({"claude", "codex", "both"})
+
+def get_engine_mode() -> str:
+    """權威值，決定 agent 自己的 engine: frontmatter 覆寫在執行期是否生效：
+    'claude'/'codex' 表示鎖定單一引擎（agent 覆寫完全被忽略）；'both'（含缺值/
+    未知值）表示維持既有行為，agent frontmatter 照舊優先於全域預設。
+    預設 'both'——今天 3 個引擎解析呼叫點的實際行為就是「agent 覆寫無條件
+    生效」，等於現狀已經是 'both' 語意，改成別的預設值會是真正的行為倒退。"""
+    mode = _load_config().get("engineMode", "both")
+    return mode if mode in _VALID_ENGINE_MODES else "both"
+
 # ── SQLite session index ──────────────────────────────────────────────────────
 _INDEX_DB = CLAUDE_HOME / "claude-desktop-index.db"
 

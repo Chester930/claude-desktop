@@ -228,3 +228,68 @@ async def test_apply_availability_fallback_neither_available_raises(monkeypatch)
     monkeypatch.setattr(availability, "get_status", _neither_available)
     with pytest.raises(availability.NoEngineAvailableError):
         await availability.apply_availability_fallback("claude")
+
+
+# ── apply_availability_fallback(allowed=...) — 2026-07-12 引擎範圍鎖定 ──────
+# allowed 預設是兩個引擎都算候選（上面 3 個既有測試都沒傳這個參數，驗證過
+# 零修改仍然綠燈）。這裡驗證鎖定模式：即使被排除的引擎其實可用，也絕對
+# 不能被拿來墊背——否則「只用 Claude」就只是軟性偏好，不是真正的硬限制。
+
+async def test_apply_availability_fallback_locked_does_not_fall_over_to_disallowed(monkeypatch):
+    async def _only_codex_available(force=False):
+        return {
+            "claude": {"installed": False, "loggedIn": False, "available": False, "reason": "not_installed"},
+            "codex": {"installed": True, "loggedIn": True, "available": True, "reason": ""},
+        }
+
+    monkeypatch.setattr(availability, "get_status", _only_codex_available)
+    with pytest.raises(availability.NoEngineAvailableError) as exc_info:
+        await availability.apply_availability_fallback("claude", allowed=frozenset({"claude"}))
+    # 鎖定模式的錯誤訊息要明確講「已鎖定」，不能跟「兩邊都不可用」的通用
+    # 訊息長得一樣——使用者才知道問題是「鎖錯引擎」還是「兩邊都真的沒裝」。
+    assert "鎖定" in str(exc_info.value)
+    assert "Claude" in str(exc_info.value)
+
+
+async def test_apply_availability_fallback_locked_codex_does_not_fall_over_to_claude(monkeypatch):
+    async def _only_claude_available(force=False):
+        return {
+            "claude": {"installed": True, "loggedIn": True, "available": True, "reason": ""},
+            "codex": {"installed": False, "loggedIn": False, "available": False, "reason": "not_installed"},
+        }
+
+    monkeypatch.setattr(availability, "get_status", _only_claude_available)
+    with pytest.raises(availability.NoEngineAvailableError) as exc_info:
+        await availability.apply_availability_fallback("codex", allowed=frozenset({"codex"}))
+    assert "鎖定" in str(exc_info.value)
+    assert "Codex" in str(exc_info.value)
+
+
+async def test_apply_availability_fallback_locked_and_available_is_noop(monkeypatch):
+    async def _both_available(force=False):
+        return {
+            "claude": {"installed": True, "loggedIn": True, "available": True, "reason": ""},
+            "codex": {"installed": True, "loggedIn": True, "available": True, "reason": ""},
+        }
+
+    monkeypatch.setattr(availability, "get_status", _both_available)
+    name, notice = await availability.apply_availability_fallback("claude", allowed=frozenset({"claude"}))
+    assert name == "claude"
+    assert notice is None
+
+
+async def test_apply_availability_fallback_neither_available_message_unaffected_by_default_allowed(monkeypatch):
+    """allowed 用預設值（兩邊都候選）時，「兩邊都不可用」的訊息要維持原本
+    的通用文字，不要被鎖定模式的訊息覆蓋掉——這條測試釘住預設路徑的既有
+    行為完全沒被這次改動影響。"""
+    async def _neither_available(force=False):
+        return {
+            "claude": {"installed": False, "loggedIn": False, "available": False, "reason": "not_installed"},
+            "codex": {"installed": True, "loggedIn": False, "available": False, "reason": "not_logged_in"},
+        }
+
+    monkeypatch.setattr(availability, "get_status", _neither_available)
+    with pytest.raises(availability.NoEngineAvailableError) as exc_info:
+        await availability.apply_availability_fallback("claude")
+    assert "都無法使用" in str(exc_info.value)
+    assert "鎖定" not in str(exc_info.value)

@@ -154,14 +154,17 @@ async def _run_hr_agent(task: str, engine_name: str = "") -> dict:
     routes/teams.py::_agent_run_capture() 改走 engines/ 抽象，讓 HR 派發
     也能選 Codex 執行（例如使用者的 Claude 額度用盡、想改用 Codex 做組隊
     規劃）。"""
-    from engines.registry import get_engine, resolve_engine_name
+    from database import get_engine_mode
+    from engines.registry import get_engine, resolve_engine_name_gated
     from engines.availability import apply_availability_fallback, NoEngineAvailableError
 
     AGENTS_DIR, _ = _dirs()
     _, resolve_key = _claude_bin_and_key()
-    preferred_name = resolve_engine_name("", engine_name)
+    mode = get_engine_mode()
+    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset({"claude", "codex"})
+    preferred_name = resolve_engine_name_gated("", engine_name, mode)
     try:
-        final_name, engine_notice = await apply_availability_fallback(preferred_name)
+        final_name, engine_notice = await apply_availability_fallback(preferred_name, allowed)
     except NoEngineAvailableError as e:
         return {"error": f"HR dispatch failed: {e}"}
     engine = get_engine(final_name)

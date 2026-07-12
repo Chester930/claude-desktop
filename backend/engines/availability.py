@@ -138,19 +138,39 @@ def _format_notice(preferred: str, fallback: str, reason: str) -> str:
             f"{f'（{why}）' if why else ''}，已自動切換為 {_LABEL[fallback]}。]")
 
 
-async def apply_availability_fallback(preferred_name: str):
-    """preferred_name 是 registry.resolve_engine_name() 已經算出來的結果（純優先序，
-    這裡完全不碰）。回傳 (final_engine_name, notice_text|None)。
+_ALL_ENGINES = frozenset({"claude", "codex"})
+
+
+async def apply_availability_fallback(preferred_name: str, allowed: "frozenset[str]" = _ALL_ENGINES):
+    """preferred_name 是 registry.resolve_engine_name()／resolve_engine_name_gated()
+    已經算出來的結果（純優先序，這裡完全不碰）。回傳 (final_engine_name, notice_text|None)。
     preferred 可用時 notice 必為 None、final==preferred——跟這次改動之前行為
-    完全一樣，不影響任何現有已驗證路徑。兩邊都不可用時丟 NoEngineAvailableError。"""
+    完全一樣，不影響任何現有已驗證路徑。
+
+    allowed 預設是兩個引擎都算候選——跟這次加鎖定模式之前的行為完全一樣，
+    既有呼叫點跟既有測試不用改一行。鎖定模式的呼叫點會傳
+    allowed=frozenset({mode})，讓另一個引擎即使可用，也不會被拿來墊背——
+    這是「只用 Claude」要成為硬限制而非軟性偏好的關鍵：不然使用者鎖定了
+    範圍，結果系統還是在背後偷偷切去另一個引擎，等於鎖定形同虛設。"""
     status = await get_status()
-    if status.get(preferred_name, {}).get("available"):
+    if preferred_name in allowed and status.get(preferred_name, {}).get("available"):
         return preferred_name, None
 
     other = "codex" if preferred_name == "claude" else "claude"
-    if status.get(other, {}).get("available"):
+    if other in allowed and status.get(other, {}).get("available"):
         reason = status.get(preferred_name, {}).get("reason", "")
         return other, _format_notice(preferred_name, other, reason)
+
+    if allowed != _ALL_ENGINES:
+        reason = status.get(preferred_name, {}).get("reason", "")
+        why = _REASON_LABEL.get(reason, reason)
+        raise NoEngineAvailableError(
+            f"已鎖定僅使用 {_LABEL.get(preferred_name, preferred_name)}"
+            f"（Settings → Agent Engine），但目前無法使用"
+            f"{f'（{why}）' if why else ''}。請安裝並登入 "
+            f"{_LABEL.get(preferred_name, preferred_name)}，或到 Settings 把執行引擎"
+            f"範圍改為「兩者都開放」以允許自動切換到其他引擎。"
+        )
 
     raise NoEngineAvailableError(
         "Claude Code 與 OpenAI Codex 目前都無法使用（未安裝或未登入），"

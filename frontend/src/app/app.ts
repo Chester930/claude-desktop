@@ -2913,6 +2913,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       if (!this.settingsForm.claudeHome && c.claudeHome) {
         this.settingsForm.claudeHome = c.claudeHome;
       }
+      const mode = c.engineMode ?? 'both';
+      this.settingsForm.engineMode = mode;
+      this.engineMode.set(mode);
     });
     // 從 Electron 讀取真實的 login item 狀態
     const eAPI = (window as any).electronAPI;
@@ -2931,7 +2934,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       projectDir: this.settingsForm.projectDir,
       apiKeyCmd: this.settingsForm.apiKeyCmd,
       claudeHome: this.settingsForm.claudeHome,
+      engineMode: this.settingsForm.engineMode,
     }).subscribe({
+      next: () => this.engineMode.set(this.settingsForm.engineMode),
       error: (e) => this.showToast(`後端設定儲存失敗: ${e.message ?? e}`, 'error'),
     });
     // 同步 Electron login item
@@ -2944,6 +2949,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   ngOnInit() {
     this.reload();
+    // 執行引擎範圍是後端權威值（database.get_engine_mode()），不是純本地
+    // localStorage 值——啟動時就先讀一次，這樣 Agent 編輯器不用自己另外
+    // 打一次 /api/config 才能判斷目前是否鎖定。
+    this.claude.getConfig().subscribe({
+      next: c => this.engineMode.set(c.engineMode ?? 'both'),
+      error: () => {},
+    });
     this._healthTimer = setInterval(() => {
       this.claude.getStatus().subscribe({
         next: () => {
@@ -4042,6 +4054,12 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // 腳本化的用量查詢管道）────────────────────────────────────────────────
   engineStatus = signal<Record<string, EngineAvailability>>({});
 
+  // 執行引擎範圍（後端權威，database.get_engine_mode()）——'claude'/'codex'
+  // 時鎖定單一引擎，agent 自己的 engine: 覆寫在執行期完全不生效；'both'
+  // 時維持既有行為。啟動時在 ngOnInit() 填一次，openSettings() 開啟時會
+  // 再刷新一次。
+  engineMode = signal<'claude' | 'codex' | 'both'>('both');
+
   private readonly ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code CLI', codex: 'OpenAI Codex CLI' };
   private readonly ENGINE_REASON_LABEL: Record<string, string> = {
     not_installed: '未安裝', not_logged_in: '未登入',
@@ -4053,6 +4071,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       next: status => {
         this.engineStatus.set(status);
         this._autoCorrectGlobalEngine(status);
+        this._warnIfLockedEngineUnavailable(status);
       },
       error: () => {},   // 拿不到狀態就保持現狀（既有 select 行為不變），不擋住 UI
     });
@@ -4081,6 +4100,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.showToast(
       `全域執行引擎「${this.ENGINE_LABEL[current]}」目前無法使用，已自動切換為「${this.ENGINE_LABEL[other]}」。`,
       'info', 4000,
+    );
+  }
+
+  private _warnIfLockedEngineUnavailable(status: Record<string, EngineAvailability>) {
+    const mode = this.engineMode();
+    if (mode !== 'claude' && mode !== 'codex') return;   // 'both' 沒有鎖定，不用管
+    if (status[mode]?.available !== false) return;
+    // 刻意不自動切換範圍——使用者鎖定範圍是刻意的硬限制，默默幫他改回
+    // 「兩者都開放」等於把限制取消掉，只提示、讓使用者自己去 Settings 處理。
+    this.showToast(
+      `已鎖定僅使用「${this.ENGINE_LABEL[mode]}」，但目前無法使用，請至 Settings 安裝／登入，或切換為「兩者都開放」。`,
+      'error', 5000,
     );
   }
 

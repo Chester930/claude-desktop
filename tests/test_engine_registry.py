@@ -14,7 +14,7 @@ import json
 import pytest
 
 from engines import claude_engine, codex_engine
-from engines.registry import resolve_engine_name, get_engine, ENGINES, DEFAULT_ENGINE_NAME
+from engines.registry import resolve_engine_name, resolve_engine_name_gated, get_engine, ENGINES, DEFAULT_ENGINE_NAME
 
 pytestmark = pytest.mark.asyncio
 
@@ -85,6 +85,44 @@ class TestResolveEngineName:
 
     def test_get_engine_returns_requested_module(self):
         assert get_engine("codex") is codex_engine
+
+
+# ── registry.resolve_engine_name_gated ──────────────────────────────────────
+# 2026-07-12：Settings 新增「執行引擎範圍」鎖定（database.get_engine_mode()）。
+# 鎖定成 'claude'/'codex' 時，agent frontmatter／request 層級的值完全不看，
+# 直接收斂成鎖定的那個值——這是行為收斂，不是優先序調整。mode='both' 時必須
+# 是對 resolve_engine_name() 100% 忠實的 passthrough，用同一組既有測試案例
+# 參數化重跑一次來證明這件事，不是憑印象宣稱。
+
+class TestResolveEngineNameGated:
+    pytestmark = []
+
+    def test_locked_claude_ignores_frontmatter_and_request(self):
+        assert resolve_engine_name_gated("codex", "codex", "claude") == "claude"
+
+    def test_locked_codex_ignores_frontmatter_and_request(self):
+        assert resolve_engine_name_gated("claude", "claude", "codex") == "codex"
+
+    def test_locked_claude_with_nothing_specified_still_claude(self):
+        assert resolve_engine_name_gated("", "", "claude") == "claude"
+
+    @pytest.mark.parametrize("frontmatter,request_engine,expected", [
+        ("", "", DEFAULT_ENGINE_NAME),
+        ("codex", "claude", "codex"),
+        ("", "codex", "codex"),
+        ("not-a-real-engine", "codex", "codex"),
+        ("bogus", "also-bogus", DEFAULT_ENGINE_NAME),
+    ])
+    def test_mode_both_delegates_identically_to_resolve_engine_name(self, frontmatter, request_engine, expected):
+        """跟 TestResolveEngineName 用同一組案例，證明 mode='both' 是真正的
+        pass-through，不是巧合地算出一樣的結果。"""
+        assert resolve_engine_name_gated(frontmatter, request_engine, "both") == expected
+        assert resolve_engine_name_gated(frontmatter, request_engine, "both") == resolve_engine_name(frontmatter, request_engine)
+
+    def test_unknown_mode_value_treated_as_both(self):
+        """get_engine_mode() 自己已經正規化過，理論上不會把非法值傳進來，但
+        這個函式本身也要 fail safe——未知 mode 值不應該意外鎖死某個引擎。"""
+        assert resolve_engine_name_gated("codex", "", "not-a-real-mode") == "codex"
 
 
 # ── ClaudeEngine.run_turn ────────────────────────────────────────────────────

@@ -146,7 +146,8 @@ async def _agent_run_capture(
     這個 run 的預設值）、呼叫 engine.run_turn()、把串流文字轉發成既有的
     SSE step_text 事件、追蹤 process 以供 cancel/timeout 使用。
     """
-    from engines.registry import resolve_engine_name, get_engine
+    from database import get_engine_mode
+    from engines.registry import resolve_engine_name_gated, get_engine
     from engines.availability import apply_availability_fallback, NoEngineAvailableError
 
     _, AGENTS_DIR = _dirs()
@@ -190,9 +191,11 @@ async def _agent_run_capture(
     if _team_runs.get(run_id, {}).get("status") == "cancelled":
         return "[Team Run 已取消]"
 
-    preferred_name = resolve_engine_name(agent_own_engine, default_engine)
+    mode = get_engine_mode()
+    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset({"claude", "codex"})
+    preferred_name = resolve_engine_name_gated(agent_own_engine, default_engine, mode)
     try:
-        final_name, engine_notice = await apply_availability_fallback(preferred_name)
+        final_name, engine_notice = await apply_availability_fallback(preferred_name, allowed)
     except NoEngineAvailableError as e:
         err = f"\n[Error running {agent_id}: {e}]\n"
         _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": err})
