@@ -380,11 +380,11 @@ export class ClaudeService {
     return this.http.post<{ output: string }>(`${this.api}/cli`, { args }).pipe(map(r => r.output));
   }
 
-  getConfig(): Observable<{ projectDir: string; slug?: string }> {
-    return this.http.get<{ projectDir: string; slug?: string }>(`${this.api}/config`);
+  getConfig(): Observable<{ projectDir: string; slug?: string; engineMode?: 'claude' | 'codex' | 'both' }> {
+    return this.http.get<{ projectDir: string; slug?: string; engineMode?: 'claude' | 'codex' | 'both' }>(`${this.api}/config`);
   }
 
-  setConfig(cfg: { projectDir?: string; apiKeyCmd?: string; claudeHome?: string }): Observable<{ ok: boolean; slug: string }> {
+  setConfig(cfg: { projectDir?: string; apiKeyCmd?: string; claudeHome?: string; engineMode?: 'claude' | 'codex' | 'both' }): Observable<{ ok: boolean; slug: string }> {
     return this.http.put<{ ok: boolean; slug: string }>(`${this.api}/config`, cfg);
   }
 

@@ -231,13 +231,21 @@ async def _resolve_agent_engine_and_key(agent_id: str):
     補上這個缺口用的共用邏輯，避免三處各自重複實作。沒有 agent_id（沒有
     activated agent）時自然解析成預設引擎 "claude"，維持既有行為不變。
 
-    resolve_engine_name() 算出來的偏好引擎，還會再疊加一層
+    resolve_engine_name_gated() 算出來的偏好引擎，還會再疊加一層
     apply_availability_fallback()（engines/availability.py）：偏好引擎
     現在真的可用就直接通過（notice 為 None，行為跟這次改動之前完全一樣）；
     不可用就切到另一個可用的引擎並回傳一句可以直接顯示給使用者的提示；
     兩個都不可用會丟出 NoEngineAvailableError，呼叫端要自行處理。
+
+    這裡是 Settings 的「執行引擎範圍」鎖定（database.get_engine_mode()）
+    第一次真正生效的地方——這三個進入點原本完全沒有任何限制邏輯，agent
+    自己的 engine: 宣告無條件生效；鎖定成 'claude'／'codex' 時，
+    resolve_engine_name_gated() 會直接收斂成那個值，agent_own_engine
+    完全不看，apply_availability_fallback() 也不會偷偷切去被鎖定排除的
+    那個引擎墊背。
     """
-    from engines.registry import resolve_engine_name, get_engine
+    from database import get_engine_mode
+    from engines.registry import resolve_engine_name_gated, get_engine
     from engines.availability import apply_availability_fallback
 
     agent_own_engine = ""
@@ -248,8 +256,10 @@ async def _resolve_agent_engine_and_key(agent_id: str):
                 agent_own_engine = _agent_dict(agent_file).get("engine", "")
             except Exception:
                 pass
-    preferred_name = resolve_engine_name(agent_own_engine, "")
-    final_name, notice = await apply_availability_fallback(preferred_name)
+    mode = get_engine_mode()
+    allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset({"claude", "codex"})
+    preferred_name = resolve_engine_name_gated(agent_own_engine, "", mode)
+    final_name, notice = await apply_availability_fallback(preferred_name, allowed)
     engine = get_engine(final_name)
     engine_api_key = _resolve_api_key() if engine.name == "claude" else ""
     return engine, engine_api_key, notice
@@ -3323,6 +3333,7 @@ async def handle_config_get(request: web.Request) -> web.Response:
     cfg = _load_config()
     cfg.setdefault("projectDir", "")
     cfg.setdefault("claudeHome", "")
+    cfg.setdefault("engineMode", "both")
     cfg["_resolvedClaudeHome"] = str(CLAUDE_HOME)   # read-only info for UI
     # 健檢第二輪修復：這是驗證 LINE webhook 簽章的 HMAC secret，外洩等於能
     # 偽造合法 webhook 請求繞過簽章驗證。前端 settings 表單目前不會讀回這個
@@ -3341,6 +3352,11 @@ async def handle_config_put(request: web.Request) -> web.Response:
         cfg["apiKeyCmd"] = data["apiKeyCmd"].strip()
     if "claudeHome" in data:
         cfg["claudeHome"] = data["claudeHome"].strip()
+    if "engineMode" in data:
+        mode = data["engineMode"]
+        if mode not in ("claude", "codex", "both"):
+            return web.json_response({"error": "invalid engineMode"}, status=400)
+        cfg["engineMode"] = mode
     _save_config(cfg)
     # Re-resolve CLAUDE_HOME in case claudeHome changed
     CLAUDE_HOME  = _resolve_claude_home()

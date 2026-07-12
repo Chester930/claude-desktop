@@ -672,6 +672,33 @@ class TestConfigAndSchedules:
         body = await resp.json()
         assert body["ok"] is True
 
+    # ── engineMode（2026-07-12 引擎範圍鎖定）─────────────────────────────
+    async def test_config_get_defaults_engineMode_to_both(self, client, tmp_path):
+        import main
+        main.CONFIG_FILE = tmp_path / "claude-desktop-config.json"
+        resp = await client.get("/api/config")
+        body = await resp.json()
+        assert body["engineMode"] == "both"
+
+    async def test_config_put_engineMode_rejects_invalid_value(self, client, tmp_path):
+        import main
+        main.CONFIG_FILE = tmp_path / "claude-desktop-config.json"
+        resp = await client.put("/api/config", json={"engineMode": "not-a-real-mode"})
+        assert resp.status == 400
+
+    async def test_config_put_engineMode_round_trip(self, client, tmp_path):
+        import main
+        main.CONFIG_FILE = tmp_path / "claude-desktop-config.json"
+        put_resp = await client.put("/api/config", json={"engineMode": "claude"})
+        assert put_resp.status == 200
+
+        get_resp = await client.get("/api/config")
+        body = await get_resp.json()
+        assert body["engineMode"] == "claude"
+
+        from database import get_engine_mode
+        assert get_engine_mode() == "claude"
+
     async def test_schedules_get(self, client):
         resp = await client.get("/api/schedules")
         assert resp.status == 200

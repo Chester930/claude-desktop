@@ -25,10 +25,18 @@ export interface AppSettings {
   providerApiUrl: string;
   providerApiKey: string;
   providerModel: string;
-  // Team Run 等協作功能實際執行任務用的 CLI 引擎（見 backend/engines/）。
-  // 個別 agent 可以在自己的 frontmatter 用 engine: 覆寫，這裡只是沒指定
-  // 時的預設值。Codex 這邊尚未用真實 CLI 驗證過。
+  // 2026-07-12：「執行引擎範圍」鎖定新增後，這個欄位語意窄化成「範圍選
+  // 『兩者都開放』時，沒有 agent 自行指定／沒有 request 層級覆寫時的預設
+  // 引擎」——回答的是「兩者都開放時偏好哪個」，不是「允許哪些」。「允許
+  // 哪些」是後端權威的 engineMode（見下方 engineMode 欄位／
+  // backend/database.py::get_engine_mode()），範圍鎖定成只用一種時，這裡
+  // 的值跟 agent frontmatter 的 engine: 一樣完全不生效。
   agentEngine: 'claude' | 'codex';
+  // 執行引擎範圍（後端權威來源，這裡只是本地表單暫存/快取，實際生效與否
+  // 以 backend/database.py::get_engine_mode() 為準）：'claude'/'codex' 鎖定
+  // 只用單一引擎，agent 自己的 engine: 覆寫在執行期完全不生效；'both' 才
+  // 會照舊看 agent frontmatter／上面的 agentEngine 預設值。
+  engineMode: 'claude' | 'codex' | 'both';
   // #19 i18n
   lang: 'zh' | 'en';
   // 開機自動啟動
@@ -61,6 +69,7 @@ const DEFAULTS: AppSettings = {
   providerApiKey: '',
   providerModel: '',
   agentEngine: 'claude',
+  engineMode: 'both',
   lang: 'zh',
   openAtLogin: false,
 };
