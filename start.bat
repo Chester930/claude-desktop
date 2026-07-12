@@ -1,5 +1,5 @@
 @echo off
-echo Starting Claude Desktop...
+echo Starting Agent Desktop...
 
 :: Parse flags
 set DEV_MODE=0
@@ -51,7 +51,7 @@ if "%DOCKER_MODE%"=="1" (
   :: Wait for backend to be healthy
   echo Waiting for backend...
   :wait_backend
-  docker inspect --format="{{.State.Health.Status}}" claude-desktop-backend-dev 2>nul | findstr /i "healthy" >nul
+  docker inspect --format="{{.State.Health.Status}}" agent-desktop-backend-dev 2>nul | findstr /i "healthy" >nul
   if errorlevel 1 ( timeout /t 2 /nobreak >nul & goto wait_backend )
 
   echo.
@@ -66,7 +66,7 @@ if "%DOCKER_MODE%"=="1" (
 
 :: ── Dev mode ──────────────────────────────────────────────────────────────────
 if "%DEV_MODE%"=="1" (
-  start "Claude Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
+  start "Agent Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
   echo Starting Angular dev server with HMR...
   timeout /t 2 /nobreak >nul
   start "Angular Dev" cmd /k "cd /d %~dp0frontend && npm run start"
@@ -80,7 +80,7 @@ if "%DEV_MODE%"=="1" (
 )
 
 :: ── Default mode (local backend only) ─────────────────────────────────────────
-start "Claude Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
+start "Agent Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
 echo.
 echo Backend:  http://localhost:8765
 echo.

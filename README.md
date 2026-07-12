@@ -1,6 +1,6 @@
-# Claude 桌面版
+# Agent 桌面版
 
-> Claude Code 的圖形介面 —— 在 Electron 視窗裡使用 Claude，保留完整 CLI 能力。
+> Claude Code CLI／Codex CLI 共用的圖形介面 —— 在 Electron 視窗裡使用可切換的 Agent 執行引擎，保留完整 CLI 能力。
 
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F)
@@ -35,8 +35,8 @@
 
 ## 這是什麼
 
-Claude 桌面版是一個桌面 GUI，讓你能以視窗化介面使用 Claude Code CLI。  
-底層仍呼叫你本機已安裝的 `claude` 指令，所有對話、記憶、agents、skills、MCP 設定都從你的 `~/.claude/` 目錄讀取。
+Agent 桌面版是一個桌面 GUI，讓你能以視窗化介面使用 Claude Code CLI，並且可以切換成 Codex CLI 作為執行引擎（也能在同一個 team 裡混用兩種引擎）。  
+底層仍呼叫你本機已安裝的 `claude`／`codex` 指令，所有對話、記憶、agents、skills、MCP 設定都從你的 `~/.claude/` 目錄讀取。
 
 **主要特性：**
 
@@ -128,9 +128,9 @@ LINE 用戶    ──→ ngrok 公開網址 ──→ 後端 (LINE Bot)
 
 | 容器 | 功能 | Port |
 |------|------|------|
-| `claude-desktop-backend` | Python API + Claude CLI | 8765 |
-| `claude-desktop-frontend` | nginx 靜態前端 | 4200 |
-| `claude-desktop-ngrok` | LINE Webhook 公開網址 | 4040 |
+| `agent-desktop-backend` | Python API + Claude／Codex CLI | 8765 |
+| `agent-desktop-frontend` | nginx 靜態前端 | 4200 |
+| `agent-desktop-ngrok` | LINE Webhook 公開網址 | 4040 |
 
 ### LINE Bot 設定（選用）
 
@@ -279,10 +279,10 @@ docker compose restart frontend
 
 > 最簡單，不需要任何開發工具，但功能受限於發布版本。
 
-1. 前往 [Releases](../../releases/latest) 下載最新的 `Claude-桌面版-Setup-x.x.x.exe`
+1. 前往 [Releases](../../releases/latest) 下載最新的 `Agent-桌面版-Setup-x.x.x.exe`
 2. 執行安裝程式
-3. 安裝 Claude CLI：`npm install -g @anthropic-ai/claude-code && claude login`
-4. 啟動「Claude 桌面版」
+3. 安裝 Claude CLI：`npm install -g @anthropic-ai/claude-code && claude login`（想用 Codex 引擎的話另外裝 `npm install -g @openai/codex && codex login`）
+4. 啟動「Agent 桌面版」
 
 ---
 

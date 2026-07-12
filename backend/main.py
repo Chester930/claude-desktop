@@ -3793,7 +3793,7 @@ if __name__ == "__main__":
     # 部署下的容器需要接受同網段其他容器（frontend/ngrok）連線，透過
     # BACKEND_BIND_HOST=0.0.0.0（docker-compose.yml 已設定）明確選擇放寬。
     bind_host = os.environ.get("BACKEND_BIND_HOST", "127.0.0.1")
-    print(f"Claude Desktop backend starting on http://{bind_host}:8765")
+    print(f"Agent Desktop backend starting on http://{bind_host}:8765")
     app = build_app()
     app.on_startup.append(on_startup)
     web.run_app(app, host=bind_host, port=8765)

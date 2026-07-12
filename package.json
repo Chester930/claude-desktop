@@ -1,7 +1,7 @@
 {
-  "name": "claude-desktop",
+  "name": "agent-desktop",
   "version": "1.0.0",
-  "description": "Claude Desktop - 由 Claude Code 驅動",
+  "description": "Agent Desktop - 可切換 Claude Code／Codex CLI 的多引擎 Agent 協作平台",
   "main": "electron/main.js",
   "scripts": {
     "start":           "electron . --dev",
@@ -29,8 +29,8 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId":       "com.claudedesktop.app",
-    "productName": "Claude 桌面版",
+    "appId":       "com.agentdesktop.app",
+    "productName": "Agent 桌面版",
     "directories": { "output": "dist-electron" },
     "asar": false,
     "files": [
@@ -49,7 +49,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut":             true,
       "createStartMenuShortcut":           true,
-      "shortcutName":                      "Claude 桌面版"
+      "shortcutName":                      "Agent 桌面版"
     },
     "mac": {
       "icon": "electron/icon.icns",
@@ -70,7 +70,7 @@
     "publish": {
       "provider": "github",
       "owner":    "Chester930",
-      "repo":     "claude-desktop"
+      "repo":     "agent-desktop"
     }
   }
 }
