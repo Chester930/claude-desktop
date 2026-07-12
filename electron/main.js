@@ -5,7 +5,7 @@ const { spawn, execFileSync } = require('child_process');
 
 // dev 模式用獨立 userData，避免和其他 Electron app 搶快取目錄
 if (!app.isPackaged) {
-  app.setPath('userData', path.join(app.getPath('appData'), 'claude-desktop-dev'));
+  app.setPath('userData', path.join(app.getPath('appData'), 'agent-desktop-dev'));
 }
 
 let mainWindow;
@@ -108,7 +108,7 @@ async function waitForBackend(port = 8765, maxMs = 20000) {
 function showNoClaudePage() {
   mainWindow = new BrowserWindow({
     width: 640, height: 420,
-    title: 'Claude 桌面版 — 設定引導',
+    title: 'Agent 桌面版 — 設定引導',
     backgroundColor: '#07070a',
     autoHideMenuBar: true,
     resizable: false,
@@ -117,7 +117,7 @@ function showNoClaudePage() {
 
   const html = `<!doctype html><html><head>
   <meta charset="utf-8">
-  <title>Claude 桌面版 — 設定引導</title>
+  <title>Agent 桌面版 — 設定引導</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -341,7 +341,7 @@ function createWindow() {
   const preloadPath = path.join(__dirname, 'preload.js');
   mainWindow = new BrowserWindow({
     width: 1280, height: 800, minWidth: 800, minHeight: 600,
-    title: 'Claude 桌面版',
+    title: 'Agent 桌面版',
     backgroundColor: '#0d0d0d',
     webPreferences: { nodeIntegration: false, contextIsolation: true, preload: preloadPath },
     autoHideMenuBar: true,
@@ -404,7 +404,7 @@ function createTray() {
   }
 
   tray = new Tray(icon);
-  tray.setToolTip('Claude 桌面版');
+  tray.setToolTip('Agent 桌面版');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '顯示視窗', click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { type: 'separator' },

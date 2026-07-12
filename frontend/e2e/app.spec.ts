@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('Claude Desktop — 基本流程', () => {
+test.describe('Agent Desktop — 基本流程', () => {
 
   test('主畫面正常載入', async ({ page }) => {
     await page.goto('/');
-    await expect(page).toHaveTitle(/Claude 桌面版/);
+    await expect(page).toHaveTitle(/Agent 桌面版/);
     await expect(page.locator('.sidebar')).toBeVisible();
     await expect(page.locator('.chat-input')).toBeVisible();
   });
@@ -84,7 +84,7 @@ test.describe('Claude Desktop — 基本流程', () => {
 
 // ── P3 新增測試 ─────────────────────────────────────────────────────────────
 
-test.describe('Claude Desktop — P3 功能', () => {
+test.describe('Agent Desktop — P3 功能', () => {
 
   test('設定頁包含 Provider 選單', async ({ page }) => {
     await page.goto('/');
@@ -188,7 +188,7 @@ test.describe('Claude Desktop — P3 功能', () => {
 
 // ── P4 / Teams / Memory 新增測試 ─────────────────────────────────────────────
 
-test.describe('Claude Desktop — Phase 4 HR Agent & Teams', () => {
+test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
 
   test.beforeEach(async ({ page }) => {
     // 跳過 onboarding 避免遮蓋 UI

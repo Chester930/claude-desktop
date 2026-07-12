@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Desktop — macOS / Linux launcher
+# Agent Desktop — macOS / Linux launcher
 # Usage: ./start.sh [--dev]
 set -euo pipefail
 
