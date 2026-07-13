@@ -150,29 +150,40 @@
     <button class="icon-btn" (click)="sidebarOpen.set(!sidebarOpen())" title="切換側欄" aria-label="切換側欄">☰</button>
     <span class="logo">⚡ Agent 桌面版</span>
 
-    @if (usage()) {
-      <div class="usage-panel">
-        <div class="usage-slot" [class.low]="(100 - usage()!.fiveHour) <= 20">
-          <span class="usage-scope">5h</span>
-          <div class="usage-progress-bar" [title]="'剩餘 ' + (100 - usage()!.fiveHour) + '%'">
-            <div class="usage-progress-fill" [style.width.%]="100 - usage()!.fiveHour"></div>
+    @if (usage() || codexUsage()?.primary) {
+      <div class="usage-panel" (click)="usageOpen.set(true)" title="開啟用量監控">
+        @if (usage()) {
+          <span class="usage-provider claude">Claude</span>
+          <div class="usage-slot" [class.low]="(100 - usage()!.fiveHour) <= 20">
+            <span class="usage-scope">5h</span>
+            <div class="usage-progress-bar" [title]="'Claude 剩餘 ' + (100 - usage()!.fiveHour) + '%'">
+              <div class="usage-progress-fill" [style.width.%]="100 - usage()!.fiveHour"></div>
+            </div>
+            <span class="usage-remain">{{ 100 - usage()!.fiveHour }}%</span>
           </div>
-          <span class="usage-remain">{{ 100 - usage()!.fiveHour }}%</span>
-          @if (usage()!.fiveHourReset) {
-            <span class="usage-reset-time">↺ {{ usage()!.fiveHourReset | date:'HH:mm' }}</span>
-          }
-        </div>
-        <span class="usage-divider">|</span>
-        <div class="usage-slot" [class.low]="(100 - usage()!.sevenDay) <= 20">
-          <span class="usage-scope">7d</span>
-          <div class="usage-progress-bar" [title]="'剩餘 ' + (100 - usage()!.sevenDay) + '%'">
-            <div class="usage-progress-fill" [style.width.%]="100 - usage()!.sevenDay"></div>
+          <span class="usage-divider">|</span>
+          <div class="usage-slot" [class.low]="(100 - usage()!.sevenDay) <= 20">
+            <span class="usage-scope">7d</span>
+            <div class="usage-progress-bar" [title]="'Claude 剩餘 ' + (100 - usage()!.sevenDay) + '%'">
+              <div class="usage-progress-fill" [style.width.%]="100 - usage()!.sevenDay"></div>
+            </div>
+            <span class="usage-remain">{{ 100 - usage()!.sevenDay }}%</span>
           </div>
-          <span class="usage-remain">{{ 100 - usage()!.sevenDay }}%</span>
-          @if (usage()!.sevenDayReset) {
-            <span class="usage-reset-time">↺ {{ usage()!.sevenDayReset | date:'M/d HH:mm' }}</span>
-          }
-        </div>
+        }
+        @if (usage() && codexUsage()?.primary) { <span class="usage-divider provider-divider">│</span> }
+        @if (codexUsage()?.primary; as codexPrimary) {
+          <span class="usage-provider codex">Codex</span>
+          <div class="usage-slot" [class.low]="codexPrimary.remainingPercent <= 20">
+            <span class="usage-scope">{{ codexWindowLabel(codexPrimary.windowDurationMins) }}</span>
+            <div class="usage-progress-bar" [title]="'Codex 剩餘 ' + codexPrimary.remainingPercent + '%'">
+              <div class="usage-progress-fill codex" [style.width.%]="codexPrimary.remainingPercent"></div>
+            </div>
+            <span class="usage-remain">{{ codexPrimary.remainingPercent }}%</span>
+            @if (codexResetMillis(codexPrimary.resetsAt); as resetAt) {
+              <span class="usage-reset-time">↺ {{ resetAt | date:'M/d HH:mm' }}</span>
+            }
+          </div>
+        }
       </div>
     }
 
@@ -712,6 +723,37 @@
         <div class="usage-modal-header">
           <span class="usage-modal-title">📊 用量監控</span>
           <button class="usage-modal-close" (click)="usageOpen.set(false)">✕</button>
+        </div>
+
+        <!-- Claude / Codex 訂閱剩餘用量 -->
+        <div class="usage-section">
+          <div class="usage-section-title">訂閱剩餘用量</div>
+          @if (usage()) {
+            <div class="usage-provider-card">
+              <div class="usage-provider-card-title"><span class="usage-provider claude">Claude</span><span>Claude Code</span></div>
+              <div class="usage-row"><span class="usage-label">5 小時</span><span class="usage-val usage-total">剩餘 {{ 100 - usage()!.fiveHour }}%</span></div>
+              <div class="usage-row"><span class="usage-label">7 天</span><span class="usage-val usage-total">剩餘 {{ 100 - usage()!.sevenDay }}%</span></div>
+            </div>
+          }
+          @if (codexUsage(); as codex) {
+            <div class="usage-provider-card">
+              <div class="usage-provider-card-title"><span class="usage-provider codex">Codex</span><span>{{ (codex.planType || 'unknown').toUpperCase() }}</span></div>
+              @if (codex.primary; as primary) {
+                <div class="usage-row"><span class="usage-label">{{ codexWindowLabel(primary.windowDurationMins) }} 週期</span><span class="usage-val usage-total">剩餘 {{ primary.remainingPercent }}%</span></div>
+                @if (codexResetMillis(primary.resetsAt); as resetAt) {
+                  <div class="usage-row"><span class="usage-label">重置時間</span><span class="usage-val">{{ resetAt | date:'yyyy/M/d HH:mm' }}</span></div>
+                }
+              }
+              <div class="usage-row"><span class="usage-label">Credits</span><span class="usage-val">{{ codex.credits.unlimited ? '無上限' : (codex.credits.balance || '0') }}</span></div>
+              <div class="usage-row"><span class="usage-label">完整重置</span><span class="usage-val">{{ codex.resetCreditsAvailable }} 次</span></div>
+              @if (codex.tokenUsage.lifetimeTokens !== null) {
+                <div class="usage-row"><span class="usage-label">Lifetime tokens</span><span class="usage-val">{{ codex.tokenUsage.lifetimeTokens | number }}</span></div>
+              }
+            </div>
+          }
+          @if (!usage() && !codexUsage()) {
+            <div class="usage-empty">無法取得 Claude 或 Codex 用量</div>
+          }
         </div>
 
         <!-- 本次對話 Token -->
@@ -1340,6 +1382,24 @@
             @if (rightPanelFilter()) {
               <button class="right-panel-search-clear" (click)="rightPanelFilter.set('')">✕</button>
             }
+          </div>
+        }
+
+        @if (['agents','skills'].includes(activeTab())) {
+          <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #2b2b2b;background:#171717;font-size:11px;">
+            <span style="color:#888;flex:1;min-width:0;">
+              Claude 共用來源 → Codex
+              @if (resourceSyncStatus()) {
+                · 待同步 <strong style="color:#d4a853">{{ resourceSyncPending() }}</strong>
+                @if (resourceSyncConflicts()) {
+                  · <span style="color:#e07070" [title]="'同名但內容不同，為避免覆蓋已略過'">衝突 {{ resourceSyncConflicts() }}</span>
+                }
+              }
+            </span>
+            <button class="btn-secondary btn-xs" (click)="loadResourceSyncStatus()" [disabled]="resourceSyncLoading()" title="重新比較 Claude 與 Codex 原生資源">檢查</button>
+            <button class="btn-secondary btn-xs" (click)="syncResourcesToCodex()" [disabled]="resourceSyncLoading() || resourceSyncPending() === 0" title="建立或更新由 Agent Desktop 管理的 Codex Agent／Skill 副本">
+              {{ resourceSyncLoading() ? '同步中…' : '同步到 Codex' }}
+            </button>
           </div>
         }
 

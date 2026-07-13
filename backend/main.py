@@ -137,6 +137,7 @@ pending_permissions: dict[str, dict] = {}                    # request_id -> dic
 
 # Usage API 快取（5 分鐘）
 _usage_cache: dict = {"data": None, "expires": 0.0}
+_codex_usage_cache: dict = {"data": None, "expires": 0.0}
 
 # Local MCP config (Docker metadata, compose paths, etc.)
 
@@ -2049,6 +2050,24 @@ async def handle_usage(request: web.Request) -> web.Response:
     return web.json_response(data)
 
 
+async def handle_codex_usage(request: web.Request) -> web.Response:
+    """GET /api/usage/codex — query Codex app-server, cached for 5 minutes."""
+    now = time.time()
+    if _codex_usage_cache["data"] and now < _codex_usage_cache["expires"]:
+        return web.json_response(_codex_usage_cache["data"])
+
+    from codex_usage import CodexUsageError, fetch_codex_usage
+
+    try:
+        data = await fetch_codex_usage(CODEX_BIN)
+    except CodexUsageError as exc:
+        return web.json_response({"error": str(exc)}, status=502)
+
+    _codex_usage_cache["data"] = data
+    _codex_usage_cache["expires"] = now + 300
+    return web.json_response(data)
+
+
 
 
 async def handle_memory(request: web.Request) -> web.Response:
@@ -3592,6 +3611,7 @@ def build_app() -> web.Application:
         ("GET",    "/api/team/run/{run_id}/artifacts", handle_run_artifacts),
         ("POST",   "/api/mcp/rpc",         handle_mcp_rpc),
         ("GET",    "/api/usage",           handle_usage),
+        ("GET",    "/api/usage/codex",     handle_codex_usage),
         ("POST",   "/api/chat",           handle_chat),
         ("POST",   "/api/team/chat",      handle_team_chat),
         ("POST",   "/api/team/execute",   handle_team_execute),
@@ -3676,15 +3696,16 @@ def build_app() -> web.Application:
     import sys
     sys.path.append(str(Path(__file__).parent))
     try:
-        from routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes, register_engine_routes
+        from routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes, register_engine_routes, register_resource_sync_routes
     except ImportError:
-        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes, register_engine_routes
+        from backend.routes import register_agent_routes, register_skill_routes, register_team_routes, register_mcp_server_routes, register_engine_routes, register_resource_sync_routes
 
     register_agent_routes(app, cors.add)
     register_skill_routes(app, cors.add)
     register_team_routes(app, cors.add)
     register_mcp_server_routes(app, cors.add)
     register_engine_routes(app, cors.add)
+    register_resource_sync_routes(app, cors.add)
 
     async def cleanup_processes(app_ref):
         _log("[cleanup] Shutting down, cleaning up all active processes...")

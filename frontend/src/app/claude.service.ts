@@ -41,6 +41,49 @@ export interface EngineAvailability {
   reason: '' | 'not_installed' | 'not_logged_in' | 'check_timeout' | 'unexpected_output';
 }
 
+export interface ResourceSyncGroupStatus {
+  synced: string[];
+  missing_in_codex: string[];
+  outdated: string[];
+  conflicts: string[];
+  codex_only: string[];
+}
+export interface ResourceSyncStatus {
+  agents: ResourceSyncGroupStatus;
+  skills: ResourceSyncGroupStatus;
+}
+export interface ResourceSyncResult {
+  agents: { created: string[]; updated: string[]; conflicts: string[] };
+  skills: { created: string[]; updated: string[]; conflicts: string[] };
+  dry_run: boolean;
+  status: ResourceSyncStatus;
+}
+
+export interface CodexUsageWindow {
+  usedPercent: number;
+  remainingPercent: number;
+  windowDurationMins: number | null;
+  resetsAt: number | null;
+}
+export interface CodexUsage {
+  available: boolean;
+  planType: string | null;
+  primary: CodexUsageWindow | null;
+  secondary: CodexUsageWindow | null;
+  credits: { hasCredits: boolean; unlimited: boolean; balance: string | null };
+  individualLimit: { limit: string; used: string; remainingPercent: number; resetsAt: number } | null;
+  rateLimitReachedType: string | null;
+  resetCreditsAvailable: number;
+  tokenUsage: {
+    lifetimeTokens: number | null;
+    peakDailyTokens: number | null;
+    longestRunningTurnSec: number | null;
+    currentStreakDays: number | null;
+    longestStreakDays: number | null;
+    dailyUsageBuckets: { startDate: string; tokens: number }[];
+  };
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool' | 'error' | 'system';
   text: string;
@@ -143,6 +186,13 @@ export class ClaudeService {
   }
   deleteMcpServer(name: string): Observable<{ ok: boolean; synced: { claude: boolean; codex: boolean } }> {
     return this.http.delete<{ ok: boolean; synced: { claude: boolean; codex: boolean } }>(`${this.api}/mcp-servers/${name}`);
+  }
+
+  getResourceSyncStatus(): Observable<ResourceSyncStatus> {
+    return this.http.get<ResourceSyncStatus>(`${this.api}/resource-sync`);
+  }
+  syncResources(dryRun = false): Observable<ResourceSyncResult> {
+    return this.http.post<ResourceSyncResult>(`${this.api}/resource-sync`, { dry_run: dryRun });
   }
 
   getEngineStatus(force = false): Observable<Record<string, EngineAvailability>> {
@@ -328,6 +378,10 @@ export class ClaudeService {
 
   getUsage(): Observable<any> {
     return this.http.get<any>(`${this.api}/usage`);
+  }
+
+  getCodexUsage(): Observable<CodexUsage> {
+    return this.http.get<CodexUsage>(`${this.api}/usage/codex`);
   }
 
   deleteSession(id: string): Observable<any> {

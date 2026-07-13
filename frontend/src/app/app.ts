@@ -7,7 +7,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability
+  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
 
 export interface McpWorkflow {
@@ -80,6 +80,19 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   mcpPendingAuth = signal<any>(null);
 
   skills = signal<Skill[]>([]);
+  resourceSyncStatus = signal<ResourceSyncStatus | null>(null);
+  resourceSyncLoading = signal(false);
+  resourceSyncPending = computed(() => {
+    const status = this.resourceSyncStatus();
+    if (!status) return 0;
+    return status.agents.missing_in_codex.length + status.agents.outdated.length
+      + status.skills.missing_in_codex.length + status.skills.outdated.length;
+  });
+  resourceSyncConflicts = computed(() => {
+    const status = this.resourceSyncStatus();
+    if (!status) return 0;
+    return status.agents.conflicts.length + status.skills.conflicts.length;
+  });
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
   schedules = signal<Schedule[]>([]);
@@ -409,7 +422,20 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   // Claude Code 用量
   usage = signal<{ fiveHour: number; fiveHourReset: string; sevenDay: number; sevenDayReset: string } | null>(null);
+  codexUsage = signal<CodexUsage | null>(null);
   private usageTimer: any = null;
+
+  codexWindowLabel(minutes: number | null | undefined): string {
+    if (!minutes) return '限制';
+    if (minutes % 10080 === 0) return `${minutes / 10080}w`;
+    if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+    if (minutes % 60 === 0) return `${minutes / 60}h`;
+    return `${minutes}m`;
+  }
+
+  codexResetMillis(seconds: number | null | undefined): number | null {
+    return seconds ? seconds * 1000 : null;
+  }
 
   // Attachments
   attachedFiles = signal<{ name: string; path: string; preview?: string }[]>([]);
@@ -1533,6 +1559,37 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         user:   data?.user?.content   ?? '',
         system: data?.system?.content ?? '',
       }));
+    });
+  }
+
+  loadResourceSyncStatus() {
+    this.claude.getResourceSyncStatus().subscribe({
+      next: status => this.resourceSyncStatus.set(status),
+      error: () => this.resourceSyncStatus.set(null),
+    });
+  }
+
+  syncResourcesToCodex() {
+    const pending = this.resourceSyncPending();
+    if (!pending) {
+      this.showToast('Agent 與 Skill 已同步，不需要更新。', 'info');
+      return;
+    }
+    if (!confirm(`將 ${pending} 個 Agent／Skill 部署到 Codex。既有非受管檔案不會被覆蓋，是否繼續？`)) return;
+    this.resourceSyncLoading.set(true);
+    this.claude.syncResources(false).subscribe({
+      next: result => {
+        this.resourceSyncLoading.set(false);
+        this.resourceSyncStatus.set(result.status);
+        const changed = result.agents.created.length + result.agents.updated.length
+          + result.skills.created.length + result.skills.updated.length;
+        const conflicts = result.agents.conflicts.length + result.skills.conflicts.length;
+        this.showToast(`已同步 ${changed} 個項目${conflicts ? `；略過 ${conflicts} 個衝突` : ''}`, conflicts ? 'warn' : 'success', 4500);
+      },
+      error: (e) => {
+        this.resourceSyncLoading.set(false);
+        this.showToast(`同步失敗：${e.error?.error || e.message || e}`, 'error');
+      },
     });
   }
 
@@ -2985,8 +3042,16 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         }
       },
     });
+    const fetchCodexUsage = () => this.claude.getCodexUsage().subscribe({
+      next: data => this.codexUsage.set(data),
+      error: err => {
+        console.error('Failed to fetch Codex usage:', err);
+        if (!this.codexUsage()) setTimeout(fetchCodexUsage, 10000);
+      },
+    });
     fetchUsage();
-    this.usageTimer = setInterval(fetchUsage, 5 * 60 * 1000);
+    fetchCodexUsage();
+    this.usageTimer = setInterval(() => { fetchUsage(); fetchCodexUsage(); }, 5 * 60 * 1000);
 
     // #22 — Wire Electron auto-updater IPC events
     const eAPI = (window as any).electronAPI;
@@ -3256,6 +3321,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.loadTeams();
     this.claude.getSoul().subscribe(s => { this.soulContent = s; });
     this.loadMcp();
+    this.loadResourceSyncStatus();
   }
 
   ngAfterViewChecked() {

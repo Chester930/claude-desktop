@@ -91,6 +91,18 @@ body {
     border-left: 1px solid $border;
     border-right: 1px solid $border;
     font-size: 11px;
+    cursor: pointer;
+  }
+
+  .usage-provider {
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    &.claude { color: #f0a47b; background: rgba(217,119,87,0.14); }
+    &.codex { color: #74d6a0; background: rgba(16,163,127,0.14); }
   }
 
   .usage-divider { color: $border; }
@@ -121,6 +133,7 @@ body {
       background: #4ade80;
       border-radius: 3px;
       transition: width 0.3s ease;
+      &.codex { background: #10a37f; }
     }
 
     .usage-remain {
@@ -4139,6 +4152,35 @@ body[style*="ns-resize"] .mcp-divider-grip {
   letter-spacing: 0.06em;
   color: #7c6fff;
   margin-bottom: 10px;
+}
+
+.usage-provider-card {
+  padding: 9px 10px 5px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.025);
+}
+
+.usage-provider-card-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  color: #ddd;
+  font-size: 11px;
+  font-weight: 600;
+
+  .usage-provider {
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    &.claude { color: #f0a47b; background: rgba(217,119,87,0.14); }
+    &.codex { color: #74d6a0; background: rgba(16,163,127,0.14); }
+  }
 }
 
 .usage-row {
