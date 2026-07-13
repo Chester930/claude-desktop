@@ -4122,6 +4122,26 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // ── 引擎可用性偵測（已安裝／已登入，不含用量數字——兩邊 CLI 都沒有可
   // 腳本化的用量查詢管道）────────────────────────────────────────────────
   engineStatus = signal<Record<string, EngineAvailability>>({});
+  engineUserKind = computed<'loading' | 'both' | 'claude' | 'codex' | 'none'>(() => {
+    const status = this.engineStatus();
+    if (!status['claude'] && !status['codex']) return 'loading';
+    const claude = status['claude']?.available === true;
+    const codex = status['codex']?.available === true;
+    if (claude && codex) return 'both';
+    if (claude) return 'claude';
+    if (codex) return 'codex';
+    return 'none';
+  });
+  engineUserLabel = computed(() => ({
+    loading: '正在檢查引擎…',
+    both: 'Claude Code + Codex',
+    claude: 'Claude Code 使用者',
+    codex: 'Codex 使用者',
+    none: '尚無可用引擎',
+  })[this.engineUserKind()]);
+  engineUserAvatar = computed(() => ({
+    loading: '…', both: 'AI', claude: 'C', codex: 'CX', none: '!',
+  })[this.engineUserKind()]);
 
   // 執行引擎範圍（後端權威，database.get_engine_mode()）——'claude'/'codex'
   // 時鎖定單一引擎，agent 自己的 engine: 覆寫在執行期完全不生效；'both'

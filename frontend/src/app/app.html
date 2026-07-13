@@ -656,7 +656,7 @@
           @if (userMenuOpen()) {
             <div class="umenu-overlay" (click)="userMenuOpen.set(false)"></div>
             <div class="umenu-popup">
-              <div class="umenu-header">tyjh22417&#64;gmail.com</div>
+              <div class="umenu-header">{{ engineUserLabel() }}</div>
               <div class="umenu-sep"></div>
 
               <button class="umenu-item" (click)="openSettings(); userMenuOpen.set(false)">
@@ -698,18 +698,23 @@
                 <span class="umenu-icon">⬇</span><span>檢查更新</span>
               </button>
 
-              <div class="umenu-sep"></div>
-
-              <button class="umenu-item umenu-danger" (click)="logoutClaude()">
-                <span class="umenu-icon">⏻</span><span>登出 Claude Code</span>
-              </button>
+              @if (engineStatus()['claude']?.available) {
+                <div class="umenu-sep"></div>
+                <button class="umenu-item umenu-danger" (click)="logoutClaude()">
+                  <span class="umenu-icon">⏻</span><span>登出 Claude Code</span>
+                </button>
+              }
             </div>
           }
 
           <!-- 底部按鈕列 -->
-          <button class="umenu-trigger" (click)="userMenuOpen.set(!userMenuOpen())">
-            <span class="umenu-avatar">你</span>
-            <span class="umenu-label">Claude Code 使用者</span>
+          <button class="umenu-trigger" (click)="userMenuOpen.set(!userMenuOpen())" [title]="engineUserLabel()">
+            <span class="umenu-avatar"
+              [class.engine-both]="engineUserKind() === 'both'"
+              [class.engine-claude]="engineUserKind() === 'claude'"
+              [class.engine-codex]="engineUserKind() === 'codex'"
+              [class.engine-none]="engineUserKind() === 'none'">{{ engineUserAvatar() }}</span>
+            <span class="umenu-label">{{ engineUserLabel() }}</span>
             <span class="umenu-caret">⌄</span>
           </button>
         </div>

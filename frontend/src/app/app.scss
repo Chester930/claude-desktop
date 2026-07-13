@@ -4549,6 +4549,11 @@ body[style*="ns-resize"] .mcp-divider-grip {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+
+  &.engine-both { background: linear-gradient(135deg, #d97757 0 48%, #10a37f 52% 100%); }
+  &.engine-claude { background: #d97757; }
+  &.engine-codex { background: #10a37f; font-size: 10px; }
+  &.engine-none { background: #7f1d1d; color: #fecaca; }
 }
 .umenu-label {
   flex: 1;
