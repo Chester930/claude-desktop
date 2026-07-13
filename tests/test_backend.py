@@ -2,7 +2,7 @@
 後端 API 整合測試 — 對應 ROADMAP.md 各 Phase 的核心端點
 
 執行方式：
-    cd claude-desktop
+    cd agent-desktop
     pytest tests/ -v
 """
 import json

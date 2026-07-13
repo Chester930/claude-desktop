@@ -1,0 +1,5 @@
+# 打包發行版用的建置依賴，故意跟 requirements.txt 分開——
+# backend/Dockerfile 是 `pip install -r requirements.txt`，把 PyInstaller
+# 塞進 requirements.txt 會讓執行期 Docker image 多背一套用不到的建置工具鏈。
+# 只有 package.json 的 backend:compile:win/mac/linux 腳本會用到這份清單。
+pyinstaller>=6.0

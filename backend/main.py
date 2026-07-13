@@ -220,7 +220,7 @@ def get_agent_soul(agent_id: str) -> str:
         return ""
 
 
-async def _resolve_agent_engine_and_key(agent_id: str):
+async def _resolve_agent_engine_and_key(agent_id: str, request_engine: str = ""):
     """比照 routes/teams.py::_agent_run_capture() 已經驗證過的模式：讀
     agent 自己 frontmatter 宣告的 engine:，解析成實際引擎模組，並決定
     api_key 要不要傳（resolve_key() 只解析 Anthropic key，非 claude 引擎
@@ -229,7 +229,15 @@ async def _resolve_agent_engine_and_key(agent_id: str):
     handle_chat／handle_team_chat／handle_team_execute 這三個進入點原本
     完全沒有讀取 agent 的 engine: 欄位，寫死呼叫 Claude——這個 helper是
     補上這個缺口用的共用邏輯，避免三處各自重複實作。沒有 agent_id（沒有
-    activated agent）時自然解析成預設引擎 "claude"，維持既有行為不變。
+    activated agent）時解析成 request_engine（Settings 的「兩者都開放時
+    的預設引擎」），沒有 request_engine 時才落到 DEFAULT_ENGINE_NAME
+    （目前是 "codex"）。
+
+    2026-07-13：request_engine 原本寫死空字串，代表這三個進入點完全沒讀
+    過使用者在 Settings 選的「兩者都開放時的預設引擎」，畫面上那個下拉
+    選單對這三處毫無作用——這裡補上，呼叫端要從 request body 讀
+    agent_engine 欄位傳進來（比照 routes/teams.py::_agent_run_capture()
+    早就在用的同一個參數名稱）。
 
     resolve_engine_name_gated() 算出來的偏好引擎，還會再疊加一層
     apply_availability_fallback()（engines/availability.py）：偏好引擎
@@ -258,7 +266,7 @@ async def _resolve_agent_engine_and_key(agent_id: str):
                 pass
     mode = get_engine_mode()
     allowed = frozenset({mode}) if mode in ("claude", "codex") else frozenset({"claude", "codex"})
-    preferred_name = resolve_engine_name_gated(agent_own_engine, "", mode)
+    preferred_name = resolve_engine_name_gated(agent_own_engine, request_engine, mode)
     final_name, notice = await apply_availability_fallback(preferred_name, allowed)
     engine = get_engine(final_name)
     # 三選一：Claude 用 _resolve_api_key()、Codex 用 _resolve_codex_api_key()，
@@ -522,6 +530,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     cwd_override = data.get("cwd", "")
     bin_override = data.get("claude_bin", "")
     codex_bin_override = data.get("codex_bin", "")
+    agent_engine = data.get("agent_engine", "")
     attachments  = data.get("attachments", [])
     model        = data.get("model", "")
     effort       = data.get("effort", "")
@@ -745,7 +754,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             await response.write(f"data: {payload}\n\n".encode())
 
     try:
-        engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent)
+        engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent, agent_engine)
         if engine_notice:
             notice_msg = {"type": "assistant", "message": {"content": [{"type": "text", "text": engine_notice}]}}
             await response.write(f"data: {json.dumps(notice_msg)}\n\n".encode())
@@ -786,6 +795,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
     cwd_override = data.get("cwd", "")
     bin_override = data.get("claude_bin", "")
     codex_bin_override = data.get("codex_bin", "")
+    agent_engine = data.get("agent_engine", "")
     attachments  = data.get("attachments", [])
     model        = data.get("model", "")
     effort       = data.get("effort", "")
@@ -1054,7 +1064,7 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
         has_persisted = session_key in active_sessions
         in_pool_now = HAS_AGENT_SDK and _team_pool is not None and _team_pool.has(session_key)
         use_pool = HAS_AGENT_SDK and _team_pool is not None and not attachments
-        engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent_id)
+        engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent_id, agent_engine)
         if engine_notice:
             await response.write(f"data: {json.dumps({'type': 'text', 'agent': agent_id, 'text': engine_notice})}\n\n".encode())
 
@@ -1221,6 +1231,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
     task         = data.get("task", "")
     bin_override = data.get("claude_bin", "")
     codex_bin_override = data.get("codex_bin", "")
+    agent_engine = data.get("agent_engine", "")
     model        = data.get("model", "")
     effort       = data.get("effort", "")
     permission_mode = data.get("permission_mode", "")
@@ -1574,7 +1585,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
 
         from engines.availability import NoEngineAvailableError
         try:
-            engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent_id)
+            engine, engine_api_key, engine_notice = await _resolve_agent_engine_and_key(agent_id, agent_engine)
         except NoEngineAvailableError as e:
             # 這個函式外層（sequential 迴圈的 await／parallel 模式的
             # asyncio.gather）完全沒有 try/except 包住——沒接住的例外會
@@ -3425,7 +3436,15 @@ def _init_presets() -> None:
         return
 
     try:
-        presets_dir = Path(__file__).parent / "presets"
+        # PyInstaller onefile：frozen 執行時 __file__ 落在暫時解壓目錄
+        # sys._MEIPASS 裡（presets/ 透過 package.json 的
+        # backend:compile:* 腳本以 --add-data "presets;presets" 一併
+        # 打包進去），明確判斷 sys.frozen 避免依賴 PyInstaller 內部
+        # __file__ 語意的偶然巧合。
+        if getattr(sys, "frozen", False):
+            presets_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "presets"
+        else:
+            presets_dir = Path(__file__).parent / "presets"
         if not presets_dir.exists():
             _log(f"Presets directory not found at: {presets_dir}")
             return

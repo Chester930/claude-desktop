@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Agent Desktop — macOS / Linux launcher
-# Usage: ./start.sh [--dev]
+# Usage: ./start.sh [--dev|--docker]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,23 +43,33 @@ if [[ ! -f "$FLAG_FILE" ]]; then
   echo ""
 fi
 
-# ── 啟動後端 ─────────────────────────────────────────────────────────────────
-echo "🚀  Starting backend on http://localhost:8765 ..."
-cd "$SCRIPT_DIR/backend"
-"$PYTHON" main.py &
-BACKEND_PID=$!
-trap "kill $BACKEND_PID 2>/dev/null || true" EXIT
+# ── Docker 模式 ──────────────────────────────────────────────────────────────
+if [[ "${1:-}" == "--docker" ]]; then
+  echo "🐳  Starting backend + dev-frontend via Docker Compose [dev profile]..."
+  cd "$SCRIPT_DIR"
+  docker compose --profile dev up -d
+  echo ""
+  echo "   Backend:  http://localhost:8765"
+  echo "   Frontend: http://localhost:4200 (Dev HMR)"
+  echo ""
+  npx electron . --docker
+  exit 0
+fi
 
 # ── 開發模式 vs 正式模式 ─────────────────────────────────────────────────────
+# 本機後端一律交給 Electron 的 startBackend()（electron/main.js）自動啟動，
+# 這裡不再重複 spawn `python main.py`——兩邊各自啟動一次會搶同一個 8765
+# 埠，其中一個必然綁定失敗，留下沒用的孤兒行程（跟 start.bat 同一類問題，
+# 一起修正）。
 if [[ "${1:-}" == "--dev" ]]; then
   echo "🔧  Dev mode: starting Angular HMR server..."
   cd "$SCRIPT_DIR/frontend"
   npm run start &
   FRONTEND_PID=$!
-  trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true" EXIT
+  trap "kill $FRONTEND_PID 2>/dev/null || true" EXIT
 
   echo ""
-  echo "   Backend:  http://localhost:8765"
+  echo "   Backend:  http://localhost:8765  (由 Electron 自動啟動)"
   echo "   Frontend: http://localhost:4200  (HMR)"
   echo ""
   echo "   Waiting 12 s for Angular to compile..."
@@ -69,8 +79,9 @@ if [[ "${1:-}" == "--dev" ]]; then
   npx electron . --dev
 else
   echo ""
-  echo "   Backend: http://localhost:8765"
+  echo "   Backend: http://localhost:8765  (由 Electron 自動啟動)"
   echo ""
-  echo "   Launch the Electron app or run:  npm run electron"
-  wait $BACKEND_PID
+  echo "   Launching Electron..."
+  cd "$SCRIPT_DIR"
+  npx electron .
 fi
