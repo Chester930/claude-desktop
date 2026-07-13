@@ -110,7 +110,7 @@ async def handle_mcp_rpc(request: web.Request) -> web.Response:
                 "params": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "clientInfo": {"name": "claude-desktop-debugger", "version": "1.0.0"}
+                    "clientInfo": {"name": "agent-desktop-debugger", "version": "1.0.0"}
                 }
             }
             try:

@@ -2718,7 +2718,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   showOnboarding = signal(false);
   onboardingStep = signal(1);   // 1=歡迎 2=確認連線 3=專案目錄 4=完成
   onboardingDir = signal('');
-  onboardingStatus = signal<any>(null);
   onboardingSlug = computed(() => {
     const d = this.onboardingDir();
     return d ? d.replace(/:/g, '-').replace(/\\/g, '-').replace(/\//g, '-') : '';
@@ -2785,7 +2784,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!localStorage.getItem('claude_onboarding_done')) {
       setTimeout(() => {
         this.showOnboarding.set(true);
-        this.claude.getStatus().subscribe(s => this.onboardingStatus.set(s));
+        this.loadEngineStatus();
       }, 600);
     }
   }
@@ -2820,7 +2819,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.onboardingStep.set(1);
     this.onboardingDir.set('');
     this.showOnboarding.set(true);
-    this.claude.getStatus().subscribe(s => this.onboardingStatus.set(s));
+    this.loadEngineStatus();
   }
   async pickOnboardingDir() {
     const dir = await this.claude.pickDirectory();
@@ -4065,7 +4064,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   engineMode = signal<'claude' | 'codex' | 'both'>('both');
 
   private readonly ENGINE_LABEL: Record<string, string> = { claude: 'Claude Code CLI', codex: 'OpenAI Codex CLI' };
-  private readonly ENGINE_REASON_LABEL: Record<string, string> = {
+  protected readonly ENGINE_REASON_LABEL: Record<string, string> = {
     not_installed: '未安裝', not_logged_in: '未登入',
     check_timeout: '狀態檢查逾時', unexpected_output: '狀態檢查失敗',
   };

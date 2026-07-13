@@ -77,8 +77,8 @@ claude login
 **1. 取得專案**
 
 ```bash
-git clone https://github.com/Chester930/claude-desktop.git
-cd claude-desktop
+git clone https://github.com/Chester930/agent-desktop.git
+cd agent-desktop
 ```
 
 **2. 建立設定檔**
@@ -128,9 +128,11 @@ LINE 用戶    ──→ ngrok 公開網址 ──→ 後端 (LINE Bot)
 
 | 容器 | 功能 | Port |
 |------|------|------|
-| `agent-desktop-backend` | Python API + Claude／Codex CLI | 8765 |
-| `agent-desktop-frontend` | nginx 靜態前端 | 4200 |
-| `agent-desktop-ngrok` | LINE Webhook 公開網址 | 4040 |
+| `agent-desktop-backend-dev` | Python API + Claude／Codex CLI（dev，`start.bat --docker` 建立） | 8765 |
+| `agent-desktop-frontend-dev` | Angular dev server，HMR（dev） | 4200 |
+| `agent-desktop-ngrok` | LINE Webhook 公開網址（需另外執行 `--profile tunnel`，見上） | 4040 |
+
+> 正式環境（`docker compose --profile prod up`）改用 `agent-desktop-backend` / `agent-desktop-frontend`（無 `-dev` 後綴，nginx 靜態前端而非 dev server）。
 
 ### LINE Bot 設定（選用）
 
@@ -148,8 +150,13 @@ LINE 用戶    ──→ ngrok 公開網址 ──→ 後端 (LINE Bot)
 }
 ```
 
-4. 啟動後，終端機會顯示 Webhook URL（例如 `https://xxxx.ngrok-free.app/api/line/webhook`）
-5. 將此 URL 填入 LINE Developers Console → Messaging API → Webhook URL
+4. 對外網路通道（ngrok）預設不會啟動，需另外明確執行：
+   ```bash
+   docker compose --profile tunnel up -d
+   ```
+   （這會把完全沒有身分驗證的 backend API 曝露到公開網際網路，請自行評估風險再啟用）
+5. 執行後用 `docker compose logs ngrok` 或造訪 `http://localhost:4040` 取得 Webhook URL（例如 `https://xxxx.ngrok-free.app/api/line/webhook`）
+6. 將此 URL 填入 LINE Developers Console → Messaging API → Webhook URL
 
 ---
 
@@ -181,8 +188,8 @@ claude --version
 **1. 取得並安裝相依**
 
 ```bash
-git clone https://github.com/Chester930/claude-desktop.git
-cd claude-desktop
+git clone https://github.com/Chester930/agent-desktop.git
+cd agent-desktop
 
 # 後端
 pip install -r backend/requirements.txt
@@ -222,7 +229,7 @@ npm install
 ### 專案結構
 
 ```
-claude-desktop/
+agent-desktop/
 ├── electron/
 │   ├── main.js          # Electron 主程序（視窗、後端生命週期）
 │   └── preload.js       # IPC bridge
@@ -342,14 +349,14 @@ docker compose restart frontend
 ### Docker 後端未回應
 
 ```bash
-# 確認容器狀態
-docker compose ps
+# 確認容器狀態（dev profile，start.bat --docker 建立的容器）
+docker compose --profile dev ps
 
 # 查看後端 log
-docker compose logs backend
+docker compose --profile dev logs backend-dev
 
 # 重新啟動
-docker compose restart backend
+docker compose --profile dev restart backend-dev
 ```
 
 ### 後端無法啟動（本機模式）

@@ -36,6 +36,18 @@ if not exist "%USERPROFILE%\.claude\agency_imported.flag" (
 
 :: ── Docker mode ───────────────────────────────────────────────────────────────
 if "%DOCKER_MODE%"=="1" (
+  if not exist "%~dp0.env" (
+    echo [Error] .env not found. Copy .env.example to .env and fill in CLAUDE_HOME first:
+    echo   copy .env.example .env
+    pause & exit /b 1
+  )
+  findstr /C:"你的名字" "%~dp0.env" >nul
+  if not errorlevel 1 (
+    echo [Error] .env still contains the placeholder "你的名字" in CLAUDE_HOME.
+    echo Edit .env and set CLAUDE_HOME to your actual Windows user path.
+    pause & exit /b 1
+  )
+
   echo [Docker] Starting backend + dev-frontend via Docker Compose [dev profile]...
   cd /d %~dp0
   if "%BUILD_MODE%"=="1" (
@@ -65,13 +77,14 @@ if "%DOCKER_MODE%"=="1" (
 )
 
 :: ── Dev mode ──────────────────────────────────────────────────────────────────
+:: 本機後端一律交給 Electron 的 startBackend()（electron/main.js）自動啟動，
+:: 這裡不再重複 start 一個 python main.py——兩邊各自啟動一次會搶同一個
+:: 8765 埠，其中一個必然綁定失敗，留下沒用的孤兒行程。
 if "%DEV_MODE%"=="1" (
-  start "Agent Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
   echo Starting Angular dev server with HMR...
-  timeout /t 2 /nobreak >nul
   start "Angular Dev" cmd /k "cd /d %~dp0frontend && npm run start"
   echo.
-  echo Backend:  http://localhost:8765
+  echo Backend:  http://localhost:8765  (由 Electron 自動啟動)
   echo Frontend: http://localhost:4200  [HMR enabled]
   echo.
   timeout /t 10 /nobreak >nul
@@ -80,11 +93,10 @@ if "%DEV_MODE%"=="1" (
 )
 
 :: ── Default mode (local backend only) ─────────────────────────────────────────
-start "Agent Backend" cmd /k "cd /d %~dp0backend && "%PYTHON%" main.py"
 echo.
-echo Backend:  http://localhost:8765
+echo Backend:  http://localhost:8765  (由 Electron 自動啟動)
 echo.
-timeout /t 3 /nobreak >nul
+echo Launching Electron...
 cd /d %~dp0 && node_modules\.bin\electron.cmd .
 
 :end

@@ -36,12 +36,25 @@ const backendBin      = process.platform === 'win32' ? 'claude-backend.exe' : 'c
 const bundledExe      = path.join(__dirname, '..', 'backend', backendBin);
 const bundledFrontend = path.join(__dirname, '..', 'frontend', 'dist', 'frontend', 'browser', 'index.html');
 
-// ── 偵測 Claude Code 是否已安裝 ───────────────────────────
+// ── 偵測 Claude Code / Codex 是否已安裝 ───────────────────
 function detectClaude() {
   // Windows: 優先找 .cmd 包裝器（npm global 安裝方式）
   const bins = process.platform === 'win32'
     ? ['claude.cmd', 'claude']
     : ['claude'];
+  for (const b of bins) {
+    try {
+      execFileSync(b, ['--version'], { stdio: 'pipe', windowsHide: true, shell: false, timeout: 5000 });
+      return b;
+    } catch {}
+  }
+  return null;
+}
+
+function detectCodex() {
+  const bins = process.platform === 'win32'
+    ? ['codex.cmd', 'codex']
+    : ['codex'];
   for (const b of bins) {
     try {
       execFileSync(b, ['--version'], { stdio: 'pipe', windowsHide: true, shell: false, timeout: 5000 });
@@ -105,7 +118,7 @@ async function waitForBackend(port = 8765, maxMs = 20000) {
 }
 
 // ── Claude Code 未安裝時顯示引導頁 ───────────────────────
-function showNoClaudePage() {
+function showNoEnginePage() {
   mainWindow = new BrowserWindow({
     width: 640, height: 420,
     title: 'Agent 桌面版 — 設定引導',
@@ -248,24 +261,26 @@ function showNoClaudePage() {
   </style></head><body>
   <div class="card">
     <div class="icon-glow">⚡</div>
-    <h2>需要先安裝 Claude Code</h2>
-    <p>本桌面版應用程式需要 <strong>Claude Code CLI</strong> 作為通訊後端才能順利運行。</p>
-    
+    <h2>需要先安裝執行引擎</h2>
+    <p>本桌面版應用程式需要 <strong>Claude Code CLI</strong> 或 <strong>OpenAI Codex CLI</strong> 其中一個作為通訊後端才能運行——只要裝好其中一個並登入即可，不需要兩個都裝。</p>
+
     <div class="term-window">
       <div class="term-dots">
         <div class="dot dot-r"></div>
         <div class="dot dot-y"></div>
         <div class="dot dot-g"></div>
       </div>
-      <div class="cmd-line"># 1. 於終端機執行安裝</div>
+      <div class="cmd-line"># 方案 A：Claude Code</div>
       <div class="cmd-line"><span>$</span> npm install -g @anthropic-ai/claude-code</div>
-      <div style="height: 10px;"></div>
-      <div class="cmd-line"># 2. 進行 Anthropic 帳號登入授權</div>
       <div class="cmd-line"><span>$</span> claude login</div>
+      <div style="height: 10px;"></div>
+      <div class="cmd-line"># 方案 B：OpenAI Codex</div>
+      <div class="cmd-line"><span>$</span> npm install -g @openai/codex</div>
+      <div class="cmd-line"><span>$</span> codex login</div>
     </div>
-    
+
     <p style="font-size: 12px; margin-bottom: 0;">安裝且完成登入後，重新啟動本程式即可直接使用。</p>
-    <div class="footer">詳情請參閱官方文件 <a href="https://claude.ai/code" target="_blank">claude.ai/code</a></div>
+    <div class="footer">Claude 文件 <a href="https://claude.ai/code" target="_blank">claude.ai/code</a> ・ Codex 文件 <a href="https://developers.openai.com/codex" target="_blank">developers.openai.com/codex</a></div>
   </div>
   </body></html>`;
 
@@ -467,10 +482,13 @@ app.whenReady().then(async () => {
     return;
   }
 
-  // 本機模式：偵測並啟動本機後端
+  // 本機模式：偵測並啟動本機後端。App 可以只搭配 Claude Code 或只搭配
+  // Codex 運行，只要其中一個可用就該啟動——不能像過去一樣寫死只檢查
+  // Claude，不然只裝 Codex 的使用者永遠卡在這個畫面、後端永遠不會啟動。
   const claudeBin = detectClaude();
-  if (!claudeBin) {
-    showNoClaudePage();
+  const codexBin  = detectCodex();
+  if (!claudeBin && !codexBin) {
+    showNoEnginePage();
     return;
   }
 

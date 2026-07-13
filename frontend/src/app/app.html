@@ -42,35 +42,38 @@
           </div>
         }
 
-        <!-- Step 2: 確認 Claude Code 連線 -->
+        <!-- Step 2: 確認執行引擎連線 -->
         @if (onboardingStep() === 2) {
           <div class="ob-body">
             <div class="ob-icon">🔗</div>
-            <h2 class="ob-title">確認 Claude Code 連線</h2>
-            @if (onboardingStatus()) {
-              <div class="ob-status-box ok">
-                <span class="ob-status-dot ok"></span>
+            <h2 class="ob-title">確認執行引擎連線</h2>
+            <p class="ob-desc" style="margin-bottom:10px">
+              Agent 桌面版可搭配 <strong>Claude Code</strong> 或 <strong>OpenAI Codex</strong> 執行，至少需要一個可用。
+            </p>
+
+            @for (name of ['claude', 'codex']; track name) {
+              <div class="ob-status-box" [class.ok]="engineStatus()[name]?.available" [class.warn]="!engineStatus()[name]?.available">
+                <span class="ob-status-dot" [class.ok]="engineStatus()[name]?.available" [class.warn]="!engineStatus()[name]?.available"></span>
                 <div>
-                  <div class="ob-status-label">已偵測到 Claude Code</div>
-                  <code class="ob-status-path">{{ onboardingStatus().claude_bin }}</code>
+                  <div class="ob-status-label">
+                    {{ name === 'claude' ? 'Claude Code' : 'OpenAI Codex' }}
+                    @if (engineStatus()[name]?.available) { — 已就緒 }
+                    @else if (engineStatus()[name]) { — {{ ENGINE_REASON_LABEL[engineStatus()[name].reason] || '未偵測到' }} }
+                    @else { — 檢查中… }
+                  </div>
                 </div>
               </div>
-              <p class="ob-desc" style="margin-top:12px">
-                登入狀態由 Claude Code 管理。若尚未登入，<br>
-                請先在終端機執行：
-              </p>
-              <div class="ob-code-block">claude login</div>
-            } @else {
-              <div class="ob-status-box warn">
-                <span class="ob-status-dot warn"></span>
-                <div>
-                  <div class="ob-status-label">正在確認連線…</div>
-                  <div class="ob-status-sub">若長時間無回應，請確認後端是否正常啟動</div>
-                </div>
-              </div>
-              <div class="ob-code-block">npm install -g &#64;anthropic-ai/claude-code</div>
-              <div class="ob-code-block" style="margin-top:6px">claude login</div>
+              @if (engineStatus()[name] && !engineStatus()[name].available) {
+                @if (name === 'claude') {
+                  <div class="ob-code-block">npm install -g &#64;anthropic-ai/claude-code</div>
+                  <div class="ob-code-block" style="margin-top:6px">claude login</div>
+                } @else {
+                  <div class="ob-code-block">npm install -g &#64;openai/codex</div>
+                  <div class="ob-code-block" style="margin-top:6px">codex login</div>
+                }
+              }
             }
+            <p class="ob-hint" style="margin-top:10px">只要其中一個可用即可繼續，兩者都裝好也沒問題（可在設定中切換）。</p>
           </div>
         }
 
@@ -498,7 +501,11 @@
 
         </div><!-- /modal-scroll-wrap -->
         <div class="modal-footer">
-          <span class="settings-status">Claude：{{ statusInfo() }}</span>
+          <span class="settings-status">
+            Claude：{{ engineStatus()['claude']?.available ? '已就緒' : (ENGINE_REASON_LABEL[engineStatus()['claude']?.reason ?? ''] || '未知') }}
+            ・
+            Codex：{{ engineStatus()['codex']?.available ? '已就緒' : (ENGINE_REASON_LABEL[engineStatus()['codex']?.reason ?? ''] || '未知') }}
+          </span>
           <button class="btn-secondary" (click)="resetOnboarding(); closeSettings()" title="重新開啟設定精靈">🧭 精靈</button>
           <button class="btn-secondary" (click)="downloadDebugDump()" title="下載診斷資料（Debug Dump）">🐞 診斷</button>
           <label class="btn-secondary" title="從備份 zip 還原">
@@ -622,7 +629,7 @@
             <div class="empty-guide">
               <div class="empty-guide-icon">💬</div>
               <div class="empty-guide-title">還沒有對話紀錄</div>
-              <div class="empty-guide-sub">點「＋ 新對話」開始，或輸入 / 選擇 Skill 讓 Claude 協助你</div>
+              <div class="empty-guide-sub">點「＋ 新對話」開始，或輸入 / 選擇 Skill 讓 AI 協助你</div>
               <button class="empty-guide-btn" (click)="newChat()">＋ 開始第一個對話</button>
             </div>
           }
@@ -928,7 +935,7 @@
                               } @else if (msg.teamRun) {
                                 👥 {{ msg.teamRun.name }} (Team)
                               } @else {
-                                Claude
+                                AI 助手
                               }
                             </span>
                             @if (msg.time) { <span class="msg-time">{{ msg.time }}</span> }
@@ -1100,7 +1107,7 @@
                             } @else if (msg.teamRun) {
                               👥 {{ msg.teamRun.name }} (Team)
                             } @else {
-                              Claude
+                              AI 助手
                             }
                           </span>
 
@@ -1648,7 +1655,7 @@
               <div class="soul-upper" (wheel)="onSoulListWheel($event)"
                    [style.height.%]="soulSplitRatio() * 100">
                 <p class="soul-hint">
-                  You can set multiple personas. All will be merged and injected into Claude on every turn. Scroll wheel to cycle.
+                  可以設定多個人格檔案，將全部合併並在每次對話開頭注入。用滾輪捲動可切換選取。
                 </p>
                 <button class="btn-primary soul-add-btn" (click)="addSoulProfile()">＋ 新增靈魂</button>
 
@@ -1697,7 +1704,7 @@
                     <button class="btn-primary btn-xs" (click)="saveSoulProfileEdits()" [disabled]="soulDraftSaved()">Save</button>
                   </div>
                 } @else {
-                  <div class="lower-empty-hint">Select or create a soul profile to start editing</div>
+                  <div class="lower-empty-hint">選擇或建立一個靈魂設定檔開始編輯</div>
                 }
               </div>
 
@@ -2037,11 +2044,15 @@
               <div class="help-step">
                 <div class="help-step-num">1</div>
                 <div>
-                  <strong>確認 Claude Code 已安裝並登入</strong><br>
-                  <span class="help-sub">在終端機執行：</span>
+                  <strong>確認執行引擎已安裝並登入</strong><br>
+                  <span class="help-sub">Claude Code：</span>
                   <code class="help-code">claude --version</code>
                   <span class="help-sub">若尚未安裝：</span>
-                  <code class="help-code">npm install -g &#64;anthropic-ai/claude-code && claude login</code>
+                  <code class="help-code">npm install -g &#64;anthropic-ai/claude-code && claude login</code><br>
+                  <span class="help-sub" style="margin-top:6px;display:inline-block">OpenAI Codex（選用）：</span>
+                  <code class="help-code">codex --version</code>
+                  <span class="help-sub">若尚未安裝：</span>
+                  <code class="help-code">npm install -g &#64;openai/codex && codex login</code>
                 </div>
               </div>
               <div class="help-step">
@@ -2122,6 +2133,12 @@
                 <div class="help-feature-title">🔌 MCP 伺服器</div>
                 <p>讀取 <code>~/.claude/claude.json</code> 中的 MCP 設定。<br>
                 在右側 MCP 頁籤可以啟動 / 停止 / 重啟各個伺服器。</p>
+                <p>「＋ 新增」建立的 MCP 定義會由 App 統一管理，自動同步到 Claude 與 Codex 兩邊設定（見 MCP 頁籤「App 管理（雙引擎同步）」區塊，✓／✗ 標示各自的同步狀態）。</p>
+              </div>
+
+              <div class="help-feature">
+                <div class="help-feature-title">⚙️ Agent Engine 設定</div>
+                <p>在 ⚙ 設定的「Agent Engine」區塊可以：設定<strong>執行引擎範圍</strong>（只用 Claude／只用 Codex／兩者都開放）、指定 <strong>Claude／Codex 執行路徑</strong>（留空自動偵測）、以及 <strong>API Key 命令</strong>（透過 1Password CLI 等工具讀取金鑰，不用手動貼上）。</p>
               </div>
             </div>
           }
@@ -2151,8 +2168,9 @@
               <div class="help-qa">
                 <div class="help-q">傳送訊息出現認證錯誤？</div>
                 <div class="help-a">
-                  在終端機執行 <code>claude login</code> 重新登入。<br>
-                  或在設定的「API Key 命令」填入你的金鑰取得指令。
+                  Claude：在終端機執行 <code>claude login</code> 重新登入，或在設定的「Claude API Key 命令」填入金鑰取得指令。<br>
+                  Codex：執行 <code>codex login</code>，或在設定的「Codex API Key 命令」填入金鑰取得指令。<br>
+                  可到 ⚙ 設定 → Agent Engine 區塊查看兩邊目前的連線狀態。
                 </div>
               </div>
 
@@ -2169,7 +2187,7 @@
               <div class="help-qa">
                 <div class="help-q">如何重新開啟設定精靈？</div>
                 <div class="help-a">
-                  進入 ⚙ 設定，滾動到最下方，點「重新開啟設定精靈」。
+                  進入 ⚙ 設定，滾動到最下方，點「🧭 精靈」按鈕。
                 </div>
               </div>
 

@@ -62,3 +62,7 @@ my-*/
 backend/local_*.py
 frontend/src/app/links.ts
 frontend/src/environments/environment.local.ts
+
+# 維護者本機的開發交接筆記（含這台機器的絕對路徑與內部除錯紀錄），
+# 不適合留在公開 repo，但本機保留供個人參考
+docs/HANDOFF.md
