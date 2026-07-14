@@ -3322,6 +3322,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.getSoul().subscribe(s => { this.soulContent = s; });
     this.loadMcp();
     this.loadResourceSyncStatus();
+    this.loadEngineStatus();
   }
 
   ngAfterViewChecked() {
