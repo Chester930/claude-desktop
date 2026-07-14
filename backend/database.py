@@ -36,7 +36,17 @@ def _resolve_registry_home(default: Path) -> Path:
     升級：既有使用者的 Agent/Skill 位置完全不變）。使用者若不想讓資源綁在
     Claude Code 的原生目錄底下（例如只用 Codex），可以透過設定裡的
     registryHome 指到獨立路徑；此時 Claude 端會改由 resource sync 產生鏡像
-    副本，而不是直接讀寫同一份檔案。"""
+    副本，而不是直接讀寫同一份檔案。
+
+    容器部署（docker-compose）沒有桌面版的設定檔 UI 可以填 registryHome，
+    所以額外支援 REGISTRY_HOME 環境變數覆寫——跟 routes/resource_sync.py
+    讀取 CODEX_RESOURCE_HOME／CODEX_SKILLS_HOME 環境變數走的是同一套模式。
+    環境變數優先於設定檔，設定檔優先於預設值。"""
+    env_raw = os.environ.get("REGISTRY_HOME", "").strip()
+    if env_raw:
+        p = Path(env_raw).expanduser()
+        if p.is_dir():
+            return p
     try:
         raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("registryHome", "").strip()
         if raw:

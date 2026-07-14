@@ -50,6 +50,13 @@ Codex 端則是由 resource sync 產生的 TOML／目錄副本。這個設計隱
 6. 沿用 ADR-002 的核心不變量：任何目標檔案/目錄只要存在但沒有 Agent Desktop
    的管理標記，一律視為使用者自有內容，同步／匯入都不會覆蓋，只會回報為
    conflict 或略過。
+7. `registryHome` 額外支援 `REGISTRY_HOME` 環境變數覆寫，優先於設定檔——
+   容器部署（`docker-compose.yml`）沒有桌面版設定頁可以填，這跟
+   `routes/resource_sync.py::_service()` 讀取 `CODEX_RESOURCE_HOME`／
+   `CODEX_SKILLS_HOME` 環境變數是同一套模式。`docker-compose.yml` 的
+   `backend`／`backend-dev` 兩個 service 都新增了對應的 bind mount
+   （`${REGISTRY_HOME:-${CLAUDE_HOME}}` → `/mnt/host-registry`），預設沿用
+   `CLAUDE_HOME`，只有 `.env` 裡明確填了 `REGISTRY_HOME` 才會真的解耦。
 
 ## 結果
 
