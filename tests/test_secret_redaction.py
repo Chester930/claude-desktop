@@ -5,7 +5,6 @@ import json as _json
 
 import pytest
 
-pytestmark = pytest.mark.asyncio
 
 
 async def _set_config(tmp_claude_home, extra: dict):

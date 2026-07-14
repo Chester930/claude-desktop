@@ -7,7 +7,6 @@ import pytest
 
 from engines import availability
 
-pytestmark = pytest.mark.asyncio
 
 
 async def test_engine_status_route_returns_get_status_result(client, monkeypatch, app):

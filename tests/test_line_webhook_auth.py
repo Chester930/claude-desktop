@@ -10,7 +10,6 @@ import pytest
 
 import main
 
-pytestmark = pytest.mark.asyncio
 
 
 def _sign(secret: str, body: bytes) -> str:

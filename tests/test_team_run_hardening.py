@@ -9,7 +9,6 @@ import pytest
 
 import routes.teams as teams_module
 
-pytestmark = pytest.mark.asyncio
 
 
 class TestIsSafeId:

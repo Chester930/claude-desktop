@@ -11,7 +11,6 @@ import pytest
 from engines import availability
 from engines.base import RunResult
 
-pytestmark = pytest.mark.asyncio
 
 
 def _only_claude_available():

@@ -22,7 +22,6 @@ import pytest
 
 import routes.teams as teams_module
 
-pytestmark = pytest.mark.asyncio
 
 
 async def test_agent_run_capture_defaults_to_accept_edits(monkeypatch):

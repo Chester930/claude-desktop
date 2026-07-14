@@ -3,7 +3,6 @@ import pytest
 import codex_usage
 import main
 
-pytestmark = pytest.mark.asyncio
 
 
 async def test_codex_usage_route_returns_normalized_data(client, monkeypatch):

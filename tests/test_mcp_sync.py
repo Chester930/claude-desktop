@@ -12,7 +12,6 @@ import pytest
 
 import mcp_sync
 
-pytestmark = pytest.mark.asyncio
 
 
 def test_claude_add_args_stdio():

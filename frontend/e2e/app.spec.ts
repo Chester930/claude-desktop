@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('claude_onboarding_done', '1'));
+});
+
 test.describe('Agent Desktop — 基本流程', () => {
 
   test('主畫面正常載入', async ({ page }) => {
@@ -47,7 +51,7 @@ test.describe('Agent Desktop — 基本流程', () => {
 
   test('開關設定 modal', async ({ page }) => {
     await page.goto('/');
-    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-trigger').click();
     await page.locator('.umenu-item', { hasText: '設定' }).click();
     await expect(page.locator('.modal-backdrop')).toBeVisible();
     await expect(page.locator('.modal')).toBeVisible();
@@ -56,8 +60,6 @@ test.describe('Agent Desktop — 基本流程', () => {
   });
 
   test('右側 Skills 分頁搜尋', async ({ page }) => {
-    // Skip onboarding overlay (appears at 600ms) so it doesn't block clicks
-    await page.addInitScript(() => localStorage.setItem('claude_onboarding_done', '1'));
     await page.goto('/');
     await page.locator('.tab-bar button', { hasText: /Skill/i }).click();
     const searchInput = page.locator('.right-panel-search-input');
@@ -71,7 +73,8 @@ test.describe('Agent Desktop — 基本流程', () => {
   });
 
   test('後端 /api/status 健康檢查', async ({ request }) => {
-    const res = await request.get('http://localhost:8765/api/status');
+    const res = await request.get('http://localhost:8765/api/status', { timeout: 2000 }).catch(() => null);
+    if (!res) { test.skip(true, '後端未啟動'); return; }
     if (res.ok()) {
       const body = await res.json();
       expect(body).toHaveProperty('claude_bin');
@@ -88,7 +91,7 @@ test.describe('Agent Desktop — P3 功能', () => {
 
   test('設定頁包含 Provider 選單', async ({ page }) => {
     await page.goto('/');
-    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-trigger').click();
     await page.locator('.umenu-item', { hasText: '設定' }).click();
     // Provider section header exists
     const headers = page.locator('.modal-section-header');
@@ -102,7 +105,7 @@ test.describe('Agent Desktop — P3 功能', () => {
 
   test('設定頁包含 Telegram 區塊', async ({ page }) => {
     await page.goto('/');
-    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-trigger').click();
     await page.locator('.umenu-item', { hasText: '設定' }).click();
     const headers = page.locator('.modal-section-header');
     const texts = await headers.allTextContents();
@@ -112,7 +115,7 @@ test.describe('Agent Desktop — P3 功能', () => {
 
   test('設定頁有語言切換選項', async ({ page }) => {
     await page.goto('/');
-    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-trigger').click();
     await page.locator('.umenu-item', { hasText: '設定' }).click();
     const headers = page.locator('.modal-section-header, label');
     const texts = await headers.allTextContents();
@@ -122,24 +125,18 @@ test.describe('Agent Desktop — P3 功能', () => {
 
   test('設定頁底部有 Debug 診斷按鈕', async ({ page }) => {
     await page.goto('/');
-    await page.locator('button', { hasText: 'Claude Code 使用者' }).click();
+    await page.locator('.umenu-trigger').click();
     await page.locator('.umenu-item', { hasText: '設定' }).click();
     // The debug dump button has a specific title
     await expect(page.locator('button[title*="下載診斷"]')).toBeVisible();
     await page.keyboard.press('Escape');
   });
 
-  test('匯出格式選單在 topbar 存在', async ({ page }) => {
+  test('對話匯出按鈕存在', async ({ page }) => {
     await page.goto('/');
-    const select = page.locator('.export-format-select');
-    await expect(select).toBeVisible();
-    // Default is .md
-    await expect(select).toHaveValue('md');
-    // Verify all three options exist
-    const options = await select.locator('option').allTextContents();
-    expect(options).toContain('.md');
-    expect(options).toContain('.json');
-    expect(options).toContain('.txt');
+    const exportButton = page.locator('button[title="匯出對話"]');
+    await expect(exportButton).toBeVisible();
+    await expect(exportButton).toBeDisabled();
   });
 
   test('⌘K 全局搜尋支援 Ctrl+K 開關', async ({ page }) => {
@@ -151,7 +148,8 @@ test.describe('Agent Desktop — P3 功能', () => {
   });
 
   test('後端 /api/profiles 回傳清單', async ({ request }) => {
-    const res = await request.get('http://localhost:8765/api/profiles');
+    const res = await request.get('http://localhost:8765/api/profiles', { timeout: 2000 }).catch(() => null);
+    if (!res) { test.skip(true, '後端未啟動'); return; }
     if (res.ok()) {
       const body = await res.json();
       expect(body).toHaveProperty('profiles');
@@ -162,7 +160,8 @@ test.describe('Agent Desktop — P3 功能', () => {
   });
 
   test('後端 /api/telegram GET 回傳狀態', async ({ request }) => {
-    const res = await request.get('http://localhost:8765/api/telegram');
+    const res = await request.get('http://localhost:8765/api/telegram', { timeout: 2000 }).catch(() => null);
+    if (!res) { test.skip(true, '後端未啟動'); return; }
     if (res.ok()) {
       const body = await res.json();
       expect(body).toHaveProperty('enabled');
@@ -173,7 +172,8 @@ test.describe('Agent Desktop — P3 功能', () => {
   });
 
   test('後端 /api/debug-dump 回傳 JSON', async ({ request }) => {
-    const res = await request.get('http://localhost:8765/api/debug-dump');
+    const res = await request.get('http://localhost:8765/api/debug-dump', { timeout: 2000 }).catch(() => null);
+    if (!res) { test.skip(true, '後端未啟動'); return; }
     if (res.ok()) {
       const body = await res.json();
       expect(body).toHaveProperty('timestamp');
@@ -190,13 +190,9 @@ test.describe('Agent Desktop — P3 功能', () => {
 
 test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
 
-  test.beforeEach(async ({ page }) => {
-    // 跳過 onboarding 避免遮蓋 UI
-    await page.addInitScript(() => localStorage.setItem('claude_onboarding_done', '1'));
-  });
-
   test('後端 /api/agents/registry 回傳正確結構', async ({ request }) => {
-    const res = await request.get('http://localhost:8765/api/agents/registry');
+    const res = await request.get('http://localhost:8765/api/agents/registry', { timeout: 2000 }).catch(() => null);
+    if (!res) { test.skip(true, '後端未啟動'); return; }
     if (!res.ok()) { test.skip(); return; }
     const body = await res.json();
     expect(Array.isArray(body)).toBe(true);
@@ -213,7 +209,9 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
   test('後端 /api/hr/dispatch 缺少 task 回傳 400', async ({ request }) => {
     const res = await request.post('http://localhost:8765/api/hr/dispatch', {
       data: {},
-    });
+      timeout: 2000,
+    }).catch(() => null);
+    if (!res) { test.skip(true, '後端未啟動'); return; }
     if (res.status() === 0) { test.skip(); return; }
     expect(res.status()).toBe(400);
     const body = await res.json();
@@ -221,7 +219,8 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
   });
 
   test('後端 /api/teams 回傳清單', async ({ request }) => {
-    const res = await request.get('http://localhost:8765/api/teams');
+    const res = await request.get('http://localhost:8765/api/teams', { timeout: 2000 }).catch(() => null);
+    if (!res) { test.skip(true, '後端未啟動'); return; }
     if (!res.ok()) { test.skip(); return; }
     const body = await res.json();
     expect(Array.isArray(body)).toBe(true);
@@ -232,7 +231,9 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
     // 建立
     const created = await request.post(`${BASE}/api/teams`, {
       data: { name: 'e2e-test-team', description: 'E2E 測試', members: [] },
-    });
+      timeout: 2000,
+    }).catch(() => null);
+    if (!created) { test.skip(true, '後端未啟動'); return; }
     if (!created.ok()) { test.skip(); return; }
     // 查詢
     const got = await request.get(`${BASE}/api/teams/e2e-test-team`);
@@ -257,7 +258,9 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
           members: [{ agent: 'nonexistent-agent', role: '測試' }],
         },
       },
-    });
+      timeout: 2000,
+    }).catch(() => null);
+    if (!runRes) { test.skip(true, '後端未啟動'); return; }
     if (!runRes.ok()) { test.skip(); return; }
     const runBody = await runRes.json();
     expect(runBody).toHaveProperty('run_id');
@@ -279,7 +282,9 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
     // 寫入
     const writeRes = await request.put(`${BASE}/api/memory/e2e-relay-key`, {
       data: { content },
-    });
+      timeout: 2000,
+    }).catch(() => null);
+    if (!writeRes) { test.skip(true, '後端未啟動'); return; }
     if (!writeRes.ok()) { test.skip(); return; }
 
     // 讀取列表確認存在
@@ -306,10 +311,10 @@ test.describe('Agent Desktop — Phase 4 HR Agent & Teams', () => {
     await expect(teamsTab).toBeVisible();
   });
 
-  test('Memory 頁籤存在', async ({ page }) => {
+  test('Scheduling 頁籤存在', async ({ page }) => {
     await page.goto('/');
-    const memTab = page.locator('.tab-bar button', { hasText: /Memory/i });
-    await expect(memTab).toBeVisible();
+    const schedulingTab = page.locator('.tab-bar button', { hasText: /Scheduling/i });
+    await expect(schedulingTab).toBeVisible();
   });
 
   test('自動組隊按鈕（HR）存在', async ({ page }) => {

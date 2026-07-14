@@ -20,7 +20,6 @@ import pytest
 
 import routes.teams as teams_module
 
-pytestmark = pytest.mark.asyncio
 
 
 async def test_core_exception_marks_run_as_error_not_stuck_running(monkeypatch):

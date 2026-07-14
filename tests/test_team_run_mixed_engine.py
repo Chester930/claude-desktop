@@ -17,7 +17,6 @@ from engines.base import RunResult
 import routes.teams as teams_module
 from engines import claude_engine, codex_engine
 
-pytestmark = pytest.mark.asyncio
 
 
 def _write_agent(agents_dir, agent_id: str, engine: str) -> None:

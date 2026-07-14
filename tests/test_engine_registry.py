@@ -16,7 +16,6 @@ import pytest
 from engines import claude_engine, codex_engine
 from engines.registry import resolve_engine_name, resolve_engine_name_gated, get_engine, ENGINES, DEFAULT_ENGINE_NAME
 
-pytestmark = pytest.mark.asyncio
 
 
 class _FakeStdout:

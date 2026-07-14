@@ -11,17 +11,13 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.asyncio
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 工具函數單元測試（不需要 HTTP server）
 # ══════════════════════════════════════════════════════════════════════════════
 
-# 這個 class 裡全是 sync 函數，要覆蓋全域 asyncio mark 才不會產生 warning
 class TestHelperFunctions:
     """ROADMAP Phase 1 — 工具函數測試（sync）"""
-    pytestmark = []  # 清除全域 asyncio mark，避免 PytestUnraisableExceptionWarning
 
     def test_encode_slug_windows_path(self):
         import sys

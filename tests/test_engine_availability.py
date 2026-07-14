@@ -12,7 +12,6 @@ import pytest
 
 from engines import availability
 
-pytestmark = pytest.mark.asyncio
 
 # conftest.py 有一個 autouse fixture 把 availability.get_status 整個換成假的
 # 「兩邊都可用」版本，避免既有測試意外 spawn 真實 CLI 子行程。但這個檔案

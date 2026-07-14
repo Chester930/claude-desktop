@@ -4,7 +4,6 @@ import pytest
 
 from routes import resource_sync as routes
 
-pytestmark = pytest.mark.asyncio
 
 
 class FakeService:

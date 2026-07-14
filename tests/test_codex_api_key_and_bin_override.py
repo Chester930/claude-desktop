@@ -21,7 +21,6 @@ import pytest
 
 from engines import codex_engine
 
-pytestmark = pytest.mark.asyncio
 
 
 class TestCodexBinOverride:

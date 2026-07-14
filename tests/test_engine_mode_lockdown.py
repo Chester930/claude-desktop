@@ -12,7 +12,6 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.asyncio
 
 
 def _set_engine_mode(tmp_path, mode: str):

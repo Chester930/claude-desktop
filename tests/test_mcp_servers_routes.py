@@ -7,7 +7,6 @@ import pytest
 
 import mcp_sync
 
-pytestmark = pytest.mark.asyncio
 
 
 async def test_post_requires_valid_name(client, monkeypatch, app):

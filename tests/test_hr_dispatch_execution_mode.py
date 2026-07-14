@@ -24,7 +24,6 @@ import pytest
 import routes.agents as agents_module
 from engines import claude_engine, codex_engine
 
-pytestmark = pytest.mark.asyncio
 
 
 class _FakeStdout:

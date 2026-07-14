@@ -15,7 +15,6 @@ import pytest
 
 import routes.teams as teams_module
 
-pytestmark = pytest.mark.asyncio
 
 
 async def test_consensus_with_four_members_produces_exactly_four_correct_steps(monkeypatch):

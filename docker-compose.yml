@@ -18,7 +18,7 @@ services:
       dockerfile: Dockerfile.dev
     container_name: agent-desktop-backend-dev
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8760}:8765"
     volumes:
       - ./backend:/app
       - type: bind
@@ -86,7 +86,7 @@ services:
     build: ./backend
     container_name: agent-desktop-backend
     ports:
-      - "127.0.0.1:8765:8765"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8760}:8765"
     volumes:
       # backend/Dockerfile 現在用非 root 的 appuser 執行（家目錄
       # /home/appuser），掛載目標要跟著改，不然還是 /root/.claude 沒人會用。

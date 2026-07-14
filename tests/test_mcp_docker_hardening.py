@@ -8,7 +8,6 @@ import pytest
 
 import main
 
-pytestmark = pytest.mark.asyncio
 
 
 class TestIsSafeDockerIdent:

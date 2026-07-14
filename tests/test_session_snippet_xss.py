@@ -7,7 +7,6 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.asyncio
 
 
 def _write_session_file(tmp_claude_home, project_slug: str, session_id: str, user_text: str):

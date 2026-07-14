@@ -17,7 +17,6 @@ import pytest
 
 import routes.teams as teams_module
 
-pytestmark = pytest.mark.asyncio
 
 
 async def test_inline_payload_sequential_mode_chains_output(monkeypatch):

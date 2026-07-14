@@ -13,7 +13,6 @@ import pytest
 
 from engines.base import RunResult
 
-pytestmark = pytest.mark.asyncio
 
 
 def _write_agent(agents_dir, agent_id: str, engine: str = "", skills: list = None) -> None:
