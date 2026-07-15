@@ -40,12 +40,12 @@ def _get_main_module():
 
 def _dirs():
     import database as _db
-    return _db.TEAMS_DIR, _db.AGENTS_DIR
+    return _db.TEAMS_DIR, _db.REGISTRY_AGENTS_DIR
 
 
 def _skills_dir():
     import database as _db
-    return _db.SKILLS_DIR
+    return _db.REGISTRY_SKILLS_DIR
 
 
 def _is_safe_id(name: str) -> bool:

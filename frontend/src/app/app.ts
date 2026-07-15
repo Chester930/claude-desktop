@@ -81,38 +81,51 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   skills = signal<Skill[]>([]);
   resourceSyncStatus = signal<ResourceSyncStatus | null>(null);
-  resourceSyncLoading = signal(false);
   resourceSyncPending = computed(() => {
     const status = this.resourceSyncStatus();
     if (!status) return 0;
-    return status.agents.missing_in_codex.length + status.agents.outdated.length
+    const codex = status.agents.missing_in_codex.length + status.agents.outdated.length
       + status.skills.missing_in_codex.length + status.skills.outdated.length;
+    const mirror = status.claude_mirror;
+    const claude = mirror
+      ? mirror.agents.missing_in_claude.length + mirror.agents.outdated.length
+        + mirror.skills.missing_in_claude.length + mirror.skills.outdated.length
+      : 0;
+    return codex + claude;
   });
   resourceSyncConflicts = computed(() => {
     const status = this.resourceSyncStatus();
     if (!status) return 0;
-    return status.agents.conflicts.length + status.skills.conflicts.length;
+    const codex = status.agents.conflicts.length + status.skills.conflicts.length;
+    const mirror = status.claude_mirror;
+    return codex + (mirror ? mirror.agents.conflicts.length + mirror.skills.conflicts.length : 0);
   });
   // 衝突/待同步的實際名稱（不只是數字），讓使用者知道具體是哪個 Agent/Skill 卡住
   resourceSyncConflictNames = computed(() => {
     const status = this.resourceSyncStatus();
     if (!status) return [];
     return [
-      ...status.agents.conflicts.map(name => ({ name, kind: 'agent' as const })),
-      ...status.skills.conflicts.map(name => ({ name, kind: 'skill' as const })),
+      ...status.agents.conflicts.map(name => ({ name, kind: 'agent' as const, target: 'Codex' as const })),
+      ...status.skills.conflicts.map(name => ({ name, kind: 'skill' as const, target: 'Codex' as const })),
+      ...(status.claude_mirror?.agents.conflicts ?? []).map(name => ({ name, kind: 'agent' as const, target: 'Claude' as const })),
+      ...(status.claude_mirror?.skills.conflicts ?? []).map(name => ({ name, kind: 'skill' as const, target: 'Claude' as const })),
     ];
   });
   resourceSyncPendingNames = computed(() => {
     const status = this.resourceSyncStatus();
     if (!status) return [];
     return [
-      ...status.agents.missing_in_codex.map(name => ({ name, kind: 'agent' as const })),
-      ...status.agents.outdated.map(name => ({ name, kind: 'agent' as const })),
-      ...status.skills.missing_in_codex.map(name => ({ name, kind: 'skill' as const })),
-      ...status.skills.outdated.map(name => ({ name, kind: 'skill' as const })),
+      ...status.agents.missing_in_codex.map(name => ({ name, kind: 'agent' as const, target: 'Codex' as const })),
+      ...status.agents.outdated.map(name => ({ name, kind: 'agent' as const, target: 'Codex' as const })),
+      ...status.skills.missing_in_codex.map(name => ({ name, kind: 'skill' as const, target: 'Codex' as const })),
+      ...status.skills.outdated.map(name => ({ name, kind: 'skill' as const, target: 'Codex' as const })),
+      ...(status.claude_mirror?.agents.missing_in_claude ?? []).map(name => ({ name, kind: 'agent' as const, target: 'Claude' as const })),
+      ...(status.claude_mirror?.agents.outdated ?? []).map(name => ({ name, kind: 'agent' as const, target: 'Claude' as const })),
+      ...(status.claude_mirror?.skills.missing_in_claude ?? []).map(name => ({ name, kind: 'skill' as const, target: 'Claude' as const })),
+      ...(status.claude_mirror?.skills.outdated ?? []).map(name => ({ name, kind: 'skill' as const, target: 'Claude' as const })),
     ];
   });
-  // codex_only：Codex 原生已有、但 registry 裡還沒有對應項目——可以「匯入」
+  // 引擎原生已有、但 registry 尚未採納；背景 reconcile 會處理無歧義項目。
   resourceImportableNames = computed(() => {
     const status = this.resourceSyncStatus();
     if (!status) return [];
@@ -125,7 +138,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     ];
   });
   resourceSyncDetailsExpanded = signal(false);
-  resourceImportLoading = signal(false);
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
   schedules = signal<Schedule[]>([]);
@@ -575,6 +587,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // Backend health
   backendDown = signal(false);
   private _healthTimer: any;
+  private _resourceSyncTimer: any;
 
   // Session pagination
   sessionOffset = 0;
@@ -1602,55 +1615,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  syncResourcesToCodex() {
-    const pending = this.resourceSyncPending();
-    if (!pending) {
-      this.showToast('Agent 與 Skill 已同步，不需要更新。', 'info');
-      return;
-    }
-    if (!confirm(`將 ${pending} 個 Agent／Skill 部署到 Codex。既有非受管檔案不會被覆蓋，是否繼續？`)) return;
-    this.resourceSyncLoading.set(true);
-    this.claude.syncResources(false).subscribe({
-      next: result => {
-        this.resourceSyncLoading.set(false);
-        this.resourceSyncStatus.set(result.status);
-        const changed = result.agents.created.length + result.agents.updated.length
-          + result.skills.created.length + result.skills.updated.length;
-        const conflicts = result.agents.conflicts.length + result.skills.conflicts.length;
-        this.showToast(`已同步 ${changed} 個項目${conflicts ? `；略過 ${conflicts} 個衝突` : ''}`, conflicts ? 'warn' : 'success', 4500);
-      },
-      error: (e) => {
-        this.resourceSyncLoading.set(false);
-        this.showToast(`同步失敗：${e.error?.error || e.message || e}`, 'error');
-      },
-    });
-  }
-
   toggleResourceSyncDetails() {
     this.resourceSyncDetailsExpanded.update(v => !v);
-  }
-
-  importNativeResources() {
-    const importable = this.resourceImportableNames();
-    if (!importable.length) {
-      this.showToast('沒有可匯入的原生 Agent／Skill。', 'info');
-      return;
-    }
-    if (!confirm(`將 ${importable.length} 個引擎原生 Agent／Skill 匯入單一來源（registry）。已存在同名項目會略過，不會覆蓋，是否繼續？`)) return;
-    this.resourceImportLoading.set(true);
-    this.claude.importNativeResources(false).subscribe({
-      next: result => {
-        this.resourceImportLoading.set(false);
-        this.resourceSyncStatus.set(result.status);
-        const imported = result.agents.imported.length + result.skills.imported.length;
-        const skipped = result.agents.skipped.length + result.skills.skipped.length;
-        this.showToast(`已匯入 ${imported} 個項目${skipped ? `；略過 ${skipped} 個（registry 已有同名項目）` : ''}`, 'success', 4500);
-      },
-      error: (e) => {
-        this.resourceImportLoading.set(false);
-        this.showToast(`匯入失敗：${e.error?.error || e.message || e}`, 'error');
-      },
-    });
   }
 
   toggleMemViewSection(key: string) {
@@ -1936,6 +1902,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
             this.agentEditorOpen.set(false);
             this.claude.getAgents().subscribe(a => this.agents.set(a));
             this.claude.getSouls().subscribe(s => this.souls.set(s));
+            this.loadResourceSyncStatus();
           },
           error: (e) => this.showToast(`Agent 已儲存，但 Soul 內容儲存失敗: ${e.message ?? e}`, 'error'),
         });
@@ -1951,7 +1918,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   deleteAgent(id: string) {
     this.claude.deleteAgent(id).subscribe({
-      next: () => this.claude.getAgents().subscribe(a => this.agents.set(a)),
+      next: () => {
+        this.claude.getAgents().subscribe(a => this.agents.set(a));
+        this.loadResourceSyncStatus();
+      },
       error: (e) => this.showToast(`刪除 Agent 失敗: ${e.message ?? e}`, 'error'),
     });
   }
@@ -2061,7 +2031,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!d.id) return;
     this.claude.updateSkill(d.id, { description: d.description, mcp: d.mcp, memory: d.memory, output_memory: d.output_memory })
       .subscribe({
-        next: () => { this.skillEditorOpen.set(false); this.claude.getSkills().subscribe(s => this.skills.set(s)); },
+        next: () => {
+          this.skillEditorOpen.set(false);
+          this.claude.getSkills().subscribe(s => this.skills.set(s));
+          this.loadResourceSyncStatus();
+        },
         error: (e) => this.showToast(`儲存 Skill 失敗: ${e.message ?? e}`, 'error'),
       });
   }
@@ -3084,6 +3058,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         error: () => this.backendDown.set(true),
       });
     }, 10000);
+    this._resourceSyncTimer = setInterval(() => this.loadResourceSyncStatus(), 60 * 1000);
     // T06 — 每秒更新 tool timer
     this._toolTickTimer = setInterval(() => this.toolTick.update(v => v + 1), 1000);
 
@@ -3121,7 +3096,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   ngOnDestroy() {
-    clearInterval(this._healthTimer); clearInterval(this._toolTickTimer); clearInterval(this.usageTimer);
+    clearInterval(this._healthTimer); clearInterval(this._resourceSyncTimer);
+    clearInterval(this._toolTickTimer); clearInterval(this.usageTimer);
     if (this._mcpLogInterval) clearInterval(this._mcpLogInterval);
     for (const fn of this.tabStopFns.values()) fn();
     this.tabStopFns.clear();
@@ -4314,9 +4290,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!agent) return;
     const cur = agent.skills ?? [];
     const next = cur.includes(skillId) ? cur.filter(s => s !== skillId) : [...cur, skillId];
-    this.claude.updateAgent(id, { skills: next }).subscribe(() =>
-      this.claude.getAgents().subscribe(a => this.agents.set(a))
-    );
+    this.claude.updateAgent(id, { skills: next }).subscribe(() => {
+      this.claude.getAgents().subscribe(a => this.agents.set(a));
+      this.loadResourceSyncStatus();
+    });
   }
 
   // 永久綁定：agent → MCPs（源自 frontmatter）
@@ -4333,9 +4310,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (!agent) return;
     const cur = agent.mcp ?? [];
     const next = cur.includes(mcpName) ? cur.filter(m => m !== mcpName) : [...cur, mcpName];
-    this.claude.updateAgent(id, { mcp: next }).subscribe(() =>
-      this.claude.getAgents().subscribe(a => this.agents.set(a))
-    );
+    this.claude.updateAgent(id, { mcp: next }).subscribe(() => {
+      this.claude.getAgents().subscribe(a => this.agents.set(a));
+      this.loadResourceSyncStatus();
+    });
   }
 
   // 一次性：綁定到目前 tab

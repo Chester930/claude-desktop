@@ -32,7 +32,7 @@ async def test_parallel_team_routes_each_member_to_its_own_engine(monkeypatch, t
     agents_dir = tmp_path / "agents"
     _write_agent(agents_dir, "mixed-codex-agent", "codex")
     _write_agent(agents_dir, "mixed-claude-agent", "claude")
-    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
 
     calls = []
 
@@ -83,7 +83,7 @@ async def test_agent_frontmatter_engine_overrides_run_level_default(monkeypatch,
     import database
     agents_dir = tmp_path / "agents"
     _write_agent(agents_dir, "override-agent", "claude")
-    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
 
     calls = []
 
@@ -133,7 +133,7 @@ async def test_agent_run_capture_does_not_leak_anthropic_key_into_codex_env(monk
     agents_dir = tmp_path / "agents"
     _write_agent(agents_dir, "codex-agent", "codex")
     _write_agent(agents_dir, "claude-agent", "claude")
-    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
 
     import sys
     fake_main = type(sys)("fake_main_for_key_leak_test")
@@ -170,7 +170,7 @@ async def test_agent_run_capture_passes_resolved_codex_api_key(monkeypatch, tmp_
     import database
     agents_dir = tmp_path / "agents"
     _write_agent(agents_dir, "codex-agent", "codex")
-    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
 
     import sys
     fake_main = type(sys)("fake_main_for_codex_key_passthrough_test")

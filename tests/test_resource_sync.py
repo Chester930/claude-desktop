@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 
 from resource_sync import ResourceSyncService
 
@@ -73,6 +74,60 @@ def test_sync_updates_only_managed_codex_agent(tmp_path):
     assert 'description = "v2"' in target.read_text(encoding="utf-8")
     assert "Second body." in target.read_text(encoding="utf-8")
     assert result["agents"]["updated"] == ["planner"]
+
+
+def test_sync_removes_only_managed_orphans_from_all_engine_targets(tmp_path):
+    registry = tmp_path / "registry"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    claude_native = tmp_path / "real-claude"
+
+    _write(registry / "agents" / "planner.md", "---\nname: planner\n---\n\nBody\n")
+    _write(registry / "skills" / "tdd" / "SKILL.md", "# TDD\n")
+    service = ResourceSyncService(registry, codex, shared, claude_native_home=claude_native)
+    service.sync()
+
+    (registry / "agents" / "planner.md").unlink()
+    shutil.rmtree(registry / "skills" / "tdd")
+    _write(codex / "agents" / "mine.toml", 'name = "mine"\n')
+    _write(shared / "mine" / "SKILL.md", "user-owned\n")
+
+    dry_run = service.sync(dry_run=True)
+    assert dry_run["agents"]["deleted"] == ["planner"]
+    assert dry_run["skills"]["deleted"] == ["tdd"]
+    assert dry_run["claude_mirror"]["agents"]["deleted"] == ["planner"]
+    assert dry_run["claude_mirror"]["skills"]["deleted"] == ["tdd"]
+    assert (codex / "agents" / "planner.toml").exists()
+
+    result = service.sync()
+    assert result["agents"]["deleted"] == ["planner"]
+    assert not (codex / "agents" / "planner.toml").exists()
+    assert not (shared / "tdd").exists()
+    assert not (claude_native / "agents" / "planner.md").exists()
+    assert not (claude_native / "skills" / "tdd").exists()
+    assert (codex / "agents" / "mine.toml").exists()
+    assert (shared / "mine" / "SKILL.md").exists()
+
+
+def test_sync_detects_changes_in_skill_supporting_files(tmp_path):
+    registry = tmp_path / "registry"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    source = registry / "skills" / "tdd"
+
+    _write(source / "SKILL.md", "# TDD\n")
+    _write(source / "references" / "guide.md", "version one\n")
+    service = ResourceSyncService(registry, codex, shared)
+    service.sync()
+    _write(source / "references" / "guide.md", "version two\n")
+
+    # UI status intentionally compares the entry document only so hundreds of
+    # asset trees do not make the endpoint take minutes. Deployment below still
+    # hashes the complete payload and must detect this supporting-file change.
+    assert service.status()["skills"]["synced"] == ["tdd"]
+    result = service.sync()
+    assert result["skills"]["updated"] == ["tdd"]
+    assert (shared / "tdd" / "references" / "guide.md").read_text(encoding="utf-8") == "version two\n"
 
 
 def test_dry_run_makes_no_files(tmp_path):
@@ -235,6 +290,38 @@ def test_import_native_reports_skipped_when_destination_already_occupied(tmp_pat
 
     assert result["skills"]["skipped"] == ["mystery"]
     assert not (registry / "skills" / "mystery" / "SKILL.md").exists()
+
+
+def test_import_native_does_not_choose_between_different_engine_versions(tmp_path):
+    registry = tmp_path / "registry"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    claude_native = tmp_path / ".claude"
+    _write(codex / "agents" / "reviewer.toml", 'name = "reviewer"\ndeveloper_instructions = "Codex body"\n')
+    _write(claude_native / "agents" / "reviewer.md", "---\nname: reviewer\n---\n\nClaude body\n")
+    _write(shared / "tdd" / "SKILL.md", "Codex skill\n")
+    _write(claude_native / "skills" / "tdd" / "SKILL.md", "Claude skill\n")
+
+    result = ResourceSyncService(registry, codex, shared, claude_native_home=claude_native).import_native()
+
+    assert result["agents"]["conflicts"] == ["reviewer"]
+    assert result["skills"]["conflicts"] == ["tdd"]
+    assert not (registry / "agents" / "reviewer.md").exists()
+    assert not (registry / "skills" / "tdd").exists()
+
+
+def test_reconcile_adopts_native_only_then_renders_other_engine(tmp_path):
+    registry = tmp_path / "registry"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    claude_native = tmp_path / ".claude"
+    _write(shared / "native-skill" / "SKILL.md", "Native content\n")
+
+    result = ResourceSyncService(registry, codex, shared, claude_native_home=claude_native).reconcile()
+
+    assert result["adopted"]["skills"]["imported"] == ["native-skill"]
+    assert (registry / "skills" / "native-skill" / "SKILL.md").exists()
+    assert (claude_native / "skills" / "native-skill" / "SKILL.md").exists()
 
 
 def test_equivalent_unmanaged_codex_agent_is_already_synced(tmp_path):

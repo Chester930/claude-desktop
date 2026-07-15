@@ -49,6 +49,7 @@ services:
       - CODEX_RESOURCE_HOME=/mnt/host-codex
       - CODEX_SKILLS_HOME=/mnt/host-agents/skills
       - REGISTRY_HOME=/mnt/host-registry
+      - RESOURCE_RECONCILE_INTERVAL=30
       # container 需要接受 frontend-dev 透過 compose 內部網路連線，
       # 明確放寬成 0.0.0.0（僅限 container 內部，host 端仍只綁 127.0.0.1，見上）
       - BACKEND_BIND_HOST=0.0.0.0
@@ -121,6 +122,7 @@ services:
       - CODEX_RESOURCE_HOME=/mnt/host-codex
       - CODEX_SKILLS_HOME=/mnt/host-agents/skills
       - REGISTRY_HOME=/mnt/host-registry
+      - RESOURCE_RECONCILE_INTERVAL=30
       - BACKEND_BIND_HOST=0.0.0.0
     deploy:
       resources:

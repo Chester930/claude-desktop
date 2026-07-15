@@ -68,11 +68,11 @@ export interface ResourceSyncStatus {
   };
 }
 export interface ResourceSyncResult {
-  agents: { created: string[]; updated: string[]; conflicts: string[] };
-  skills: { created: string[]; updated: string[]; conflicts: string[] };
+  agents: { created: string[]; updated: string[]; deleted: string[]; conflicts: string[] };
+  skills: { created: string[]; updated: string[]; deleted: string[]; conflicts: string[] };
   claude_mirror?: {
-    agents: { created: string[]; updated: string[]; conflicts: string[] };
-    skills: { created: string[]; updated: string[]; conflicts: string[] };
+    agents: { created: string[]; updated: string[]; deleted: string[]; conflicts: string[] };
+    skills: { created: string[]; updated: string[]; deleted: string[]; conflicts: string[] };
   };
   dry_run: boolean;
   status: ResourceSyncStatus;

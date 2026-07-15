@@ -74,6 +74,16 @@ for _k in dir(_db_mod):
         setattr(_curr, _k, getattr(_db_mod, _k))
 
 
+def _registry_agents_dir() -> Path:
+    """Return the live canonical Agent directory after dynamic reconfiguration."""
+    return _db_mod.REGISTRY_AGENTS_DIR
+
+
+def _registry_skills_dir() -> Path:
+    """Return the live canonical Skill directory after dynamic reconfiguration."""
+    return _db_mod.REGISTRY_SKILLS_DIR
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -259,7 +269,7 @@ async def _resolve_agent_engine_and_key(agent_id: str, request_engine: str = "")
 
     agent_own_engine = ""
     if agent_id:
-        agent_file = AGENTS_DIR / f"{agent_id}.md"
+        agent_file = _registry_agents_dir() / f"{agent_id}.md"
         if agent_file.exists():
             try:
                 agent_own_engine = _agent_dict(agent_file).get("engine", "")
@@ -577,7 +587,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             fm = f"[Memory Context]\n{mem_ctx}\n\n---\n\n{fm}"
 
         if agent:
-            agent_file = AGENTS_DIR / f"{agent}.md"
+            agent_file = _registry_agents_dir() / f"{agent}.md"
             if agent_file.exists():
                 try:
                     text = agent_file.read_text(encoding="utf-8")
@@ -592,7 +602,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                     # 塞進 prompt，真正生效與否完全依賴底層 CLI 自己原生
                     # 的 slash-skill 機制。這裡改成 app 自己讀內容手動折
                     # 進去，讓 skill 對兩個引擎都真正生效。
-                    skills_content = _read_skills_content(SKILLS_DIR, _agent_dict(agent_file).get("skills", []))
+                    skills_content = _read_skills_content(_registry_skills_dir(), _agent_dict(agent_file).get("skills", []))
                     if skills_content:
                         fm = f"[Skills]\n{skills_content}\n\n---\n\n{fm}"
                 except Exception:
@@ -901,12 +911,12 @@ async def handle_team_chat(request: web.Request) -> web.StreamResponse:
             if soul:
                 fp = f"[System Persona]\n{soul}\n\n{fp}"
 
-            agent_file_path = AGENTS_DIR / f"{agent_id}.md"
+            agent_file_path = _registry_agents_dir() / f"{agent_id}.md"
             if agent_file_path.exists():
                 body = _read_agent_body(agent_file_path)
                 if body:
                     fp = f"[代理人定義：{agent_id}]\n{body}\n\n---\n\n{fp}"
-                skills_content = _read_skills_content(SKILLS_DIR, _agent_dict(agent_file_path).get("skills", []))
+                skills_content = _read_skills_content(_registry_skills_dir(), _agent_dict(agent_file_path).get("skills", []))
                 if skills_content:
                     fp = f"[Skills]\n{skills_content}\n\n---\n\n{fp}"
             return fp
@@ -1302,7 +1312,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
         log_file = Path(project_path) / f".agent_{agent_id}.log"
 
         def _build_full_exec_prompt() -> str:
-            agent_file = AGENTS_DIR / f"{agent_id}.md"
+            agent_file = _registry_agents_dir() / f"{agent_id}.md"
             agent_body = _read_agent_body(agent_file) if agent_file.exists() else ""
             prompt = (
                 f"你現在在專案目錄 {project_path} 下執行任務。\n"
@@ -1314,7 +1324,7 @@ async def handle_team_execute(request: web.Request) -> web.StreamResponse:
             if agent_body:
                 prompt = f"[你的代理人特徵與能力]\n{agent_body}\n\n---\n\n{prompt}"
             if agent_file.exists():
-                skills_content = _read_skills_content(SKILLS_DIR, _agent_dict(agent_file).get("skills", []))
+                skills_content = _read_skills_content(_registry_skills_dir(), _agent_dict(agent_file).get("skills", []))
                 if skills_content:
                     prompt = f"[Skills]\n{skills_content}\n\n---\n\n{prompt}"
             soul = get_agent_soul(agent_id)
@@ -3453,7 +3463,9 @@ async def handle_config_put(request: web.Request) -> web.Response:
 
 
 def _init_presets() -> None:
-    """如果 CLAUDE_HOME 下的 skills/agents/teams 目錄中沒有對應的 preset，就從專案 preset 目錄複製過去。
+    """如果 Registry 下缺少 Agent/Skill preset，就複製到共用來源並渲染。
+
+    Team/Soul 仍屬於應用程式資料，維持在 CLAUDE_HOME。
     同時將預設的 MCP 伺服器設定合併到 ~/.claude/claude.json 中。"""
     # 測試環境不執行
     if "PYTEST_CURRENT_TEST" in os.environ:
@@ -3473,34 +3485,39 @@ def _init_presets() -> None:
             _log(f"Presets directory not found at: {presets_dir}")
             return
 
-        # 確保 CLAUDE_HOME 底下的目標目錄存在
-        AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-        SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        registry_agents = _db_mod.REGISTRY_AGENTS_DIR
+        registry_skills = _db_mod.REGISTRY_SKILLS_DIR
+        registry_agents.mkdir(parents=True, exist_ok=True)
+        registry_skills.mkdir(parents=True, exist_ok=True)
         TEAMS_DIR.mkdir(parents=True, exist_ok=True)
         SOULS_DIR.mkdir(parents=True, exist_ok=True)
+        added_agents: set[str] = set()
+        added_skills: set[str] = set()
 
         # 1. 複製 skills
         p_skills = presets_dir / "skills"
         if p_skills.exists():
             for src in p_skills.iterdir():
-                dest = SKILLS_DIR / src.name
+                dest = registry_skills / src.name
                 if not dest.exists():
                     if src.is_dir():
                         shutil.copytree(src, dest)
                     else:
                         shutil.copy2(src, dest)
+                    added_skills.add(src.stem if src.is_file() else src.name)
                     _log(f"Copied preset skill: {src.name} -> {dest}")
 
         # 2. 複製 agents
         p_agents = presets_dir / "agents"
         if p_agents.exists():
             for src in p_agents.iterdir():
-                dest = AGENTS_DIR / src.name
+                dest = registry_agents / src.name
                 if not dest.exists():
                     if src.is_dir():
                         shutil.copytree(src, dest)
                     else:
                         shutil.copy2(src, dest)
+                    added_agents.add(src.stem if src.is_file() else src.name)
                     _log(f"Copied preset agent: {src.name} -> {dest}")
 
         # 3. 複製 teams
@@ -3558,6 +3575,13 @@ def _init_presets() -> None:
 
                 if changed:
                     _safe_write_text(dest_claude_json, json.dumps(user_data, ensure_ascii=False, indent=2))
+
+        if added_agents or added_skills:
+            try:
+                from routes.resource_sync import _service
+                _service().sync(False, agent_names=added_agents, skill_names=added_skills)
+            except Exception as e:
+                _log(f"Preset resource render failed: {e}")
 
     except Exception as e:
         _log(f"Error initializing presets: {e}")

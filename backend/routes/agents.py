@@ -46,14 +46,14 @@ def _dirs():
     return _db.REGISTRY_AGENTS_DIR, _db.REGISTRY_SKILLS_DIR
 
 
-async def _trigger_resource_sync() -> None:
+async def _trigger_resource_sync(*, agent_ids: set[str] | None = None, skill_ids: set[str] | None = None) -> None:
     """Best-effort auto-render of the registry into every native engine home
     right after a CRUD write. Never raises — a sync hiccup must not fail the
     save the user just made; the manual "檢查/同步" button in the sidebar
     remains available to retry and to surface any conflict that blocked it."""
     try:
         from routes.resource_sync import _service
-        await asyncio.to_thread(_service().sync, False)
+        await asyncio.to_thread(_service().sync, False, agent_ids, skill_ids)
     except Exception:
         pass
 
@@ -129,7 +129,7 @@ async def handle_agent_put(request: web.Request) -> web.Response:
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
-    await _trigger_resource_sync()
+    await _trigger_resource_sync(agent_ids={aid})
     return web.json_response({"ok": True})
 
 
@@ -156,7 +156,7 @@ async def handle_agent_post(request: web.Request) -> web.Response:
         f"soul: \nskills: []\nmemory: []\nmcp: []\noutput_memory: []\n{engine_line}---\n\n## {name}\n\n{desc}\n",
         encoding="utf-8"
     )
-    await _trigger_resource_sync()
+    await _trigger_resource_sync(agent_ids={name})
     return web.json_response({"ok": True, "id": name})
 
 
@@ -168,6 +168,7 @@ async def handle_agent_delete(request: web.Request) -> web.Response:
     f = AGENTS_DIR / f"{aid}.md"
     if f.exists():
         f.unlink()
+        await _trigger_resource_sync(agent_ids={aid})
     return web.json_response({"ok": True})
 
 
@@ -376,7 +377,7 @@ async def handle_skill_put(request: web.Request) -> web.Response:
         if field in data:
             fm[field] = data[field]
     _write_frontmatter(f, fm)
-    await _trigger_resource_sync()
+    await _trigger_resource_sync(skill_ids={sid})
     return web.json_response({"ok": True})
 
 

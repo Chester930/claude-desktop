@@ -8,6 +8,7 @@
 import pytest
 
 from engines.base import RunResult
+import database
 import routes.teams as teams_module
 from engines import claude_engine, codex_engine
 
@@ -39,8 +40,8 @@ async def test_agent_run_capture_folds_skill_content_into_prompt_for_claude(monk
     # 預設值變動而跟著壞掉。
     _write_agent(agents_dir, "skilled-agent", ["tdd"], engine="claude")
     _write_skill(skills_dir, "tdd", "永遠先寫測試，紅燈-綠燈-重構。")
-    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
-    monkeypatch.setattr(database, "SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(database, "REGISTRY_SKILLS_DIR", skills_dir)
 
     captured = {}
 
@@ -67,8 +68,8 @@ async def test_agent_run_capture_folds_skill_content_into_prompt_for_codex(monke
     skills_dir = tmp_path / "skills"
     _write_agent(agents_dir, "codex-skilled-agent", ["web-design"], engine="codex")
     _write_skill(skills_dir, "web-design", "注重可用性與對比度。")
-    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
-    monkeypatch.setattr(database, "SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(database, "REGISTRY_SKILLS_DIR", skills_dir)
 
     captured = {}
 
@@ -92,7 +93,7 @@ async def test_agent_run_capture_without_skills_has_no_skills_section(monkeypatc
     (agents_dir / "plain-agent.md").write_text(
         "---\nname: plain-agent\ndescription: test\nengine: claude\n---\n\nbody\n", encoding="utf-8",
     )
-    monkeypatch.setattr(database, "AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
 
     captured = {}
 
@@ -106,3 +107,26 @@ async def test_agent_run_capture_without_skills_has_no_skills_section(monkeypatc
     await teams_module._agent_run_capture("skills-run-none", 0, "plain-agent", "任務內容", "", str(tmp_path))
 
     assert "[Skills]" not in captured["prompt"]
+
+
+async def test_agent_run_capture_reads_decoupled_registry_directly(monkeypatch, tmp_path):
+    agents_dir = tmp_path / "registry" / "agents"
+    skills_dir = tmp_path / "registry" / "skills"
+    _write_agent(agents_dir, "registry-agent", ["tdd"], engine="codex")
+    _write_skill(skills_dir, "tdd", "Registry skill content.")
+    monkeypatch.setattr(database, "REGISTRY_AGENTS_DIR", agents_dir)
+    monkeypatch.setattr(database, "REGISTRY_SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(database, "AGENTS_DIR", tmp_path / "stale-claude" / "agents")
+    monkeypatch.setattr(database, "SKILLS_DIR", tmp_path / "stale-claude" / "skills")
+
+    captured = {}
+    async def fake_codex_run_turn(**kwargs):
+        captured.update(kwargs)
+        return RunResult(output="ok", session_id="sid-registry")
+
+    monkeypatch.setattr(codex_engine, "run_turn", fake_codex_run_turn)
+    teams_module._team_runs["registry-run"] = {"status": "running"}
+    await teams_module._agent_run_capture("registry-run", 0, "registry-agent", "task", "", str(tmp_path))
+
+    assert "Registry skill content." in captured["prompt"]
+    assert "body" in captured["prompt"]

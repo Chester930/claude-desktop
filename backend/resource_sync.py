@@ -37,7 +37,10 @@ CLAUDE_MIRROR_MARKER = "<!-- Managed by Agent Desktop resource sync."
 
 
 def _frontmatter_and_body(path: Path) -> tuple[dict, str]:
-    text = path.read_text(encoding="utf-8")
+    return _frontmatter_and_body_text(path.read_text(encoding="utf-8"))
+
+
+def _frontmatter_and_body_text(text: str) -> tuple[dict, str]:
     if not text.startswith("---"):
         return {}, text.strip()
     lines = text.splitlines()
@@ -168,15 +171,19 @@ def _payload_hash(payload: dict[str, bytes]) -> str:
 
 
 def _skill_entry_hash(source: Path) -> str:
-    """Fast identity used by status/dry-run; assets are read only when syncing."""
+    """Identity of the complete deployable skill, including supporting files."""
+    return _payload_hash(_skill_payload(source))
+
+
+def _skill_status_hash(source: Path) -> str:
+    """Fast UI identity; deployment still verifies the complete payload."""
     if source.is_file():
-        content = source.read_bytes()
+        entry = source
     else:
         entry = source / "SKILL.md"
         if not entry.is_file():
             entry = source / "README.md"
-        content = entry.read_bytes()
-    return hashlib.sha256(content).hexdigest()
+    return hashlib.sha256(entry.read_bytes()).hexdigest()
 
 
 def _write_skill_payload(target: Path, payload: dict[str, bytes]) -> None:
@@ -275,7 +282,7 @@ class ResourceSyncService:
         root = self.claude_native_home / "agents"
         if not root.exists():
             return {}
-        return {p.stem: p for p in root.glob("*.md") if p.is_file()}
+        return {p.stem: p for p in root.glob("*.md") if p.is_file() or p.is_symlink()}
 
     def _claude_mirror_skill_targets(self) -> dict[str, Path]:
         if self.claude_native_home is None:
@@ -285,7 +292,9 @@ class ResourceSyncService:
             return {}
         result: dict[str, Path] = {}
         for entry in root.iterdir():
-            if entry.is_file() and entry.suffix.lower() == ".md":
+            if entry.is_symlink():
+                result[entry.stem if entry.suffix.lower() == ".md" else entry.name] = entry
+            elif entry.is_file() and entry.suffix.lower() == ".md":
                 result[entry.stem] = entry
             elif entry.is_dir() and (entry / "SKILL.md").is_file():
                 result[entry.name] = entry
@@ -331,7 +340,7 @@ class ResourceSyncService:
         }
         for name, source in sorted(skill_sources.items()):
             target = skill_targets.get(name)
-            source_hash = _skill_entry_hash(source)
+            source_hash = _skill_status_hash(source)
             if target is None:
                 skills["missing_in_codex"].append(name)
                 continue
@@ -339,7 +348,7 @@ class ResourceSyncService:
                 bucket = "outdated" if self._is_managed_skill(target) else "conflicts"
                 skills[bucket].append(name)
                 continue
-            target_hash = _skill_entry_hash(target)
+            target_hash = _skill_status_hash(target)
             if source_hash == target_hash:
                 skills["synced"].append(name)
             elif self._is_managed_skill(target):
@@ -381,15 +390,22 @@ class ResourceSyncService:
         }
         for name, source in sorted(skill_sources.items()):
             target = skill_targets.get(name)
-            source_hash = _skill_entry_hash(source)
+            source_hash = _skill_status_hash(source)
             if target is None:
                 skills["missing_in_claude"].append(name)
                 continue
-            if target.is_symlink() or not target.is_dir() or not (target / "SKILL.md").is_file():
+            if target.is_symlink():
+                shared_target = self.codex_skills / name
+                if shared_target.is_dir() and (shared_target / "SKILL.md").is_file() and _skill_status_hash(shared_target) == source_hash:
+                    skills["synced"].append(name)
+                else:
+                    skills["conflicts"].append(name)
+                continue
+            if not target.is_dir() or not (target / "SKILL.md").is_file():
                 bucket = "outdated" if self._is_managed_skill(target) else "conflicts"
                 skills[bucket].append(name)
                 continue
-            target_hash = _skill_entry_hash(target)
+            target_hash = _skill_status_hash(target)
             if source_hash == target_hash:
                 skills["synced"].append(name)
             elif self._is_managed_skill(target):
@@ -399,13 +415,32 @@ class ResourceSyncService:
 
         return {"agents": agents, "skills": skills}
 
-    def sync(self, dry_run: bool = False) -> dict:
+    def sync(
+        self,
+        dry_run: bool = False,
+        agent_names: set[str] | None = None,
+        skill_names: set[str] | None = None,
+    ) -> dict:
         result = {
-            "agents": {"created": [], "updated": [], "conflicts": []},
-            "skills": {"created": [], "updated": [], "conflicts": []},
+            "agents": {"created": [], "updated": [], "deleted": [], "conflicts": []},
+            "skills": {"created": [], "updated": [], "deleted": [], "conflicts": []},
         }
+        all_agent_sources = self._agent_sources()
+        all_skill_sources = self._skill_sources()
+        agent_sources = all_agent_sources
+        skill_sources = all_skill_sources
+        if agent_names is not None:
+            agent_sources = {name: path for name, path in agent_sources.items() if name in agent_names}
+        if skill_names is not None:
+            skill_sources = {name: path for name, path in skill_sources.items() if name in skill_names}
         agent_targets = self._agent_targets()
-        for name, source in sorted(self._agent_sources().items()):
+        for name, target in sorted(agent_targets.items()):
+            if agent_names is None or name in agent_names:
+                if name not in all_agent_sources and self._is_managed_agent(target):
+                    result["agents"]["deleted"].append(name)
+                    if not dry_run:
+                        target.unlink()
+        for name, source in sorted(agent_sources.items()):
             target = agent_targets.get(name) or (self.codex_home / "agents" / f"{name}.toml")
             expected = _agent_toml(source)
             if target.is_symlink():
@@ -425,9 +460,18 @@ class ResourceSyncService:
                 target.write_text(expected, encoding="utf-8")
 
         skill_targets = self._skill_targets()
-        for name, source in sorted(self._skill_sources().items()):
+        for name, target in sorted(skill_targets.items()):
+            if skill_names is None or name in skill_names:
+                if name not in all_skill_sources and self._is_managed_skill(target):
+                    result["skills"]["deleted"].append(name)
+                    if not dry_run:
+                        shutil.rmtree(target)
+        for name, source in sorted(skill_sources.items()):
             target = skill_targets.get(name) or (self.codex_skills / name)
             source_hash = _skill_entry_hash(source)
+            if target.is_symlink():
+                result["skills"]["conflicts"].append(name)
+                continue
             target_valid = not target.is_symlink() and target.is_dir() and (target / "SKILL.md").is_file()
             if target.exists() and target_valid and _skill_entry_hash(target) == source_hash:
                 continue
@@ -443,16 +487,37 @@ class ResourceSyncService:
                 _write_skill_payload(target, payload)
 
         if self.claude_native_home is not None:
-            result["claude_mirror"] = self._sync_claude_mirror(dry_run)
+            result["claude_mirror"] = self._sync_claude_mirror(
+                dry_run, agent_names=agent_names, skill_names=skill_names
+            )
         return result
 
-    def _sync_claude_mirror(self, dry_run: bool) -> dict:
+    def _sync_claude_mirror(
+        self,
+        dry_run: bool,
+        agent_names: set[str] | None = None,
+        skill_names: set[str] | None = None,
+    ) -> dict:
         result = {
-            "agents": {"created": [], "updated": [], "conflicts": []},
-            "skills": {"created": [], "updated": [], "conflicts": []},
+            "agents": {"created": [], "updated": [], "deleted": [], "conflicts": []},
+            "skills": {"created": [], "updated": [], "deleted": [], "conflicts": []},
         }
+        all_agent_sources = self._agent_sources()
+        all_skill_sources = self._skill_sources()
+        agent_sources = all_agent_sources
+        skill_sources = all_skill_sources
+        if agent_names is not None:
+            agent_sources = {name: path for name, path in agent_sources.items() if name in agent_names}
+        if skill_names is not None:
+            skill_sources = {name: path for name, path in skill_sources.items() if name in skill_names}
         agent_targets = self._claude_mirror_agent_targets()
-        for name, source in sorted(self._agent_sources().items()):
+        for name, target in sorted(agent_targets.items()):
+            if agent_names is None or name in agent_names:
+                if name not in all_agent_sources and _is_managed_claude_mirror(target):
+                    result["agents"]["deleted"].append(name)
+                    if not dry_run:
+                        target.unlink()
+        for name, source in sorted(agent_sources.items()):
             target = agent_targets.get(name) or (self.claude_native_home / "agents" / f"{name}.md")
             if target.is_symlink():
                 result["agents"]["conflicts"].append(name)
@@ -469,9 +534,20 @@ class ResourceSyncService:
                 target.write_text(_claude_mirror_copy(source), encoding="utf-8")
 
         skill_targets = self._claude_mirror_skill_targets()
-        for name, source in sorted(self._skill_sources().items()):
+        for name, target in sorted(skill_targets.items()):
+            if skill_names is None or name in skill_names:
+                if name not in all_skill_sources and self._is_managed_skill(target):
+                    result["skills"]["deleted"].append(name)
+                    if not dry_run:
+                        shutil.rmtree(target)
+        for name, source in sorted(skill_sources.items()):
             target = skill_targets.get(name) or (self.claude_native_home / "skills" / name)
             source_hash = _skill_entry_hash(source)
+            if target.is_symlink():
+                shared_target = self.codex_skills / name
+                if not (shared_target.is_dir() and (shared_target / "SKILL.md").is_file() and _skill_entry_hash(shared_target) == source_hash):
+                    result["skills"]["conflicts"].append(name)
+                continue
             target_valid = not target.is_symlink() and target.is_dir() and (target / "SKILL.md").is_file()
             if target.exists() and target_valid and _skill_entry_hash(target) == source_hash:
                 continue
@@ -495,41 +571,70 @@ class ResourceSyncService:
         managed marker is skipped — that's an orphaned copy we generated
         ourselves, not independent user intent worth resurrecting."""
         result = {
-            "agents": {"imported": [], "skipped": []},
-            "skills": {"imported": [], "skipped": []},
+            "agents": {"imported": [], "skipped": [], "conflicts": []},
+            "skills": {"imported": [], "skipped": [], "conflicts": []},
         }
         agent_names = set(self._agent_sources())
         skill_names = set(self._skill_sources())
+        codex_agents = self._agent_targets()
+        claude_agents = self._claude_mirror_agent_targets()
+        codex_skills = self._skill_targets()
+        claude_skills = self._claude_mirror_skill_targets()
 
-        for name, path in sorted(self._agent_targets().items()):
-            if name in agent_names or self._is_managed_agent(path):
+        for name in sorted((set(codex_agents) | set(claude_agents)) - agent_names):
+            codex_path = codex_agents.get(name)
+            claude_path = claude_agents.get(name)
+            if codex_path and self._is_managed_agent(codex_path):
+                codex_path = None
+            if claude_path and _is_managed_claude_mirror(claude_path):
+                claude_path = None
+            if codex_path and claude_path:
+                codex_markdown = _toml_agent_to_markdown(codex_path)
+                codex_meta, codex_body = _frontmatter_and_body_text(codex_markdown)
+                claude_meta, claude_body = _frontmatter_and_body(claude_path)
+                if (str(codex_meta.get("name", name)), str(codex_meta.get("description", "")), codex_body) != (
+                    str(claude_meta.get("name", name)), str(claude_meta.get("description", "")), claude_body
+                ):
+                    result["agents"]["conflicts"].append(name)
+                    continue
+            path = codex_path or claude_path
+            if path is None:
                 continue
-            self._import_agent(name, _toml_agent_to_markdown(path), result, dry_run)
+            markdown = _toml_agent_to_markdown(path) if codex_path else path.read_text(encoding="utf-8")
+            self._import_agent(name, markdown, result, dry_run)
             agent_names.add(name)
 
-        for name, path in sorted(self._claude_mirror_agent_targets().items()):
-            if name in agent_names or _is_managed_claude_mirror(path):
+        for name in sorted((set(codex_skills) | set(claude_skills)) - skill_names):
+            codex_path = codex_skills.get(name)
+            claude_path = claude_skills.get(name)
+            if codex_path and self._is_managed_skill(codex_path):
+                codex_path = None
+            if claude_path and self._is_managed_skill(claude_path):
+                claude_path = None
+            if codex_path and claude_path and _skill_entry_hash(codex_path) != _skill_entry_hash(claude_path):
+                result["skills"]["conflicts"].append(name)
                 continue
-            self._import_agent(name, path.read_text(encoding="utf-8"), result, dry_run)
-            agent_names.add(name)
-
-        for name, path in sorted(self._skill_targets().items()):
-            if name in skill_names or self._is_managed_skill(path):
-                continue
-            self._import_skill(name, path, result, dry_run)
-            skill_names.add(name)
-
-        for name, path in sorted(self._claude_mirror_skill_targets().items()):
-            if name in skill_names or self._is_managed_skill(path):
+            path = codex_path or claude_path
+            if path is None:
                 continue
             self._import_skill(name, path, result, dry_run)
             skill_names.add(name)
 
         return result
 
+    def reconcile(self, dry_run: bool = False) -> dict:
+        """Adopt unambiguous native-only resources, then render registry outputs."""
+        adopted = self.import_native(dry_run)
+        rendered = self.sync(
+            dry_run,
+            agent_names=set(adopted["agents"]["imported"]),
+            skill_names=set(adopted["skills"]["imported"]),
+        )
+        return {"adopted": adopted, "rendered": rendered, "dry_run": dry_run}
+
     def _import_agent(self, name: str, markdown: str, result: dict, dry_run: bool) -> None:
         dest = self.claude_agents / f"{name}.md"
-        if dest.exists():
+        if dest.exists() or dest.is_symlink():
             result["agents"]["skipped"].append(name)
             return
         result["agents"]["imported"].append(name)
@@ -539,7 +644,7 @@ class ResourceSyncService:
 
     def _import_skill(self, name: str, source: Path, result: dict, dry_run: bool) -> None:
         dest = self.claude_skills / name
-        if dest.exists():
+        if dest.exists() or dest.is_symlink():
             result["skills"]["skipped"].append(name)
             return
         result["skills"]["imported"].append(name)
