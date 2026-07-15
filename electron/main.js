@@ -12,6 +12,7 @@ let mainWindow;
 let backendProcess;
 let tray;
 let isQuitting = false;
+let updaterEventsRegistered = false;
 
 // shell.openExternal 會把 URL 交給作業系統的預設 handler 開啟；若不限制協定，
 // 惡意頁面／MCP 回應可以塞入 file:/javascript: 或自訂協定 URI 觸發非預期行為。
@@ -433,30 +434,38 @@ function createTray() {
 
 // ── 自動更新 ──────────────────────────────────────────────
 function checkForUpdates() {
-  if (process.argv.includes('--dev')) {
-    dialog.showMessageBox({ message: 'Dev 模式不支援自動更新。' }); return;
+  if (process.argv.includes('--dev') || !app.isPackaged) {
+    dialog.showMessageBox({ message: 'Dev 模式不支援自動更新。' });
+    return { ok: false, reason: 'dev-mode' };
   }
   try {
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.on('update-available', () => {
-      if (mainWindow) mainWindow.webContents.send('update-available');
-    });
-    autoUpdater.on('download-progress', (prog) => {
-      const pct = Math.round(prog.percent ?? 0);
-      if (mainWindow) mainWindow.webContents.send('update-progress', pct);
-    });
-    autoUpdater.on('update-downloaded', () => {
-      if (mainWindow) mainWindow.webContents.send('update-ready');
-      dialog.showMessageBox({ message: '更新已下載，將重啟應用程式。', buttons: ['立即重啟', '稍後'] })
-        .then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
-    });
-    autoUpdater.on('update-not-available', () => dialog.showMessageBox({ message: '目前已是最新版本。' }));
-    autoUpdater.on('error', (e) => dialog.showMessageBox({ message: '更新失敗：' + e.message }));
+    if (!updaterEventsRegistered) {
+      updaterEventsRegistered = true;
+      autoUpdater.on('update-available', () => {
+        if (mainWindow) mainWindow.webContents.send('update-available');
+      });
+      autoUpdater.on('download-progress', (prog) => {
+        const pct = Math.round(prog.percent ?? 0);
+        if (mainWindow) mainWindow.webContents.send('update-progress', pct);
+      });
+      autoUpdater.on('update-downloaded', () => {
+        if (mainWindow) mainWindow.webContents.send('update-ready');
+        dialog.showMessageBox({ message: '更新已下載，將重啟應用程式。', buttons: ['立即重啟', '稍後'] })
+          .then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
+      });
+      autoUpdater.on('update-not-available', () => dialog.showMessageBox({ message: '目前已是最新版本。' }));
+      autoUpdater.on('error', (e) => dialog.showMessageBox({ message: '更新失敗：' + e.message }));
+    }
     autoUpdater.checkForUpdates();
+    return { ok: true };
   } catch {
     dialog.showMessageBox({ message: '尚未設定更新伺服器。\n請先將專案 push 到 GitHub 並建立 Release。' });
+    return { ok: false, reason: 'updater-unavailable' };
   }
 }
+
+ipcMain.handle('app:checkForUpdates', () => checkForUpdates());
 
 // ── 應用程式生命週期 ──────────────────────────────────────
 const isDocker = process.argv.includes('--docker');

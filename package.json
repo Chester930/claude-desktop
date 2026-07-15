@@ -1,6 +1,6 @@
 {
   "name": "agent-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Agent Desktop - 可切換 Claude Code／Codex CLI 的多引擎 Agent 協作平台",
   "main": "electron/main.js",
   "scripts": {
@@ -31,6 +31,7 @@
   "build": {
     "appId":       "com.agentdesktop.app",
     "productName": "Agent 桌面版",
+    "artifactName": "Agent-Desktop-Setup-${version}.${ext}",
     "directories": { "output": "dist-electron" },
     "asar": false,
     "files": [
