@@ -206,6 +206,23 @@ def test_claude_mirror_renders_agent_and_skill_when_registry_is_decoupled(tmp_pa
     assert service.sync()["claude_mirror"]["agents"]["created"] == []
 
 
+def test_claude_mirror_status_accepts_matching_single_file_skill(tmp_path):
+    registry = tmp_path / "registry"
+    codex = tmp_path / ".codex"
+    shared = tmp_path / ".agents" / "skills"
+    claude_native = tmp_path / "real-claude"
+
+    _write(registry / "skills" / "preset.md", "# Preset\n")
+    _write(claude_native / "skills" / "preset.md", "# Preset\n")
+
+    service = ResourceSyncService(registry, codex, shared, claude_native_home=claude_native)
+
+    status = service.status()
+    assert status["claude_mirror"]["skills"]["synced"] == ["preset"]
+    assert status["claude_mirror"]["skills"]["conflicts"] == []
+    assert service.sync(dry_run=True)["claude_mirror"]["skills"]["conflicts"] == []
+
+
 def test_claude_mirror_never_overwrites_unmanaged_native_agent(tmp_path):
     registry = tmp_path / "registry"
     codex = tmp_path / ".codex"

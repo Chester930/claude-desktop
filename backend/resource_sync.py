@@ -401,7 +401,11 @@ class ResourceSyncService:
                 else:
                     skills["conflicts"].append(name)
                 continue
-            if not target.is_dir() or not (target / "SKILL.md").is_file():
+            target_valid = (
+                target.is_file()
+                or (target.is_dir() and (target / "SKILL.md").is_file())
+            )
+            if not target_valid:
                 bucket = "outdated" if self._is_managed_skill(target) else "conflicts"
                 skills[bucket].append(name)
                 continue
@@ -472,7 +476,10 @@ class ResourceSyncService:
             if target.is_symlink():
                 result["skills"]["conflicts"].append(name)
                 continue
-            target_valid = not target.is_symlink() and target.is_dir() and (target / "SKILL.md").is_file()
+            target_valid = (
+                not target.is_symlink()
+                and (target.is_file() or (target.is_dir() and (target / "SKILL.md").is_file()))
+            )
             if target.exists() and target_valid and _skill_entry_hash(target) == source_hash:
                 continue
             if target.exists() and not self._is_managed_skill(target):
@@ -548,7 +555,10 @@ class ResourceSyncService:
                 if not (shared_target.is_dir() and (shared_target / "SKILL.md").is_file() and _skill_entry_hash(shared_target) == source_hash):
                     result["skills"]["conflicts"].append(name)
                 continue
-            target_valid = not target.is_symlink() and target.is_dir() and (target / "SKILL.md").is_file()
+            target_valid = (
+                not target.is_symlink()
+                and (target.is_file() or (target.is_dir() and (target / "SKILL.md").is_file()))
+            )
             if target.exists() and target_valid and _skill_entry_hash(target) == source_hash:
                 continue
             if target.exists() and not self._is_managed_skill(target):
