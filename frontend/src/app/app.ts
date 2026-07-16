@@ -1005,7 +1005,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
     try {
       this.audioChunks = [];
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // 這裡不是通話應用，沒有喇叭播放需要回音消除的「遠端聲音」可以參照；
+      // 瀏覽器預設開啟的 echoCancellation/noiseSuppression 在沒有遠端參考訊號
+      // 時常會誤判、把麥克風收到的人聲一併壓低，錄出來的音量明顯變小。
+      // 關掉這兩項、只留 autoGainControl 補償收音較小聲的麥克風。
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: true,
+        },
+      });
       const mimeType = this.pickAudioMimeType();
       this.mediaRecorder = new MediaRecorder(
         this.mediaStream,
