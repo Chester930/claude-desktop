@@ -33,6 +33,25 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   margin-top: 6px;
 }
 
+.btn-xs {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+// Matches the effective (later-declared, cascade-winning) .btn-danger
+// rule in app.scss — app.scss has two conflicting top-level
+// .btn-danger blocks; this one is the one that actually renders.
+.btn-danger {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(239,68,68,0.4);
+  background: rgba(239,68,68,0.1);
+  color: #ef4444;
+  font-size: 12px;
+  cursor: pointer;
+  &:hover { background: rgba(239,68,68,0.2); }
+}
+
 /* ── Shared settings-modal section layout (must be global: same reason */
 /* as the buttons above) ────────────────────────────────────────────── */
 .modal-section {
@@ -90,6 +109,34 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   font-size: 11px;
   color: #888;
   margin-bottom: 6px;
+}
+
+/* ── Quick prompts edit (must be global: same reason as the buttons above) ── */
+.quick-prompts-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qp-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.qp-label-input {
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.qp-text-input {
+  flex: 1;
+}
+
+.qp-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 /* ── Recent dirs chips (must be global: same reason as the buttons above) ── */

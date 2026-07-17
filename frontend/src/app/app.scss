@@ -1644,40 +1644,22 @@ body {
 // (global) — used by both App's remaining inline settings sections and
 // extracted standalone settings components, see comment there.
 
-// ── Quick prompts edit ────────────────────────────────
-.quick-prompts-edit {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.qp-row {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.qp-label-input {
-  width: 140px;
-  flex-shrink: 0;
-}
-
-.qp-text-input {
-  flex: 1;
-}
-
-.qp-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 4px;
-}
+// .quick-prompts-edit / .qp-row / .qp-label-input / .qp-text-input /
+// .qp-actions moved to src/styles.scss (global), see comment there.
 
 // ── Button sizes ──────────────────────────────────────
+// .btn-xs global copy in src/styles.scss (still used directly by App
+// elsewhere too, so this scoped copy stays — see comment there).
 .btn-xs {
   font-size: 11px;
   padding: 2px 8px;
 }
 
+// .btn-danger: this rule is fully shadowed by the one at the bottom
+// of this file (search .btn-danger) which declares later and wins
+// every overlapping property — kept as-is, not this extraction's
+// concern to clean up. Global copy of the *effective* (bottom) rule
+// is in src/styles.scss.
 .btn-danger {
   background: #3a1515;
   border: 1px solid #7a3535;

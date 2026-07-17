@@ -204,9 +204,29 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     - ✅ 語音輸入（`SttSettingsComponent`：只有 `settingsForm.sttMode`
       單一欄位，本來就是獨立 `.modal-section`，沒有跨頁依賴，比
       AI Provider 還單純）。
-    - ⬜ 待拆：快速提示編輯區塊（`quickPromptsForm`/
-      `showQuickPromptsEdit`，這組是獨立陣列狀態，不是 `settingsForm`
-      欄位，但同樣卡在 settings modal 裡，可以一併考慮）。
+    - ✅ 快速提示編輯區塊（`QuickPromptsEditComponent`：
+      `quickPromptsForm`/`showQuickPromptsEdit`/`openQuickPromptsEdit`/
+      `saveQuickPrompts`/`addQuickPrompt`/`removeQuickPrompt` 整塊搬
+      走，包含 header 裡切換編輯狀態的「✏ 編輯」按鈕——因為那顆按鈕
+      控制的 `showQuickPromptsEdit` 也搬走了，留在 `App` 裡沒意義。
+      這組其實不是 `settingsForm` 欄位，是獨立於 `SettingsService` 的
+      表單暫存，元件自己注入 `SettingsService` 讀/寫，完全不需要
+      `@Input`/`@Output`。注意：`App` 自己還留著唯讀的
+      `quickPrompts = computed(() => this.settings.get().quickPrompts)`
+      給 chat 輸入區的快速提示按鈕用（app.html 原 1065 行），這個
+      **沒有**搬——它本來就跟編輯 UI 是分開的兩塊狀態，只是共用同一份
+      底層資料。搬移過程中發現這個 computed 讀的是 `settings.get()`
+      （plain method，不是 signal），所以理論上 `saveQuickPrompts()`
+      存檔後這個 computed 不會自動重新求值——這是搬移前就存在的既有
+      行為（不是這次改壞的），原樣保留，沒有動手修。
+      `.quick-prompts-edit`/`.qp-row`/`.qp-label-input`/
+      `.qp-text-input`/`.qp-actions`（只有這裡用，整塊搬到
+      `src/styles.scss`）；`.btn-xs`/`.btn-danger`（`App` 自己其他地方
+      還在用，所以 `app.scss` 原本的定義沒動，只在
+      `src/styles.scss` 加一份全域拷貝——過程中發現 `app.scss` 裡
+      `.btn-danger` 其實被定義了兩次，後面那份（第 4334 行附近）蓋掉
+      前面那份的每個重疊屬性，全域拷貝抄的是「實際生效」的後面那份，
+      不是文件裡先出現的那份，這是既有的技術債，這次沒有清理）。
   - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm` /
     `.toggle-label` / `.tg-status-chip` / `.memview-textarea` 等
     settings modal 共用樣式已搬到 `src/styles.scss`（global）——

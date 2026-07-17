@@ -12,7 +12,8 @@ import { TelegramSettingsComponent } from './components/telegram-settings/telegr
 import { MemoryEditorComponent } from './components/memory-editor/memory-editor';
 import { ProviderSettingsComponent } from './components/provider-settings/provider-settings';
 import { SttSettingsComponent } from './components/stt-settings/stt-settings';
-import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
+import { QuickPromptsEditComponent } from './components/quick-prompts-edit/quick-prompts-edit';
+import { SettingsService, AppSettings } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
@@ -52,7 +53,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -1385,28 +1386,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return Math.floor((Date.now() - msg.startTime) / 1000);
   }
 
-  // Quick prompts
+  // Quick prompts (read-only, for the chat-input buttons): edit UI
+  // extracted into components/quick-prompts-edit (Phase 2)
   quickPrompts = computed(() => this.settings.get().quickPrompts);
-  showQuickPromptsEdit = false;
-  quickPromptsForm: QuickPrompt[] = [];
-
-  openQuickPromptsEdit() {
-    this.quickPromptsForm = [...this.settings.get().quickPrompts];
-    this.showQuickPromptsEdit = true;
-  }
-
-  saveQuickPrompts() {
-    this.settings.save({ quickPrompts: this.quickPromptsForm });
-    this.showQuickPromptsEdit = false;
-  }
-
-  addQuickPrompt() {
-    this.quickPromptsForm.push({ label: '✨ 新提示', text: '' });
-  }
-
-  removeQuickPrompt(i: number) {
-    this.quickPromptsForm.splice(i, 1);
-  }
 
   // Remaining tokens
   remainingTokens = computed(() => {
