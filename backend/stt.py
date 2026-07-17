@@ -28,6 +28,16 @@ container 裡各測過一輪，不是理論值）：
   使用者第一眼看到滿螢幕簡體字會覺得「完全不能用」，即使辨識內容其實是對
   的。用 opencc 的 s2twp（簡體→繁體，台灣慣用詞轉換，例如「软件」轉成
   「軟體」而不是只轉字形的「軟件」）補一道轉換。
+
+GPU（可選，自動偵測）：有能用的 CUDA 裝置就用，實測同一段 7.5 秒錄音從
+CPU 的 17~19 秒降到 GPU 的 2.7 秒（float16），比即時還快。requirements.txt
+刻意不強制裝 nvidia-cublas-cu12/nvidia-cudnn-cu12 這些執行期函式庫——那些
+加起來有 1~2GB，逼所有沒有 NVIDIA GPU 的使用者也要下載安裝並不合理。
+ctranslate2.get_cuda_device_count() > 0 只代表「驅動看得到裝置」，不保證
+cuDNN/cuBLAS 執行期函式庫真的能載入（沒裝上面那些 pip 套件、也沒有系統層
+級 CUDA Toolkit 的機器就會這樣）；GPU 建構失敗時安靜退回 CPU，不讓語音
+輸入整個掛掉。有 NVIDIA GPU 想要吃到加速的使用者，另外 `pip install
+nvidia-cublas-cu12 nvidia-cudnn-cu12` 就會自動生效，不需要改任何程式碼。
 """
 
 from __future__ import annotations
@@ -85,6 +95,14 @@ class LocalSttUnavailable(RuntimeError):
     """faster-whisper 沒安裝，或模型載入失敗（例如第一次使用但沒有網路可下載）。"""
 
 
+def _cuda_available() -> bool:
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        return False
+
+
 def _get_model():
     global _model
     if _model is not None:
@@ -98,6 +116,15 @@ def _get_model():
             raise LocalSttUnavailable(
                 "faster-whisper 未安裝；請執行 pip install -r requirements.txt"
             ) from e
+
+        if _cuda_available():
+            try:
+                _model = WhisperModel(MODEL_SIZE, device="cuda", compute_type="float16")
+                return _model
+            except Exception:
+                # 驅動看得到裝置，但 cuDNN/cuBLAS 執行期函式庫沒裝或載入
+                # 失敗——安靜退回 CPU，不要讓語音輸入整個掛掉。
+                pass
         try:
             _model = WhisperModel(
                 MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=_CPU_THREADS

@@ -319,6 +319,20 @@ def _skill_dict_from_dir(entry: Path) -> dict:
     }
 
 
+def _skill_dict_safe(entry: Path) -> "dict | None":
+    """給 handle_skills 平行掃描用的同步包裝——真正的平行化（丟到
+    asyncio.to_thread）在呼叫端做，這裡只是把「目錄 vs 檔案」的判斷跟例外
+    處理包起來，讓呼叫端可以直接 gather 一份 callable 清單。"""
+    try:
+        if entry.is_dir():
+            return _skill_dict_from_dir(entry)
+        if entry.suffix == ".md":
+            return _skill_dict_from_file(entry)
+    except Exception:
+        pass
+    return None
+
+
 # ── Team dict / YAML helpers ──────────────────────────────────────────────────
 
 def _parse_yaml_simple(text: str) -> dict:

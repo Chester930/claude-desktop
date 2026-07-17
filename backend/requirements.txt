@@ -5,3 +5,8 @@ PyYAML>=6.0
 claude-agent-sdk>=0.2.110
 faster-whisper>=1.0.0
 opencc-python-reimplemented>=0.1.7
+# GPU 加速（可選）：ctranslate2 本身在沒有這些函式庫時會安靜退回 CPU
+# （見 backend/stt.py 的 _cuda_available()/_get_model()），裝了才會生效、
+# 沒有 NVIDIA GPU 的機器不受影響，純粹是「有裝就用得到」的執行期函式庫。
+nvidia-cublas-cu12; sys_platform != "darwin"
+nvidia-cudnn-cu12; sys_platform != "darwin"

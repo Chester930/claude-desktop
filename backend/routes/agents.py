@@ -29,6 +29,7 @@ from helpers import (
     _write_frontmatter,
     _skill_dict_from_file,
     _skill_dict_from_dir,
+    _skill_dict_safe,
 )
 
 
@@ -347,17 +348,17 @@ async def handle_hr_dispatch(request: web.Request) -> web.Response:
 
 async def handle_skills(request: web.Request) -> web.Response:
     _, SKILLS_DIR = _dirs()
-    skills = []
     if not SKILLS_DIR.exists():
-        return web.json_response(skills)
-    for entry in sorted(SKILLS_DIR.iterdir(), key=lambda p: p.name.lower()):
-        try:
-            if entry.is_dir():
-                skills.append(_skill_dict_from_dir(entry))
-            elif entry.suffix == ".md":
-                skills.append(_skill_dict_from_file(entry))
-        except Exception:
-            pass
+        return web.json_response([])
+    entries = sorted(SKILLS_DIR.iterdir(), key=lambda p: p.name.lower())
+    # 健檢：這裡原本是同步 for 迴圈、逐一讀檔——445 個 skill 目錄、每個最多
+    # 3 次檔案系統呼叫（兩次 exists() 探測 SKILL.md/README.md 再讀一次），
+    # 在 Docker 的 Windows bind mount 上量到將近 11 秒，整個頁面重整都卡在
+    # 這一支 API 上。改成跟 handle_agents 一樣丟到 thread pool 平行跑。
+    results = await asyncio.gather(
+        *[asyncio.to_thread(_skill_dict_safe, e) for e in entries]
+    )
+    skills = [d for d in results if d is not None]
     return web.json_response(skills)
 
 
