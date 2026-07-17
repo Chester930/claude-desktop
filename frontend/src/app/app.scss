@@ -1101,12 +1101,11 @@ body {
   &:focus { border-color: $accent; }
 }
 
-.schedule-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
+// .schedule-actions moved to src/styles.scss (global) — exclusive to
+// components/schedule-panel now (Phase 2).
 
+// .icon-btn-sm: still used directly by App elsewhere, original stays;
+// global copy added to src/styles.scss for components/schedule-panel.
 .icon-btn-sm {
   background: none;
   border: none;
@@ -1159,40 +1158,18 @@ body {
   color: $text-dim;
 }
 
-// ── Schedules ─────────────────────────────────────────
-.schedule-view { display: flex; flex-direction: column; }
+// .schedule-view / .schedule-form / .schedule-input / .schedule-add-btn /
+// .schedule-header / .schedule-status moved to src/styles.scss (global) —
+// exclusive to components/schedule-panel now (Phase 2).
 
-.schedule-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 2px 0 4px;
-}
+// ── Scrollbar ─────────────────────────────────────────
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: $border; border-radius: 3px; }
 
-.schedule-input {
-  background: $surface2;
-  border: 1px solid $border;
-  color: $text;
-  border-radius: 6px;
-  padding: 7px 10px;
-  font-size: 12px;
-  outline: none;
-  font-family: inherit;
-  &:focus { border-color: $accent; }
-}
-
-.schedule-add-btn {
-  align-self: flex-end;
-  padding: 6px 14px;
-  font-size: 12px;
-}
-
-.schedule-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
+// .del-btn / .empty-hint: still used directly by App elsewhere (other
+// panel-card lists), original stays; global copy added to
+// src/styles.scss for components/schedule-panel.
 .del-btn {
   background: none;
   border: none;
@@ -1202,18 +1179,6 @@ body {
   padding: 0 2px;
   &:hover { color: #e55; }
 }
-
-.schedule-status {
-  font-size: 10px;
-  margin-top: 4px;
-  color: $text-dim;
-  &.active { color: #4c9; }
-}
-
-// ── Scrollbar ─────────────────────────────────────────
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: $border; border-radius: 3px; }
 
 .empty-hint { color: $text-dim; font-size: 12px; padding: 12px; text-align: center; }
 
@@ -2896,20 +2861,8 @@ body {
 }
 
 // Cron presets
-.cron-row {
-  display: flex; gap: 6px; align-items: center;
-  .cron-input { flex: 1; }
-  .schedule-add-btn { flex-shrink: 0; white-space: nowrap; }
-}
-.cron-presets {
-  display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px;
-}
-.cron-preset-btn {
-  background: $surface2; border: 1px solid $border; border-radius: 12px;
-  color: $text-dim; font-size: 10px; padding: 2px 8px;
-  cursor: pointer; transition: all 0.15s;
-  &:hover { border-color: $accent2; color: $accent2; }
-}
+// .cron-row / .cron-presets / .cron-preset-btn moved to src/styles.scss
+// (global) — exclusive to components/schedule-panel now (Phase 2).
 
 // Model picker
 .model-picker-modal {

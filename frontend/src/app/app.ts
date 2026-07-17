@@ -14,9 +14,10 @@ import { SttSettingsComponent } from './components/stt-settings/stt-settings';
 import { QuickPromptsEditComponent } from './components/quick-prompts-edit/quick-prompts-edit';
 import { GeneralSettingsComponent } from './components/general-settings/general-settings';
 import { EngineSettingsComponent } from './components/engine-settings/engine-settings';
+import { SchedulePanelComponent } from './components/schedule-panel/schedule-panel';
 import { SettingsService, AppSettings } from './settings.service';
 import {
-  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
+  ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
 } from './claude.service';
 
 export interface McpWorkflow {
@@ -54,7 +55,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -150,7 +151,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   resourceSyncDetailsExpanded = signal(false);
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
-  schedules = signal<Schedule[]>([]);
+  // schedules signal: extracted into components/schedule-panel (Phase 2)
   // memoryOverview / memViewExpanded / memEditMode / memEditContent:
   // extracted into components/memory-editor (Phase 2)
   expandedTeams = signal<Record<string, boolean>>({});
@@ -487,9 +488,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   activeTab = signal<'agents' | 'teams' | 'skills' | 'memory' | 'schedules' | 'soul' | 'mcp' | 'memview'>('teams');
   sessionSearch = '';
 
-  // Schedule form
-  newSchedulePrompt = '';
-  newScheduleCron = '';
+  // Schedule form + schedules signal: extracted into
+  // components/schedule-panel (Phase 2)
 
   // Token usage + cost
   tokenUsage = signal<{ input: number; output: number; cost: number } | null>(null);
@@ -1421,55 +1421,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   ];
   modelPickerOpen = signal(false);
 
-  // Cron presets
-  readonly CRON_PRESETS = [
-    { label: '每 5 分鐘', value: '*/5 * * * *' },
-    { label: '每小時', value: '0 * * * *' },
-    { label: '每天 9:00', value: '0 9 * * *' },
-    { label: '每週一早上', value: '0 9 * * 1' },
-  ];
-
-  translateCron(cron: string): string {
-    if (!cron) return '';
-    const trimmed = cron.trim();
-    const preset = this.CRON_PRESETS.find(p => p.value === trimmed);
-    if (preset) return preset.label;
-
-    const parts = trimmed.split(/\s+/);
-    if (parts.length === 5) {
-      const [min, hour, dom, month, dow] = parts;
-      if (min === '*' && hour === '*' && dom === '*' && month === '*' && dow === '*') {
-        return '每分鐘';
-      }
-      if (min.startsWith('*/') && hour === '*' && dom === '*' && month === '*' && dow === '*') {
-        const m = min.split('/')[1];
-        return `每 ${m} 分鐘`;
-      }
-      if (hour.startsWith('*/') && min === '0' && dom === '*' && month === '*' && dow === '*') {
-        const h = hour.split('/')[1];
-        return `每 ${h} 小時`;
-      }
-      if (min === '0' && hour === '*' && dom === '*' && month === '*' && dow === '*') {
-        return '每小時';
-      }
-      if (dom === '*' && month === '*' && dow === '*') {
-        const mStr = min.padStart(2, '0');
-        const hStr = hour.padStart(2, '0');
-        return `每天 ${hStr}:${mStr}`;
-      }
-      if (dom === '*' && month === '*' && dow !== '*') {
-        const days = ['日', '一', '二', '三', '四', '五', '六'];
-        const dayNames = dow.split(',').map(d => {
-          const idx = parseInt(d, 10);
-          return isNaN(idx) ? d : `週${days[idx]}`;
-        }).join('、');
-        const mStr = min.padStart(2, '0');
-        const hStr = hour.padStart(2, '0');
-        return `每${dayNames} ${hStr}:${mStr}`;
-      }
-    }
-    return cron;
-  }
+  // Cron presets / translateCron: extracted into
+  // components/schedule-panel (Phase 2)
 
   // Session pin/star
   pinnedIds = signal<string[]>([]);
@@ -3398,72 +3351,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  aiParsing = signal(false);
-
-  isNaturalLanguage(text: string): boolean {
-    if (!text) return false;
-    const trimmed = text.trim();
-    if (!trimmed) return false;
-    const hasChinese = /[\u4e00-\u9fa5]/.test(trimmed);
-    if (hasChinese) return true;
-    
-    const isCronChars = /^[0-9\s*\/,\-?LW#]+$/.test(trimmed);
-    if (!isCronChars) return true;
-
-    const parts = trimmed.split(/\s+/);
-    if (parts.length !== 5) return true;
-
-    return false;
-  }
-
-  parseCronFromAI() {
-    const text = this.newScheduleCron.trim();
-    if (!text) return;
-    this.aiParsing.set(true);
-    this.claude.parseCron(text).subscribe({
-      next: (res) => {
-        this.aiParsing.set(false);
-        if (res && res.cron) {
-          this.newScheduleCron = res.cron;
-        } else {
-          alert('AI 無法解析該頻率，請嘗試更具體的描述。');
-        }
-      },
-      error: (err) => {
-        this.aiParsing.set(false);
-        alert('AI 轉換失敗：' + (err?.message || err));
-      }
-    });
-  }
-
-  addSchedule() {
-    if (!this.newSchedulePrompt.trim() || !this.newScheduleCron.trim()) return;
-    this.claude.addSchedule(this.newSchedulePrompt, this.newScheduleCron).subscribe({
-      next: () => { this.newSchedulePrompt = ''; this.newScheduleCron = ''; this.claude.getSchedules().subscribe(s => this.schedules.set(s)); },
-      error: (e) => this.showToast(`新增排程失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
-
-  deleteSchedule(id: string) {
-    this.claude.deleteSchedule(id).subscribe({
-      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
-      error: (e) => this.showToast(`刪除排程失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
-
-  toggleSchedule(id: string, enabled: boolean) {
-    this.claude.toggleSchedule(id, !enabled).subscribe({
-      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
-      error: (e) => this.showToast(`更新排程失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
-
-  runScheduleNow(id: string) {
-    this.claude.runSchedule(id).subscribe({
-      next: () => this.claude.getSchedules().subscribe(s => this.schedules.set(s)),
-      error: (e) => this.showToast(`執行排程失敗: ${e.message ?? e}`, 'error'),
-    });
-  }
+  // aiParsing / isNaturalLanguage / parseCronFromAI / addSchedule /
+  // deleteSchedule / toggleSchedule / runScheduleNow: extracted into
+  // components/schedule-panel (Phase 2)
 
   searchSessions() {
     this.sessionOffset = 0;
@@ -3490,7 +3380,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       this.sessions.set(r.items);
       this.hasMoreSessions.set(r.has_more);
     });
-    this.claude.getSchedules().subscribe(s => this.schedules.set(s));
     this.claude.getMemory().subscribe(m => this.memory.set(m));
     this.claude.getSouls().subscribe(list => {
       this.souls.set(list);

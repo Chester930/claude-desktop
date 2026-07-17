@@ -314,3 +314,111 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   padding: 0 !important;
 }
 
+/* ── Schedule panel (must be global: components/schedule-panel, Phase 2) ── */
+.schedule-view { display: flex; flex-direction: column; }
+
+.schedule-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 4px;
+}
+
+.schedule-input {
+  background: #1f1f1f;
+  border: 1px solid #2a2a2a;
+  color: #e8e8e8;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  outline: none;
+  font-family: inherit;
+  &:focus { border-color: #d4a853; }
+}
+
+.schedule-add-btn {
+  align-self: flex-end;
+  padding: 6px 14px;
+  font-size: 12px;
+}
+
+.schedule-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.schedule-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.schedule-status {
+  font-size: 10px;
+  margin-top: 4px;
+  color: #888;
+  &.active { color: #4c9; }
+}
+
+.cron-row {
+  display: flex; gap: 6px; align-items: center;
+  .cron-input { flex: 1; }
+  .schedule-add-btn { flex-shrink: 0; white-space: nowrap; }
+}
+.cron-presets {
+  display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px;
+}
+.cron-preset-btn {
+  background: #1f1f1f; border: 1px solid #2a2a2a; border-radius: 12px;
+  color: #888; font-size: 10px; padding: 2px 8px;
+  cursor: pointer; transition: all 0.15s;
+  &:hover { border-color: #7c6fff; color: #7c6fff; }
+}
+
+/* ── Also used by schedule-panel but still used directly by App elsewhere */
+/* too (original definitions stay in app.scss); trimmed to what */
+/* schedule-panel actually needs — .panel-card here omits the */
+/* .selected/.active-in-chat/.expanded modifiers the schedule card */
+/* never applies. ─────────────────────────────────────────────────────── */
+.panel-list { display: flex; flex-direction: column; gap: 6px; }
+
+.panel-card {
+  background: #1f1f1f;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  &:hover { border-color: #d4a853; }
+
+  .card-name { font-size: 13px; font-weight: 600; color: #7c6fff; }
+  .card-desc {
+    font-size: 11px; color: #888; line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+  }
+}
+
+.icon-btn-sm {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  &:hover { background: #161616; color: #e8e8e8; }
+}
+
+.del-btn {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  &:hover { color: #e55; }
+}
+
+.empty-hint { color: #888; font-size: 12px; padding: 12px; text-align: center; }
+

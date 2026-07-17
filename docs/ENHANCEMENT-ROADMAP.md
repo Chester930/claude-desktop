@@ -290,10 +290,63 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
   模式已經驗證足夠多次（純讀取、`@Input`/`@Output` 事件、shared
   object reference mutation、cross-page signal 唯讀快照、純函式/
   常數複製，五種模式都出現過），可以進到下一階段。
-- memview/schedules 分頁、teams/skills 側欄、chat 主畫面的 lazy
-  route 化：下一步，這幾塊本身就是路由層級，天然比 settings modal
-  內部的子元件更適合 `loadComponent` lazy route，風險模式不同
-  （route-level code splitting，不是 component extraction）。
+- **2026-07-18 修正：這個 app 完全沒有裝 Angular Router**（
+  `RouterModule`/`provideRouter`/`Routes` 在 `frontend/src` 裡零匹配）。
+  原規劃「memview/schedules 分頁…天然適合 `loadComponent` lazy
+  route」的前提不成立——右側面板的分頁（TEAM/AGENT/SKILL/MCP/
+  Scheduling/soul）全部是 `activeTab()` signal 驅動的 `@if` 區塊切換，
+  不是路由。引入 Router 是遠比目前做過的任何一次抽取都大的架構變更
+  （routing config、navigation guard、把分頁切換改成 router
+  navigation、處理 deep-link 邊界情況），跟這個 Phase 目前「最小風險
+  漸進抽取」的精神不符，這次沒有做，維持既有的 `@if` + tab signal
+  架構。改用跟 settings modal 完全相同、已經驗證 9 次的模式：
+  `@if (activeTab() === 'x')` 裡面包 `@defer (on immediate)` + 獨立
+  元件，效果一樣是「非首屏分頁不進主 bundle」，只是觸發條件是 tab
+  切換而非 modal 開關，機制上沒有差異。
+  - 另外「memview」這個名字本身也是死的——`activeTab` signal 的型別
+    union 裡雖然列了 `'memory'`/`'memview'` 兩個值，但 `app.html`
+    完全沒有任何 `@if (activeTab() === 'memview')` 或
+    `'memory'` 的區塊，也沒有任何按鈕會 `.set('memview')`——這是
+    寫好但從沒接上 UI 的死型別，不是這次搬移弄壞的，原樣保留。
+  - ✅ **Scheduling 分頁**（`SchedulePanelComponent`）：整塊排程
+    UI——新增排程表單（prompt/cron 輸入、AI 自然語言轉 cron、
+    cron 快速選項）+ 排程列表（執行/啟停/刪除）——全部搬進新元件，
+    採跟 Telegram/QuickPromptsEdit 相同的「完全自包含」模式：
+    `schedules`/`newSchedulePrompt`/`newScheduleCron`/`aiParsing` 這些
+    state，以及 `translateCron`/`isNaturalLanguage`/`parseCronFromAI`/
+    `addSchedule`/`deleteSchedule`/`toggleSchedule`/`runScheduleNow`
+    這些方法，盤點後確認全部只有這個分頁在用（`grep` 全域找不到第二
+    處引用），整塊搬走、注入 `ClaudeService` 自己打 API。
+    `loadSchedules()` 原本由 `App.reload()`（app 啟動時）呼叫，改成
+    元件自己 `ngOnInit` 載入——這不只是模式一致，還是真正的行為改善：
+    原本排程資料不管使用者有沒有點過 Scheduling 分頁都會在啟動時抓，
+    現在只有第一次真的點進這個分頁才會抓，跟「非首屏不做非必要工作」
+    的 Phase 2 目標本身對齊。
+    唯一新出現的模式：`addSchedule`/`deleteSchedule`/`toggleSchedule`/
+    `runScheduleNow` 的錯誤處理原本呼叫 `App.showToast(...)`（app 全域
+    的 toast 通知系統，這個分頁以外還有很多地方在用，不能直接搬），
+    改成 `@Output() toast = new EventEmitter<{text,type}>()`，
+    `app.html` 接 `(toast)="showToast($event.text, $event.type)"`——
+    跟 diagnostics-panel 當初的 `(logMessage)` 是同一個「cross-cutting
+    UI 效果透過 @Output 事件往上通知」模式，只是這次是 toast 而不是
+    chat log。
+    CSS 部分規模比之前任何一次都大：`.schedule-view`/
+    `.schedule-form`/`.schedule-input`/`.schedule-add-btn`/
+    `.schedule-header`/`.schedule-status`/`.schedule-actions`/
+    `.cron-row`/`.cron-presets`/`.cron-preset-btn` 這組只有這個分頁在
+    用，整塊搬到 `src/styles.scss`；但 `.panel-list`/`.panel-card`/
+    `.card-name`/`.card-desc`/`.icon-btn-sm`/`.del-btn`/`.empty-hint`
+    是 App 自己好幾個其他分頁（agents/teams/skills/soul/mcp）共用的
+    卡片式列表樣式，`app.scss` 原本的定義不能動，只在
+    `src/styles.scss` 加一份全域拷貝——`.panel-card` 的全域拷貝特意
+    只抄基底規則（background/border/padding/hover），沒有抄
+    `.selected`/`.active-in-chat`/`.expanded` 這些修飾用的變體，因為
+    排程卡片從來不會套用那些 class，抄了也用不到。
+  - ⬜ 待拆：teams/skills/agents/mcp/soul 這幾個分頁，同一套「`@if`
+    區塊裡包 `@defer` + 獨立元件」模式繼續套用即可；規模上
+    agents/teams/skills 應該都比 Scheduling 複雜（更多巢狀狀態、
+    跟 chat 主畫面互動更深），建議依複雜度由簡到繁排序，跟
+    settingsForm 子區塊當初的做法一樣。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
 抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立
