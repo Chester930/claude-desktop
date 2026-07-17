@@ -1586,28 +1586,7 @@ body {
   outline: none;
 }
 
-// ── Recent dirs chips ─────────────────────────────────
-.recent-dirs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-}
-
-.dir-chip {
-  background: $surface2;
-  border: 1px solid $border;
-  border-radius: 4px;
-  color: $text-dim;
-  font-size: 10px;
-  padding: 2px 8px;
-  cursor: pointer;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  &:hover { border-color: $accent2; color: $accent2; }
-}
+// .recent-dirs / .dir-chip moved to src/styles.scss (global), see comment there.
 
 // ── Tool result display ───────────────────────────────
 .tool-input {

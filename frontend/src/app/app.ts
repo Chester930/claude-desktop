@@ -7,6 +7,7 @@ import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
 import { MarkdownPipe } from './markdown.pipe';
 import { DiagnosticsPanelComponent } from './components/diagnostics-panel/diagnostics-panel';
 import { AgencyImportPanelComponent } from './components/agency-import-panel/agency-import-panel';
+import { RecentWorkDirsComponent } from './components/recent-work-dirs/recent-work-dirs';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -47,7 +48,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -2971,9 +2972,8 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.send();
   }
 
-  // Workdir quick switch
-  recentWorkDirs = computed(() => this.settings.get().recentWorkDirs);
-
+  // Workdir quick switch — recentWorkDirs signal extracted into
+  // components/recent-work-dirs (Phase 2)
   setWorkDir(dir: string) {
     this.settingsForm.workDir = dir;
     this.settings.save(this.settingsForm);

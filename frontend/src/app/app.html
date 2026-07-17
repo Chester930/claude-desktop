@@ -269,12 +269,11 @@
           <label>工作目錄
             <input [(ngModel)]="settingsForm.workDir" placeholder="C:\Users\mycena">
             <small>Claude 執行時的起始目錄</small>
-            @if (recentWorkDirs().length) {
-              <div class="recent-dirs">
-                @for (d of recentWorkDirs(); track d) {
-                  <button class="dir-chip" (click)="settingsForm.workDir = d">{{ d }}</button>
-                }
-              </div>
+            <!-- 最近使用的工作目錄（Phase 2 拆分：獨立元件 + @defer 延遲載入） -->
+            @defer (on immediate) {
+              <app-recent-work-dirs (select)="settingsForm.workDir = $event" />
+            } @placeholder {
+              <small style="color:#888;">載入中…</small>
             }
           </label>
           <label>後端連接埠

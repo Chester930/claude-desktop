@@ -138,9 +138,13 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
   - ✅ `importAgencyAgents`（抽成 `AgencyImportPanelComponent`，
     `imported` 事件往上通知 `app.ts` 呼叫既有的 `reload()` /
     `loadTeams()`）。
-  - ⬜ 下一個：`recentWorkDirs`（3 refs）→ `telegramSaving`
-    （6 refs）→ `memEditContent`（8 refs）→ `settingsForm`
-    （63 refs，分段拆）。
+  - ✅ `recentWorkDirs`（抽成 `RecentWorkDirsComponent`；只抽「最近
+    目錄 chips」這個純讀取 `SettingsService` 的子區塊，`select`
+    事件往上通知 `app.ts` 設定 `settingsForm.workDir`——`<label>工作
+    目錄` 本身那個 `[(ngModel)]="settingsForm.workDir"` 的主輸入框
+    仍留在 `app.ts`，因為它屬於還沒拆的 `settingsForm`）。
+  - ⬜ 下一個：`telegramSaving`（6 refs）→ `memEditContent`
+    （8 refs）→ `settingsForm`（63 refs，分段拆）。
   - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm`
     等 settings modal 共用樣式已搬到 `src/styles.scss`（global）——
     Angular 的 emulated encapsulation 讓子元件收不到 `app.scss`
