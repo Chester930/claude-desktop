@@ -171,8 +171,40 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     （global）；`.memview-empty`/`.memview-path-row`/
     `.memview-proj-row`/`.memview-label`/`.memview-edit-actions`
     同樣是死 CSS，沒有搬動也沒有清理，維持原狀）。
-  - ⬜ 下一個：`settingsForm`（63 refs，分段拆——這是最後一塊，
-    引用量遠大於前面幾個，需要先想好子區塊切法再動手，不要整塊搬）。
+  - 🔶 `settingsForm`（63 refs）進行中，分段拆，不整塊搬。
+    `settingsForm` 是 `AppSettings` 一般物件（非 signal），拆分策略：
+    子元件用 `@Input() settingsForm!: AppSettings` 接住同一個物件
+    參考，`[(ngModel)]` 直接 mutate 它——因為是同一個物件參考，不需要
+    額外 `@Output` 事件把值傳回去，`App` 自己讀 `this.settingsForm`
+    時就已經是最新值（跟 `App` 現有 template 直接綁 `settingsForm.x`
+    的行為完全一致，純粹是把 UI 搬到別的檔案，狀態owner 沒變）。
+    子區塊完成度：
+    - ✅ AI Provider（#16，`ProviderSettingsComponent`：`provider`/
+      `providerApiKey`/`providerModel`/`providerApiUrl` 4 個欄位，
+      本來就是獨立 `.modal-section`，沒有跨頁依賴，是最單純的一塊）。
+    - ⬜ 待拆：`.modal-body` 最上面那組沒包在 `.modal-section` 裡的
+      標籤（`projectDir`/`claudeHome`/`workDir`/`backendPort`/
+      `backendUrl`/`defaultAgent`/`theme`/`lang`/`enterToSend`/
+      `openAtLogin`）——這組比較麻煩，因為裡面混了
+      `pickProjectDir()`/`pickClaudeHome()`（開檔案選擇器）、
+      `resolvedClaudeHome()`（跨頁 signal，做法同 memory-editor 用
+      `@Input`）、`dropdownAgents()`、`isElectron`，拆之前要先決定
+      要不要連同這些方法一起搬，或用 `@Input`/`@Output` 傳。
+    - ⬜ 待拆：「執行引擎範圍」區塊（`settingsForm.engineMode`/
+      `settingsForm.agentEngine`/`claudeBin`/`codexBin`/`apiKeyCmd`/
+      `codexApiKeyCmd`）——這塊讀了兩個 app-wide signal，注意兩個是
+      不同東西：`engineStatus()`（roadmap 最早點名的那個，onboarding
+      流程 55-66 行、chat 區 633 行都在用，表示「這個引擎裝了沒/能不
+      能用」）和 `engineMode()`（後端權威的鎖定狀態，agent 編輯區
+      2322-2342 行在用，表示「目前只准用哪個引擎」，跟
+      `settingsForm.engineMode` 是同名但不同的兩個東西——前者是簽出
+      到表單的暫存值，後者是簽入生效中的值，不要搞混）。這塊要嘛用
+      `@Input` 各傳一份唯讀快照，要嘛先做 `AppStateService`——目前
+      還沒決定，下一個接手的人要先選一個。
+    - ⬜ 待拆：語音輸入（`sttMode`）區塊、快速提示編輯區塊（
+      `quickPromptsForm`/`showQuickPromptsEdit`，這組是獨立陣列狀態
+      不是 `settingsForm` 欄位，但同樣卡在settings modal 裡，可以
+      一併考慮）。
   - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm` /
     `.toggle-label` / `.tg-status-chip` / `.memview-textarea` 等
     settings modal 共用樣式已搬到 `src/styles.scss`（global）——

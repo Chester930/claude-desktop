@@ -10,6 +10,7 @@ import { AgencyImportPanelComponent } from './components/agency-import-panel/age
 import { RecentWorkDirsComponent } from './components/recent-work-dirs/recent-work-dirs';
 import { TelegramSettingsComponent } from './components/telegram-settings/telegram-settings';
 import { MemoryEditorComponent } from './components/memory-editor/memory-editor';
+import { ProviderSettingsComponent } from './components/provider-settings/provider-settings';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -50,7 +51,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent, TelegramSettingsComponent, MemoryEditorComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
