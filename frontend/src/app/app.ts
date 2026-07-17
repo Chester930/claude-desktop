@@ -9,6 +9,7 @@ import { DiagnosticsPanelComponent } from './components/diagnostics-panel/diagno
 import { AgencyImportPanelComponent } from './components/agency-import-panel/agency-import-panel';
 import { RecentWorkDirsComponent } from './components/recent-work-dirs/recent-work-dirs';
 import { TelegramSettingsComponent } from './components/telegram-settings/telegram-settings';
+import { MemoryEditorComponent } from './components/memory-editor/memory-editor';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -49,7 +50,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent, TelegramSettingsComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent, TelegramSettingsComponent, MemoryEditorComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -145,11 +146,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   sessions = signal<Session[]>([]);
   memory = signal<Record<string, string>>({});
   schedules = signal<Schedule[]>([]);
-  memoryOverview = signal<any>(null);
-  memViewExpanded = signal<Record<string, boolean>>({});
+  // memoryOverview / memViewExpanded / memEditMode / memEditContent:
+  // extracted into components/memory-editor (Phase 2)
   expandedTeams = signal<Record<string, boolean>>({});
-  memEditMode = signal<Record<string, boolean>>({});
-  memEditContent = signal<Record<string, string>>({});
 
   rightPanelFilter = signal('');
 
@@ -1814,17 +1813,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  loadMemoryOverview() {
-    this.claude.getMemoryOverview().subscribe(data => {
-      this.memoryOverview.set(data);
-      this.memEditContent.update(m => ({
-        ...m,
-        user:   data?.user?.content   ?? '',
-        system: data?.system?.content ?? '',
-      }));
-    });
-  }
-
   loadResourceSyncStatus() {
     this.claude.getResourceSyncStatus().subscribe({
       next: status => this.resourceSyncStatus.set(status),
@@ -1834,41 +1822,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   toggleResourceSyncDetails() {
     this.resourceSyncDetailsExpanded.update(v => !v);
-  }
-
-  toggleMemViewSection(key: string) {
-    this.memViewExpanded.update(m => ({ ...m, [key]: !m[key] }));
-  }
-
-  memViewIsOpen(key: string): boolean {
-    return !!this.memViewExpanded()[key];
-  }
-
-  memViewFilePath(type: string, ...parts: string[]): string {
-    const base = this.resolvedClaudeHome() || '~/.claude';
-    const sep = base.includes('\\') ? '\\' : '/';
-    return [base, 'memory', ...parts].join(sep);
-  }
-
-  startMemEdit(key: string, currentContent: string) {
-    this.memEditContent.update(m => ({ ...m, [key]: currentContent || '' }));
-    this.memEditMode.update(m => ({ ...m, [key]: true }));
-  }
-
-  cancelMemEdit(key: string) {
-    this.memEditMode.update(m => ({ ...m, [key]: false }));
-  }
-
-  saveMemEdit(key: string) {
-    const content = this.memEditContent()[key] ?? '';
-    const save$ = key === 'user'
-      ? this.claude.putMemoryUser(content)
-      : this.claude.putMemorySystem(content);
-
-    save$.subscribe(() => {
-      this.memEditMode.update(m => ({ ...m, [key]: false }));
-      this.loadMemoryOverview();
-    });
   }
 
   // ── Toast notification system ────────────────────────────────────────────
@@ -3205,7 +3158,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   async openSettings() {
     this.settingsForm = this.settings.get();
     this.settingsOpen.set(true);
-    this.loadMemoryOverview();
     this.loadEngineStatus();
     this.claude.getStatus().subscribe(s => {
       this.statusInfo.set(s.claude_bin ?? '未知');

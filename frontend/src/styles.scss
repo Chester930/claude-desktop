@@ -130,6 +130,16 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   &.running { color: #10b981; }
 }
 
+/* ── Memory editor textarea (must be global: same reason as above) ───────── */
+.memview-textarea {
+  width: 100%; box-sizing: border-box;
+  background: rgba(0,0,0,0.3); color: #ccc;
+  border: 1px solid rgba(255,255,255,0.12); border-radius: 4px;
+  font-size: 11px; font-family: monospace; line-height: 1.5;
+  padding: 6px 8px; resize: vertical; outline: none;
+  &:focus { border-color: rgba(255,255,255,0.25); }
+}
+
 /* ── Code block (injected via [innerHTML], must be global) ─────────────────── */
 .code-block-wrap {
   position: relative;

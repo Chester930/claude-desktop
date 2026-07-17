@@ -150,11 +150,33 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     `App.openSettings()` 呼叫，改成元件自己在 `ngOnInit` 載入——因為
     `@if (settingsOpen())` 包住整個 modal，每次開 modal 都會重新
     建立這個元件，效果等價）。
-  - ⬜ 下一個：`memEditContent`（8 refs）→ `settingsForm`
-    （63 refs，分段拆）。
+  - ✅ `memEditContent`（連同 `memoryOverview`/`memViewExpanded`/
+    `memEditMode`/`loadMemoryOverview`/`toggleMemViewSection`/
+    `memViewIsOpen`/`memViewFilePath`/`startMemEdit`/`cancelMemEdit`/
+    `saveMemEdit` 一併抽成 `MemoryEditorComponent`。盤點後發現這些
+    identifier 裡只有 `memEditContent`/`saveMemEdit`（以及餵資料給
+    它們的 `loadMemoryOverview`）實際在 template 有用到——
+    `memoryOverview`/`memViewExpanded`/`memEditMode`/
+    `toggleMemViewSection`/`memViewIsOpen`/`memViewFilePath`/
+    `startMemEdit`/`cancelMemEdit` 在 `app.html` 完全沒有引用，是既有
+    的死碼；因為它們互相耦合（例如 `startMemEdit`/`cancelMemEdit`
+    讀寫 `memEditContent`/`memEditMode`），整塊原樣搬過去，沒有藉機
+    清理——清死碼不是這次任務範圍。唯一的跨元件依賴是
+    `memViewFilePath()` 用到 `resolvedClaudeHome()`（同一個
+    `engineStatus` 類型的 app-wide signal），改成 `@Input
+    resolvedClaudeHome`，`app.html` 傳
+    `[resolvedClaudeHome]="resolvedClaudeHome()"`。`loadMemoryOverview()`
+    原本由 `App.openSettings()` 呼叫，同 telegram 的做法改成元件自己
+    `ngOnInit` 載入。`.memview-textarea` 搬到 `src/styles.scss`
+    （global）；`.memview-empty`/`.memview-path-row`/
+    `.memview-proj-row`/`.memview-label`/`.memview-edit-actions`
+    同樣是死 CSS，沒有搬動也沒有清理，維持原狀）。
+  - ⬜ 下一個：`settingsForm`（63 refs，分段拆——這是最後一塊，
+    引用量遠大於前面幾個，需要先想好子區塊切法再動手，不要整塊搬）。
   - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm` /
-    `.toggle-label` / `.tg-status-chip` 等 settings modal 共用樣式已
-    搬到 `src/styles.scss`（global）——Angular 的 emulated
+    `.toggle-label` / `.tg-status-chip` / `.memview-textarea` 等
+    settings modal 共用樣式已搬到 `src/styles.scss`（global）——
+    Angular 的 emulated
     encapsulation 讓子元件收不到 `app.scss` 裡的 component-scoped
     樣式，每抽一個新元件如果用到這些 class 不用再重複搬；如果用到
     新的共用 class，記得順手搬過去。
