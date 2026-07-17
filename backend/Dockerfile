@@ -12,6 +12,13 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# nvidia-cublas-cu12/nvidia-cudnn-cu12（requirements.txt，語音辨識 GPU 加速
+# 用）把 .so 檔案裝在 site-packages 底下，不在動態連結器預設會找的路徑——
+# 沒有這行，ctranslate2 偵測到 GPU 也會直接載入失敗（實測過："Library
+# libcublas.so.12 is not found or cannot be loaded"）。只有疊加
+# docker-compose.gpu.yml 才會真的把 GPU 傳進 container；沒有 GPU 的機器
+# 就算路徑存在但用不到，不影響 CPU fallback。
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}"
 # main.py imports helpers/session_pool/memory_agent/message_bus and the routes/
 # package at startup — COPY was missing all of these, so this image never
 # actually booted (ModuleNotFoundError on the first `python main.py`).

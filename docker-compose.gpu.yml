@@ -1,0 +1,36 @@
+# GPU 加速（可選）——語音辨識用。疊加這個檔案才會啟用；預設的
+# docker-compose.yml 保持 CPU-only，在沒有 NVIDIA GPU／沒裝
+# nvidia-container-toolkit 的機器上一樣能正常跑，不會因為多了這個檔案就
+# 出問題（Compose 的 device reservation 只有真的疊加這個 override 才生效）。
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile prod up -d
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile dev  up -d
+#
+# 前置需求：
+#   - host 要有 NVIDIA GPU + 驅動，且裝了 nvidia-container-toolkit
+#     （`docker info` 的 Runtimes 要看得到 nvidia；`docker run --rm --gpus all
+#     nvidia/cuda:12.3.1-base-ubuntu22.04 nvidia-smi` 能跑成功就代表就緒）
+#   - backend image 要重新 build 過，含 requirements.txt 裡的
+#     nvidia-cublas-cu12/nvidia-cudnn-cu12（語音辨識用，見 backend/stt.py）
+#
+# 沒有 GPU 的機器完全不用管這個檔案，忽略即可——backend/stt.py 會自動偵測、
+# 偵測不到或載入失敗都會安靜退回 CPU，不影響現有的 CPU-only 部署。
+services:
+  backend:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  backend-dev:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
