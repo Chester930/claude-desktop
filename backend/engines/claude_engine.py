@@ -55,6 +55,7 @@ async def run_turn(
     on_text,
     on_process=None,
     is_cancelled=None,
+    on_tool_event=None,
 ) -> RunResult:
     claude_bin = _claude_bin()
     cmd = [claude_bin, "-p", prompt, "--output-format", "stream-json", "--verbose"]
@@ -101,10 +102,40 @@ async def run_turn(
                 chunk = ""
                 if ev.get("type") == "assistant":
                     for block in ev.get("message", {}).get("content", []):
-                        if isinstance(block, dict) and block.get("type") == "text":
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "text":
                             chunk += block["text"]
+                        elif block.get("type") == "tool_use" and on_tool_event:
+                            # 實測抓到的坑：這個迴圈原本只認 "text"，
+                            # tool_use block（真實 stream-json 裡欄位是
+                            # id/name/input，用 `claude -p ... --output-
+                            # format stream-json` 實測驗證過）直接被跳過，
+                            # 工具呼叫完全不會被呼叫端看見。這裡補上，
+                            # envelope 形狀刻意跟 main.py::handle_chat 的
+                            # _run_pooled（已經在用的 SDK 原生路徑）一致，
+                            # 呼叫端不用為了這條路徑另外寫解析邏輯。
+                            await on_tool_event({
+                                "type": "tool_use",
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "input": block.get("input", {}),
+                            })
                 elif ev.get("type") == "text":
                     chunk = ev.get("text", "")
+                elif ev.get("type") == "user" and on_tool_event:
+                    content = ev.get("message", {}).get("content", [])
+                    results = [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": b.get("tool_use_id", ""),
+                            "content": b.get("content", ""),
+                        }
+                        for b in content
+                        if isinstance(b, dict) and b.get("type") == "tool_result"
+                    ]
+                    if results:
+                        await on_tool_event({"type": "user", "message": {"content": results}})
                 elif ev.get("type") == "result" and ev.get("session_id"):
                     session_id = ev["session_id"]
                 if chunk:

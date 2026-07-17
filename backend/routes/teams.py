@@ -126,6 +126,33 @@ def _tr_emit(run_id: str, event: dict) -> None:
         q.put_nowait(event)
 
 
+def _format_tool_event_as_text(event: dict) -> str:
+    """把 engines/*.py 透過 on_tool_event 送來的 tool_use / tool_result
+    envelope（形狀見 engines/base.py 的 OnToolEvent 說明）格式化成一段
+    可讀文字，塞進 team run 的 step_text 串流。"""
+    if event.get("type") == "tool_use":
+        name = event.get("name", "?")
+        input_ = event.get("input", {})
+        if isinstance(input_, dict) and "command" in input_:
+            detail = input_["command"]
+        elif isinstance(input_, dict) and "changes" in input_:
+            paths = [c.get("path", "?") for c in input_.get("changes", [])]
+            detail = ", ".join(paths)
+        else:
+            detail = json.dumps(input_, ensure_ascii=False)[:300]
+        return f"\n▸ {name}: {detail}\n"
+    if event.get("type") == "user":
+        parts = []
+        for block in event.get("message", {}).get("content", []):
+            if block.get("type") != "tool_result":
+                continue
+            content = block.get("content", "")
+            text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            parts.append(f"  ✓ {text[:1000]}\n")
+        return "".join(parts)
+    return ""
+
+
 async def _gc_team_runs_task() -> None:
     """Background task to cleanup old team runs, preventing leaks."""
     while True:
@@ -215,6 +242,17 @@ async def _agent_run_capture(
     async def _on_text(chunk: str) -> None:
         _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": chunk})
 
+    async def _on_tool_event(event: dict) -> None:
+        # Team run 的 step 資料模型（_team_runs[run_id]["steps"][i]）目前
+        # 只有一個扁平的 output 文字欄位，沒有結構化的工具呼叫清單——不像
+        # /api/chat 有現成的 'tool' bubble UI 可以直接吃 tool_use/
+        # tool_result envelope。與其為了這次改動重新設計 step 的資料
+        # 結構（範圍過大，見 docs/ENHANCEMENT-ROADMAP.md 的 Phase 1
+        # 範圍說明），先把工具呼叫格式化成可讀文字、跟其他文字輸出一樣
+        # 透過既有的 step_text 事件送出——至少不再整個消失不見，之後要
+        # 做成獨立的結構化 UI 也不影響這裡的資料來源。
+        _tr_emit(run_id, {"type": "step_text", "step": step_idx, "text": _format_tool_event_as_text(event)})
+
     proc_holder: dict = {}
 
     def _on_process(proc) -> None:
@@ -248,6 +286,7 @@ async def _agent_run_capture(
             on_text=_on_text,
             on_process=_on_process,
             is_cancelled=_is_cancelled,
+            on_tool_event=_on_tool_event,
         )
     finally:
         if "proc" in proc_holder:

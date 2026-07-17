@@ -144,6 +144,45 @@ def _inject_text_attachments(prompt: str, text_attachments: "list[str]") -> str:
     return "".join(parts)
 
 
+# item.type -> 對應的 Claude 慣用工具名稱（單純是顯示用的名字，前端的
+# 'tool' bubble 沒有特別區分底層引擎，沿用 Claude 慣用命名讓兩邊引擎顯示
+# 起來一致，不會讓使用者覺得 Codex「用了一個叫 command_execution 的怪
+# 工具」）。已驗證存在的兩種（見 scripts/probe_codex_cli.py 的
+# KNOWN_ITEM_TYPES 註記、backend/engines/codex_engine.py 檔頭的實測記錄）：
+_TOOL_ITEM_NAMES = {
+    "command_execution": "Bash",
+    "file_change": "Edit",
+    "mcp_tool_call": "MCP",
+    "web_search": "WebSearch",
+}
+# agent_message／error 已經有專門的文字處理路徑（見下方迴圈），不要
+# 被下面的「未知型別」保底邏輯重複處理成一次空洞的工具呼叫。
+_TEXT_HANDLED_ITEM_TYPES = frozenset({"agent_message", "error"})
+
+
+def _tool_use_input_for_item(item: dict) -> dict:
+    item_type = item.get("type")
+    if item_type == "command_execution":
+        return {"command": item.get("command", "")}
+    if item_type == "file_change":
+        return {"changes": item.get("changes", [])}
+    # 未知型別（mcp_tool_call/web_search/reasoning/plan_update，或未來
+    # CLI 版本新增的型別）：把 item 本身（扣掉 id/type/status，那些是
+    # envelope 層級的欄位，不是「這次呼叫的參數」）當 input，保底但不
+    # 假裝知道欄位語意。
+    return {k: v for k, v in item.items() if k not in ("id", "type", "status")}
+
+
+def _tool_result_content_for_item(item: dict) -> str:
+    item_type = item.get("type")
+    if item_type == "command_execution":
+        return item.get("aggregated_output", "") or f"(exit code {item.get('exit_code')})"
+    if item_type == "file_change":
+        changes = item.get("changes", [])
+        return "; ".join(f"{c.get('kind', '?')} {c.get('path', '?')}" for c in changes) or "(no changes)"
+    return json.dumps(item, ensure_ascii=False)[:2000]
+
+
 async def run_turn(
     *,
     prompt: str,
@@ -158,6 +197,7 @@ async def run_turn(
     attachments: "list[str] | None" = None,
     bin_override: str = "",   # 新增，預設空字串＝沿用原本 _codex_bin() 行為，
                               # Team Run／HR 派發的既有呼叫端不用改一行。
+    on_tool_event=None,
 ) -> RunResult:
     codex_bin = _codex_bin(bin_override)
     safe_cwd = cwd if (cwd and Path(cwd).is_dir()) else str(Path.home())
@@ -205,6 +245,11 @@ async def run_turn(
     output_parts: list[str] = []
     session_id = ""
     non_json_lines: list[str] = []
+    # 記錄哪些 item id 已經在 item.started 發過 tool_use——item.completed
+    # 只補發 tool_result，不要為同一個 id 重複發第二次 tool_use（前端的
+    # 'tool' bubble 用 tool_use_id 比對配對，重複發會變成兩顆分開的
+    # bubble，其中一顆永遠停在「執行中」收不到結果）。
+    tool_use_sent_ids: set = set()
     proc = None
     try:
         cmd = wrap_cmd(cmd[0], cmd[1:])
@@ -237,6 +282,26 @@ async def run_turn(
                 ev_type = ev.get("type")
                 if ev_type == "thread.started" and ev.get("thread_id"):
                     session_id = ev["thread_id"]
+                elif ev_type == "item.started" and on_tool_event:
+                    # 已驗證：command_execution／file_change 會先發一個
+                    # status=in_progress 的 item.started，之後才是
+                    # item.completed 帶最終結果——這裡先發 tool_use，讓
+                    # 前端的 'tool' bubble 立刻顯示「執行中」，不用等到
+                    # 整個工具呼叫結束才出現（跟 Claude 原生 SDK 路徑的
+                    # 體感一致）。agent_message／error 沒有 .started
+                    # 變體（實測沒看過），不會誤觸發這裡。
+                    item = ev.get("item", {})
+                    item_type = item.get("type")
+                    item_id = item.get("id", "")
+                    if item_type and item_type not in _TEXT_HANDLED_ITEM_TYPES:
+                        await on_tool_event({
+                            "type": "tool_use",
+                            "id": item_id,
+                            "name": _TOOL_ITEM_NAMES.get(item_type, item_type),
+                            "input": _tool_use_input_for_item(item),
+                        })
+                        if item_id:
+                            tool_use_sent_ids.add(item_id)
                 elif ev_type == "item.completed":
                     item = ev.get("item", {})
                     item_type = item.get("type")
@@ -256,6 +321,31 @@ async def run_turn(
                             chunk = f"\n[codex: {msg}]\n"
                             output_parts.append(chunk)
                             await on_text(chunk)
+                    elif on_tool_event:
+                        # command_execution／file_change（已驗證存在）以及
+                        # 任何其他未知型別（mcp_tool_call／web_search／
+                        # reasoning／plan_update，或未來版本新增的型別）：
+                        # 統一發 tool_result 把 item.started 那次 tool_use
+                        # 收尾。沒收到對應 item.started 的情況（理論上不該
+                        # 發生，但防禦性處理——例如未來版本改成單發
+                        # item.completed 不經過 .started）一樣補一組
+                        # tool_use+tool_result，總比整個吃掉不見好。
+                        item_id = item.get("id", "")
+                        if item_id not in tool_use_sent_ids:
+                            await on_tool_event({
+                                "type": "tool_use",
+                                "id": item_id,
+                                "name": _TOOL_ITEM_NAMES.get(item_type, item_type or "unknown"),
+                                "input": _tool_use_input_for_item(item),
+                            })
+                        await on_tool_event({
+                            "type": "user",
+                            "message": {"content": [{
+                                "type": "tool_result",
+                                "tool_use_id": item_id,
+                                "content": _tool_result_content_for_item(item),
+                            }]},
+                        })
                 elif ev_type == "turn.failed":
                     err_text = json.dumps(ev.get("error", ev), ensure_ascii=False)
                     return RunResult(
