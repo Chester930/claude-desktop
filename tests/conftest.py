@@ -111,13 +111,24 @@ async def app(tmp_claude_home, sample_agent, sample_skill, sample_team, sample_m
     """每個測試函數都取得一個新 aiohttp Application 實例（以暫存 claude_home 覆蓋全域路徑）"""
     import main  # noqa: F401
 
-    # 覆蓋全域路徑（每次都重設，確保 isolation）
+    # 覆蓋全域路徑（每次都重設，確保 isolation）。
+    #
+    # CONFIG_FILE 一定要在 CLAUDE_HOME 之前設：main.py 的 _CustomModule.
+    # __setattr__ 攔截了 CLAUDE_HOME 賦值，會立刻呼叫
+    # database.update_paths(value) → _resolve_registry_home(CLAUDE_HOME)
+    # → 讀 CONFIG_FILE.read_text() 找 registryHome 覆寫值。如果這時候
+    # CONFIG_FILE 還沒被改指到暫存目錄，讀到的會是這台機器上真實專案的
+    # claude-desktop-config.json——單獨跑某個測試類別（不是完整
+    # `pytest tests/`）時，第一個測試會因此把 REGISTRY_HOME 解析成真實的
+    # ~/.claude 而不是暫存目錄，後續測試對 /api/agents 等端點的操作全部
+    # 打到真實資料，例如 test_list_agents_returns_list 會看到這台機器上
+    # 兩三百個真實 agent 而不是暫存的 test-agent。
+    main.CONFIG_FILE  = tmp_claude_home / "claude-desktop-config.json"
     main.CLAUDE_HOME  = tmp_claude_home
     main.AGENTS_DIR   = tmp_claude_home / "agents"
     main.SKILLS_DIR   = tmp_claude_home / "skills"
     main.TEAMS_DIR    = tmp_claude_home / "teams"
     main.SOULS_DIR    = tmp_claude_home / "souls"
-    main.CONFIG_FILE  = tmp_claude_home / "claude-desktop-config.json"
 
     # 重新初始化 DB（指向暫存目錄）
     main._INDEX_DB = tmp_claude_home / "claude-desktop-index.db"
