@@ -749,6 +749,12 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
             env_msg = {"type": "assistant", "message": {"content": [{"type": "text", "text": chunk}]}}
             await response.write(f"data: {json.dumps(env_msg)}\n\n".encode())
 
+        async def _on_tool_event(event: dict) -> None:
+            # engine 已經把這個 dict 組成跟 _run_pooled() 一樣的 envelope
+            # 形狀（tool_use / user+tool_result）——這裡單純轉發，不重新
+            # 解讀內容，前端既有的 'tool' bubble 直接吃得到。
+            await response.write(f"data: {json.dumps(event)}\n\n".encode())
+
         def _on_process(proc) -> None:
             active_procs[client_id] = proc
 
@@ -758,6 +764,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
                 resume_session_id=active_sessions.get(client_id), api_key=engine_api_key,
                 on_text=_on_text, on_process=_on_process, attachments=attachments,
                 bin_override=(codex_bin_override if engine.name == "codex" else ""),
+                on_tool_event=_on_tool_event,
             )
         finally:
             active_procs.pop(client_id, None)
