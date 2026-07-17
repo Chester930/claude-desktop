@@ -15,6 +15,7 @@ import { QuickPromptsEditComponent } from './components/quick-prompts-edit/quick
 import { GeneralSettingsComponent } from './components/general-settings/general-settings';
 import { EngineSettingsComponent } from './components/engine-settings/engine-settings';
 import { SchedulePanelComponent } from './components/schedule-panel/schedule-panel';
+import { TeamPanelComponent } from './components/team-panel/team-panel';
 import { SettingsService, AppSettings } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -55,7 +56,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -154,7 +155,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // schedules signal: extracted into components/schedule-panel (Phase 2)
   // memoryOverview / memViewExpanded / memEditMode / memEditContent:
   // extracted into components/memory-editor (Phase 2)
-  expandedTeams = signal<Record<string, boolean>>({});
+  // expandedTeams: extracted into components/team-panel (Phase 2)
 
   rightPanelFilter = signal('');
 
@@ -2194,9 +2195,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.getTeams().subscribe(t => this.teams.set(t));
   }
 
-  toggleTeamExpanded(tid: string) {
-    this.expandedTeams.update(m => ({ ...m, [tid]: !m[tid] }));
-  }
+  // toggleTeamExpanded: extracted into components/team-panel (Phase 2)
 
   openTeamEditor(team?: Team) {
     if (team) {

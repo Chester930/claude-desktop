@@ -342,11 +342,46 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     只抄基底規則（background/border/padding/hover），沒有抄
     `.selected`/`.active-in-chat`/`.expanded` 這些修飾用的變體，因為
     排程卡片從來不會套用那些 class，抄了也用不到。
-  - ⬜ 待拆：teams/skills/agents/mcp/soul 這幾個分頁，同一套「`@if`
-    區塊裡包 `@defer` + 獨立元件」模式繼續套用即可；規模上
-    agents/teams/skills 應該都比 Scheduling 複雜（更多巢狀狀態、
-    跟 chat 主畫面互動更深），建議依複雜度由簡到繁排序，跟
-    settingsForm 子區塊當初的做法一樣。
+  - ✅ **Teams 分頁**（`TeamPanelComponent`）：只搬「團隊卡片列表」這個
+    UI，不是整個 Teams 功能——盤點後發現 Teams 比 Scheduling 複雜
+    得多，不是全部自包含：
+    - `sortedTeams()`（原本的 computed）依賴 `rightPanelFilter()`，
+      這是整個右側面板（agents/skills/mcp/teams 共用）的搜尋框
+      signal，不能搬——所以排序/篩選邏輯留在 `App`，只把算好的結果
+      用 `@Input() teams: Team[]` 傳下去（跟 `dropdownAgents` 當初
+      的處理方式一樣）。
+    - `expandedTeams`/`toggleTeamExpanded`（卡片展開/收合狀態）純粹
+      是這個列表自己的 UI 狀態，別處沒人用，整個搬進元件、改名
+      `toggleExpanded`。
+    - `selectTeamLeader`（點「💬 團隊對話」）、`toggleTeamFavorite`
+      （收藏切換）、`openTeamEditor`（開編輯 Team 的另一個獨立
+      modal，`app.html` 2318 行左右，跟這個列表完全是分開的區塊）
+      這三個**不能搬**——`selectTeamLeader` 深度耦合 chat/session
+      狀態（呼叫 `saveCurrentTab()`、建立新對話分頁），
+      `openTeamEditor` 開的是列表以外的另一塊 UI，`toggleTeamFavorite`
+      寫回 `App` 自己持有、別處也會讀的 `teams` signal。三個都改成
+      `@Output`（`chat`/`favorite`/`edit`）往上通知，`App` 收到事件後
+      呼叫原本就有的方法——元件本身完全不碰 `ClaudeService`，是純
+      presentational 元件，跟之前「自包含」的元件（Telegram/
+      QuickPromptsEdit/Schedule）是不同的模式。
+    CSS：`.card-header-row`（補進既有全域 `.panel-card` 巢狀規則
+    裡）、`.agent-action-btns`/`.agent-activate-btn`/`.agent-edit-btn`/
+    `.agent-fav-btn`/`.empty-guide*`/`.sticky-create-btn-wrap`/
+    `.team-members-row`/`.team-member-chip`（含巢狀 `.member-dot`/
+    `.member-role`）都是 App 自己其他分頁（agents/skills/chat 空狀態）
+    共用的樣式，原定義不動，`src/styles.scss` 加全域拷貝；
+    `.team-fav-btn`/`.team-leader-preview` 盤點後發現根本沒有對應的
+    scss 規則（純裝飾用的 class，一直是空的），不用搬。
+    既有 e2e 測試「Team 卡片可以切換最愛」直接驗證了 `(favorite)`
+    這條線路整條可用；手動另外驗證了空狀態、展開/收合、`(edit)`
+    事件（編輯既有 Team 與建立新 Team 兩條路徑都會正確開啟
+    Team Editor modal）——`(chat)` 沒有另外寫測試，因為它跟已驗證
+    過兩次的 `(favorite)`/`(edit)` 是完全相同的事件轉發寫法，風險
+    判斷上不需要重複驗證。
+  - ⬜ 待拆：skills/agents/mcp/soul 這幾個分頁，同一套模式繼續套用；
+    Teams 已經證明「plain presentational 元件 + 多個 @Output 往上轉發」
+    這個新模式可行，agents 分頁的結構很可能跟 teams 很像（也有
+    activate/fav/edit 三個動作按鈕），可以直接參考這次的做法。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
 抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立

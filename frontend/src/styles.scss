@@ -392,6 +392,15 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   transition: all 0.15s;
   &:hover { border-color: #d4a853; }
 
+  .card-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
   .card-name { font-size: 13px; font-weight: 600; color: #7c6fff; }
   .card-desc {
     font-size: 11px; color: #888; line-height: 1.4;
@@ -421,4 +430,97 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
 }
 
 .empty-hint { color: #888; font-size: 12px; padding: 12px; text-align: center; }
+
+/* ── Also used by team-panel but still used directly by App elsewhere too */
+/* (agents/skills tabs, chat empty state) — originals stay in app.scss. ── */
+.sticky-create-btn-wrap {
+  position: sticky;
+  bottom: -8px;
+  background: #161616;
+  padding: 8px 4px 0 4px;
+  z-index: 10;
+  margin-top: 12px;
+  border-top: 1px solid #2a2a2a;
+}
+
+.agent-action-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.agent-activate-btn {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: none;
+  color: #aaa;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+  &:hover { border-color: #d4a853; color: #d4a853; }
+  &.active { background: rgba(212,168,83,0.15); border-color: #d4a853; color: #d4a853; }
+}
+
+.agent-edit-btn {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: none;
+  color: #666;
+  cursor: pointer;
+  &:hover { background: rgba(255,255,255,0.07); color: #ccc; }
+}
+
+.agent-fav-btn {
+  font-size: 13px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: none;
+  color: #555;
+  cursor: pointer;
+  transition: color 0.15s, transform 0.1s;
+  &:hover { color: #d4a853; transform: scale(1.15); }
+  &.active { color: #d4a853; }
+}
+
+.empty-guide {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 8px; padding: 28px 16px; text-align: center;
+}
+.empty-guide-icon  { font-size: 32px; }
+.empty-guide-title { font-size: 14px; font-weight: 600; color: #e8e8e8; }
+.empty-guide-sub {
+  font-size: 12px; color: #888; line-height: 1.6;
+  code { color: #7c6fff; background: #1f1f1f; padding: 1px 5px; border-radius: 4px; }
+}
+
+.team-members-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0 2px;
+}
+
+.team-member-chip {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(124,111,255,0.1);
+  border: 1px solid rgba(124,111,255,0.2);
+
+  .member-dot { color: #7c6fff; font-size: 8px; }
+  .member-role {
+    color: #666;
+    font-style: italic;
+    &::before { content: '·'; margin: 0 2px; }
+  }
+}
 
