@@ -31,6 +31,7 @@ from helpers import (
     _skill_dict_from_dir,
     _skill_dict_safe,
 )
+from dir_cache import cached_parallel_scan
 
 
 def _get_main_module():
@@ -73,13 +74,19 @@ def _resolve_codex_key_fn():
 
 # ── Agent handlers ────────────────────────────────────────────────────────────
 
+def _agent_dict_or_none(f: Path) -> "dict | None":
+    try:
+        return _agent_dict(f)
+    except Exception:
+        return None
+
+
 async def handle_agents(request: web.Request) -> web.Response:
     AGENTS_DIR, _ = _dirs()
-    agents = []
-    if AGENTS_DIR.exists():
-        files = sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower())
-        results = await asyncio.gather(*[_agent_dict_safe(f) for f in files])
-        agents = [d for d in results if d is not None]
+    if not AGENTS_DIR.exists():
+        return web.json_response([])
+    files = sorted(AGENTS_DIR.glob("*.md"), key=lambda p: p.name.lower())
+    agents = await cached_parallel_scan(f"agents:{AGENTS_DIR}", files, _agent_dict_or_none)
     return web.json_response(agents)
 
 
@@ -346,19 +353,28 @@ async def handle_hr_dispatch(request: web.Request) -> web.Response:
 
 # ── Skill handlers ────────────────────────────────────────────────────────────
 
+def _skill_mtime(e: Path) -> float:
+    mtime = e.stat().st_mtime
+    if e.is_dir():
+        # 目錄自己的 mtime 只有新增/刪除/改名項目才會變，SKILL.md/
+        # README.md 內容被原地編輯不會動到——真正的內容檔案 mtime 也要
+        # 一起考慮，不然快取會漏掉這種就地編輯。
+        for name in ("SKILL.md", "README.md"):
+            try:
+                mtime = max(mtime, (e / name).stat().st_mtime)
+            except OSError:
+                pass
+    return mtime
+
+
 async def handle_skills(request: web.Request) -> web.Response:
     _, SKILLS_DIR = _dirs()
     if not SKILLS_DIR.exists():
         return web.json_response([])
     entries = sorted(SKILLS_DIR.iterdir(), key=lambda p: p.name.lower())
-    # 健檢：這裡原本是同步 for 迴圈、逐一讀檔——445 個 skill 目錄、每個最多
-    # 3 次檔案系統呼叫（兩次 exists() 探測 SKILL.md/README.md 再讀一次），
-    # 在 Docker 的 Windows bind mount 上量到將近 11 秒，整個頁面重整都卡在
-    # 這一支 API 上。改成跟 handle_agents 一樣丟到 thread pool 平行跑。
-    results = await asyncio.gather(
-        *[asyncio.to_thread(_skill_dict_safe, e) for e in entries]
+    skills = await cached_parallel_scan(
+        f"skills:{SKILLS_DIR}", entries, _skill_dict_safe, mtime_fn=_skill_mtime
     )
-    skills = [d for d in results if d is not None]
     return web.json_response(skills)
 
 

@@ -153,6 +153,7 @@ _codex_usage_cache: dict = {"data": None, "expires": 0.0}
 
 from helpers import _read_agent_body, _read_skills_content, _team_dict, _agent_dict, _parse_yaml_simple, safe_kill_process, wrap_cmd
 import stt
+import dir_cache
 
 import atexit
 import signal
@@ -2489,12 +2490,8 @@ def _soul_dict_safe(f: Path) -> "dict | None":
 
 async def handle_souls_list(request: web.Request) -> web.Response:
     migrate_soul()
-    # 同一個 handle_skills 踩過的坑：同步 for 迴圈逐一讀檔，沒有平行化，
-    # 實測 1.46 秒。改成跟 handle_agents/handle_skills 一樣丟到 thread
-    # pool 平行跑。
     files = sorted(SOULS_DIR.glob("*.md"))
-    results = await asyncio.gather(*[asyncio.to_thread(_soul_dict_safe, f) for f in files])
-    souls = [d for d in results if d is not None]
+    souls = await dir_cache.cached_parallel_scan(f"souls:{SOULS_DIR}", files, _soul_dict_safe)
     return web.json_response(souls)
 
 async def handle_soul_save(request: web.Request) -> web.Response:
