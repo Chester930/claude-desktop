@@ -2479,15 +2479,22 @@ async def handle_soul_put(request: web.Request) -> web.Response:
     SOUL_FILE.write_text(content, encoding="utf-8")
     return web.json_response({"ok": True})
 
+def _soul_dict_safe(f: Path) -> "dict | None":
+    try:
+        content = f.read_text(encoding="utf-8")
+        return {"id": f.stem, "name": f.stem, "content": content}
+    except Exception:
+        return None
+
+
 async def handle_souls_list(request: web.Request) -> web.Response:
     migrate_soul()
-    souls = []
-    for f in sorted(SOULS_DIR.glob("*.md")):
-        try:
-            content = f.read_text(encoding="utf-8")
-            souls.append({"id": f.stem, "name": f.stem, "content": content})
-        except Exception:
-            pass
+    # 同一個 handle_skills 踩過的坑：同步 for 迴圈逐一讀檔，沒有平行化，
+    # 實測 1.46 秒。改成跟 handle_agents/handle_skills 一樣丟到 thread
+    # pool 平行跑。
+    files = sorted(SOULS_DIR.glob("*.md"))
+    results = await asyncio.gather(*[asyncio.to_thread(_soul_dict_safe, f) for f in files])
+    souls = [d for d in results if d is not None]
     return web.json_response(souls)
 
 async def handle_soul_save(request: web.Request) -> web.Response:
