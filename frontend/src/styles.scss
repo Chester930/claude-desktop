@@ -115,6 +115,21 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   &:hover { border-color: #7c6fff; color: #7c6fff; }
 }
 
+/* ── Toggle label + status chip (must be global: same reason as above) ───── */
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  input[type="checkbox"] { width: auto; }
+}
+
+.tg-status-chip {
+  font-size: 10px;
+  color: #9ca3af;
+  &.running { color: #10b981; }
+}
+
 /* ── Code block (injected via [innerHTML], must be global) ─────────────────── */
 .code-block-wrap {
   position: relative;

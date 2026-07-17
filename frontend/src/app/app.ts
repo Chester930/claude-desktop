@@ -8,6 +8,7 @@ import { MarkdownPipe } from './markdown.pipe';
 import { DiagnosticsPanelComponent } from './components/diagnostics-panel/diagnostics-panel';
 import { AgencyImportPanelComponent } from './components/agency-import-panel/agency-import-panel';
 import { RecentWorkDirsComponent } from './components/recent-work-dirs/recent-work-dirs';
+import { TelegramSettingsComponent } from './components/telegram-settings/telegram-settings';
 import { SettingsService, AppSettings, QuickPrompt } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, Schedule, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -48,7 +49,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, RecentWorkDirsComponent, TelegramSettingsComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -2795,33 +2796,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     window.open(this.claude.debugDumpUrl(), '_blank');
   }
 
-  // ── #18 Telegram settings ─────────────────────────────────────────────────
-  telegramToken = '';
-  telegramEnabled = signal(false);
-  telegramRunning = signal(false);
-  telegramSaving = signal(false);
-
-  loadTelegramSettings() {
-    this.claude.getTelegram().subscribe(r => {
-      this.telegramToken = r.token;
-      this.telegramEnabled.set(r.enabled);
-      this.telegramRunning.set(r.running);
-    });
-  }
-
-  saveTelegramSettings() {
-    this.telegramSaving.set(true);
-    this.claude.setTelegram({
-      token: this.telegramToken,
-      enabled: this.telegramEnabled(),
-    }).subscribe({
-      next: r => {
-        this.telegramRunning.set(r.running);
-        this.telegramSaving.set(false);
-      },
-      error: () => this.telegramSaving.set(false),
-    });
-  }
+  // ── #18 Telegram settings: extracted into components/telegram-settings (Phase 2) ──
 
   // ── #22 Auto-update progress ──────────────────────────────────────────────
   updateProgress = signal<number | null>(null);
@@ -3230,7 +3205,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   async openSettings() {
     this.settingsForm = this.settings.get();
     this.settingsOpen.set(true);
-    this.loadTelegramSettings();
     this.loadMemoryOverview();
     this.loadEngineStatus();
     this.claude.getStatus().subscribe(s => {

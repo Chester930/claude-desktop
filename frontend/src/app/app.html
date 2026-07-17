@@ -417,31 +417,12 @@
           </div>
         </div>
 
-        <!-- #18 Telegram Bot gateway -->
-        <div class="modal-section">
-          <div class="modal-section-header">
-            Telegram Bot 閘道
-            <span class="tg-status-chip" [class.running]="telegramRunning()">
-              {{ telegramRunning() ? '● 運行中' : '○ 已停止' }}
-            </span>
-          </div>
-          <div class="modal-form">
-            <label>Bot Token
-              <input type="password" [(ngModel)]="telegramToken"
-                placeholder="從 @BotFather 取得的 bot token">
-              <small>留空並關閉即可停止 Bot。Token 儲存於 ~/.claude/ 本地端，不上傳。</small>
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" [(ngModel)]="telegramEnabled" [ngModelOptions]="{standalone: true}"
-                (ngModelChange)="telegramEnabled.set($event)">
-              啟用 Telegram Bot（開啟後自動連線並接收訊息）
-            </label>
-            <button class="btn-primary btn-sm" (click)="saveTelegramSettings()"
-              [disabled]="telegramSaving()">
-              {{ telegramSaving() ? '儲存中…' : '套用 Telegram 設定' }}
-            </button>
-          </div>
-        </div>
+        <!-- #18 Telegram Bot gateway（Phase 2 拆分：獨立元件 + @defer 延遲載入） -->
+        @defer (on immediate) {
+          <app-telegram-settings />
+        } @placeholder {
+          <div style="margin:0 20px;font-size:11px;color:#888;">載入中…</div>
+        }
 
         <!-- MEMORY -->
         <div class="modal-section">

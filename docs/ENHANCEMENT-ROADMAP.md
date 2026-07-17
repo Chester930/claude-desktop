@@ -143,13 +143,21 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     事件往上通知 `app.ts` 設定 `settingsForm.workDir`——`<label>工作
     目錄` 本身那個 `[(ngModel)]="settingsForm.workDir"` 的主輸入框
     仍留在 `app.ts`，因為它屬於還沒拆的 `settingsForm`）。
-  - ⬜ 下一個：`telegramSaving`（6 refs）→ `memEditContent`
-    （8 refs）→ `settingsForm`（63 refs，分段拆）。
-  - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm`
-    等 settings modal 共用樣式已搬到 `src/styles.scss`（global）——
-    Angular 的 emulated encapsulation 讓子元件收不到 `app.scss`
-    裡的 component-scoped 樣式，每抽一個新元件如果用到這些 class
-    不用再重複搬。
+  - ✅ `telegramSaving`（連同 `telegramToken`/`telegramEnabled`/
+    `telegramRunning`/`loadTelegramSettings`/`saveTelegramSettings`
+    一併抽成 `TelegramSettingsComponent`；整塊本來就是獨立的
+    `.modal-section`，沒有跨頁狀態。`loadTelegramSettings()` 原本由
+    `App.openSettings()` 呼叫，改成元件自己在 `ngOnInit` 載入——因為
+    `@if (settingsOpen())` 包住整個 modal，每次開 modal 都會重新
+    建立這個元件，效果等價）。
+  - ⬜ 下一個：`memEditContent`（8 refs）→ `settingsForm`
+    （63 refs，分段拆）。
+  - 共通踩坑：`.modal-section` / `.modal-section-header` / `.btn-sm` /
+    `.toggle-label` / `.tg-status-chip` 等 settings modal 共用樣式已
+    搬到 `src/styles.scss`（global）——Angular 的 emulated
+    encapsulation 讓子元件收不到 `app.scss` 裡的 component-scoped
+    樣式，每抽一個新元件如果用到這些 class 不用再重複搬；如果用到
+    新的共用 class，記得順手搬過去。
 - memview/schedules 分頁、teams/skills 側欄、chat 主畫面的 lazy
   route 化維持原規劃，在 settings 相關的小區塊都驗證完拆分模式可行
   之後再進行（這幾塊本身就是路由層級，天然比 settings modal 內部

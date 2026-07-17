@@ -1780,13 +1780,7 @@ body {
 }
 
 // ── Toggle label ──────────────────────────────────────
-.toggle-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  input[type="checkbox"] { width: auto; }
-}
+// .toggle-label moved to src/styles.scss (global), see comment there.
 
 // ── Soul footer ───────────────────────────────────────
 .soul-footer {
@@ -3092,12 +3086,7 @@ body {
   &:hover { background: #7c3aed; }
 }
 
-// #18 Telegram status chip
-.tg-status-chip {
-  font-size: 10px;
-  color: #9ca3af;
-  &.running { color: #10b981; }
-}
+// .tg-status-chip moved to src/styles.scss (global), see comment there.
 
 // #21 Export format select (topbar)
 .export-format-select {
