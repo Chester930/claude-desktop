@@ -19,6 +19,13 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 
+# Same story as docker above: the "fetch"/"sqlite" preset MCP servers
+# (main.py, below) are registered as `uvx mcp-server-fetch` / `uvx
+# mcp-server-sqlite ...`, but uvx was never installed — both fail with
+# "command not found". Official Astral pattern for including uv in an
+# image: copy the prebuilt binaries straight from their image.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
