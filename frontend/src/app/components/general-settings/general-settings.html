@@ -30,7 +30,7 @@
   <small>Claude 執行時的起始目錄</small>
   <!-- 最近使用的工作目錄（Phase 2 拆分：獨立元件 + @defer 延遲載入） -->
   @defer (on immediate) {
-    <app-recent-work-dirs (select)="settingsForm.workDir = $event" />
+    <app-recent-work-dirs (pickDir)="settingsForm.workDir = $event" />
   } @placeholder {
     <small style="color:#888;">載入中…</small>
   }

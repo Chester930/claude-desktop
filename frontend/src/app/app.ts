@@ -18,6 +18,7 @@ import { SchedulePanelComponent } from './components/schedule-panel/schedule-pan
 import { TeamPanelComponent } from './components/team-panel/team-panel';
 import { SkillPanelComponent } from './components/skill-panel/skill-panel';
 import { AgentPanelComponent } from './components/agent-panel/agent-panel';
+import { SoulPanelComponent } from './components/soul-panel/soul-panel';
 import { SettingsService, AppSettings } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -58,7 +59,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent, SkillPanelComponent, AgentPanelComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent, SkillPanelComponent, AgentPanelComponent, SoulPanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -554,11 +555,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   // Multi-soul state
   souls = signal<SoulProfile[]>([]);
   selectedSoulId = signal<string>('');
-  soulDraft = '';
   soulDraftSaved = signal(true);
   newSoulName = '';
-  renamingSoulId = signal<string | null>(null);
-  renameSoulInput = '';
+  // renamingSoulId / renameSoulInput / soulDraft (the draft text itself,
+  // as opposed to soulDraftSaved which stays here): extracted into
+  // components/soul-panel (Phase 2) — purely local UI state, nothing
+  // outside the soul tab reads/writes it. soulDraft specifically had to
+  // move after an e2e test caught a stale-echo race when round-tripped
+  // through @Input/@Output on every keystroke.
   agentEditorSoulContent = '';
 
   // Resizing signals & state
@@ -599,11 +603,11 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     e.preventDefault();
   }
 
-  onSoulDividerMousedown(e: MouseEvent, panelEl: HTMLElement) {
+  onSoulDividerMousedown(e: MouseEvent, panelHeight: number) {
     this._soulResizing = true;
     this._soulStartY = e.clientY;
     this._soulStartRatio = this.soulSplitRatio();
-    this._soulPanelHeight = panelEl.clientHeight;
+    this._soulPanelHeight = panelHeight;
     e.preventDefault();
   }
 
@@ -3242,8 +3246,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   selectSoulProfile(id: string) {
     this.selectedSoulId.set(id);
-    const s = this.souls().find(x => x.id === id);
-    this.soulDraft = s?.content ?? '';
     this.soulDraftSaved.set(true);
   }
 
@@ -3260,13 +3262,13 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     if (next !== idx) this.selectSoulProfile(list[next].id);
   }
 
-  saveSoulProfileEdits() {
+  saveSoulProfileEdits(content: string) {
     const id = this.selectedSoulId();
     if (!id) return;
-    this.claude.saveSoulProfile(id, this.soulDraft).subscribe({
+    this.claude.saveSoulProfile(id, content).subscribe({
       next: () => {
         this.soulDraftSaved.set(true);
-        this.souls.update(list => list.map(x => x.id === id ? { ...x, content: this.soulDraft } : x));
+        this.souls.update(list => list.map(x => x.id === id ? { ...x, content } : x));
       },
       error: (e) => this.showToast(`Soul 儲存失敗: ${e.message ?? e}`, 'error'),
     });
@@ -3275,8 +3277,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   discardSoulProfileEdits() {
     const id = this.selectedSoulId();
     if (!id) return;
-    const s = this.souls().find(x => x.id === id);
-    this.soulDraft = s?.content ?? '';
     this.soulDraftSaved.set(true);
   }
 
@@ -3323,15 +3323,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  startRenameSoul(id: string, e: Event) {
-    e.stopPropagation();
-    this.renamingSoulId.set(id);
-    this.renameSoulInput = id;
-  }
+  // startRenameSoul: extracted into components/soul-panel (Phase 2)
 
-  confirmRenameSoul(oldId: string) {
-    const newName = this.renameSoulInput.trim().replace(/\.md$/i, '').trim();
-    this.renamingSoulId.set(null);
+  confirmRenameSoul(oldId: string, rawInput: string) {
+    const newName = rawInput.trim().replace(/\.md$/i, '').trim();
     if (!newName || newName === oldId) return;
     this.claude.renameSoulProfile(oldId, newName).subscribe({
       next: (res) => {
@@ -3350,7 +3345,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     this.claude.deleteSoulProfile(id).subscribe(() => {
       if (this.selectedSoulId() === id) {
         this.selectedSoulId.set('');
-        this.soulDraft = '';
       }
       this.claude.getSouls().subscribe(list => {
         this.souls.set(list);

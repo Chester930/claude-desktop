@@ -684,3 +684,158 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: 
   50% { opacity: 0.3; }
 }
 
+/* ── Soul panel (must be global: components/soul-panel, Phase 2) ── */
+.soul-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+.soul-upper {
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 8px 8px 4px;
+  min-height: 60px;
+  box-sizing: border-box;
+
+  .soul-hint {
+    font-size: 11px;
+    color: #666;
+    margin: 0 0 6px;
+    line-height: 1.4;
+  }
+}
+
+.soul-add-btn {
+  width: 100%;
+  margin-bottom: 8px;
+  font-size: 12px;
+  padding: 6px 0;
+}
+
+.soul-rename-btn {
+  background: transparent;
+  border: none;
+  color: #555;
+  font-size: 11px;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 3px;
+  flex-shrink: 0;
+  &:hover { color: #ccc; background: rgba(255,255,255,0.07); }
+}
+
+.soul-rename-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(212,168,83,0.4);
+  border-radius: 4px;
+  color: #e8e8e8;
+  font-size: 12px;
+  padding: 2px 6px;
+  outline: none;
+  &:focus { border-color: #d4a853; }
+}
+
+.soul-filename {
+  flex: 1;
+  font-size: 12px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.soul-divider {
+  flex-shrink: 0;
+  height: 8px;
+  cursor: row-resize;
+  background: transparent;
+  position: relative;
+  z-index: 10;
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 50%;
+    height: 2px;
+    background: #2a2a2a;
+    transform: translateY(-50%);
+    transition: background 0.15s;
+  }
+  &:hover::after { background: #7c6fff; }
+}
+
+.soul-lower {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 60px;
+  overflow: hidden;
+  padding: 0 6px 6px;
+  box-sizing: border-box;
+
+  .memory-editor {
+    min-height: 0;
+    flex: 1;
+  }
+}
+
+.lower-empty-hint {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #888;
+  font-style: italic;
+  padding: 16px;
+}
+
+.edit-lower-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #aaa;
+  padding: 6px 8px 4px;
+  flex-shrink: 0;
+}
+
+.unsaved-dot {
+  color: #d4a853;
+  font-size: 10px;
+}
+
+.edit-lower-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 8px;
+  flex-shrink: 0;
+}
+
+/* ── Also used by soul-panel but still used directly by App elsewhere */
+/* too (agent editor's soul-content textarea); original stays in */
+/* app.scss. ──────────────────────────────────────────────────────── */
+.memory-editor {
+  width: 100%;
+  flex: 1;
+  background: #1f1f1f;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  color: #e8e8e8;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  padding: 10px;
+  resize: none;
+  min-height: 200px;
+  line-height: 1.5;
+  outline: none;
+  box-sizing: border-box;
+  &:focus { border-color: #7c6fff; }
+}
+

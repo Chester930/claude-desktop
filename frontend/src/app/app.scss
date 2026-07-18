@@ -1475,6 +1475,10 @@ body {
 // Height is now managed by input-area resizing layout
 
 // ── Memory editor ─────────────────────────────────────
+// .memory-editor: still used directly by App elsewhere (agent editor's
+// soul-content textarea), original stays; global copy (base rule +
+// the .soul-lower nested override) added to src/styles.scss for
+// components/soul-panel.
 .memory-editor {
   width: 100%;
   flex: 1;
@@ -2314,41 +2318,10 @@ body {
   margin: 0;
 }
 
-// ── 共用：下半區空提示 ───────────────────────────────
-.lower-empty-hint {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  color: $text-dim;
-  font-style: italic;
-  padding: 16px;
-}
-
-// ── 共用：編輯下半區 header & 操作列 ─────────────────
-.edit-lower-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  color: #aaa;
-  padding: 6px 8px 4px;
-  flex-shrink: 0;
-}
-
-.unsaved-dot {
-  color: $accent;
-  font-size: 10px;
-}
-
-.edit-lower-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  padding: 6px 8px;
-  flex-shrink: 0;
-}
+// .lower-empty-hint / .edit-lower-header / .unsaved-dot /
+// .edit-lower-actions moved to src/styles.scss (global) — exclusive to
+// components/soul-panel now (Phase 2). Comments called these "shared"
+// but grep confirms nothing else currently uses them.
 
 // ── 記憶 Panel（上下分割）────────────────────────────
 .memory-panel {
@@ -2454,112 +2427,12 @@ body {
 }
 
 
-// ── Soul Panel（draggable split）────────────────────────────────
-.soul-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-  position: relative;
-}
-
-.soul-upper {
-  flex-shrink: 0;
-  overflow-y: auto;
-  padding: 8px 8px 4px;
-  min-height: 60px;
-  box-sizing: border-box;
-
-  .soul-hint {
-    font-size: 11px;
-    color: #666;
-    margin: 0 0 6px;
-    line-height: 1.4;
-  }
-
-  .soul-create-form {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 8px;
-  }
-}
-
-.soul-add-btn {
-  width: 100%;
-  margin-bottom: 8px;
-  font-size: 12px;
-  padding: 6px 0;
-}
-
-.soul-rename-btn {
-  background: transparent;
-  border: none;
-  color: #555;
-  font-size: 11px;
-  padding: 2px 4px;
-  cursor: pointer;
-  border-radius: 3px;
-  flex-shrink: 0;
-  &:hover { color: #ccc; background: rgba(255,255,255,0.07); }
-}
-
-.soul-rename-input {
-  flex: 1;
-  min-width: 0;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(212,168,83,0.4);
-  border-radius: 4px;
-  color: #e8e8e8;
-  font-size: 12px;
-  padding: 2px 6px;
-  outline: none;
-  &:focus { border-color: #d4a853; }
-}
-
-.soul-filename {
-  flex: 1;
-  font-size: 12px;
-  color: $text-dim;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-// Draggable divider between upper and lower
-.soul-divider {
-  flex-shrink: 0;
-  height: 8px;
-  cursor: row-resize;
-  background: transparent;
-  position: relative;
-  z-index: 10;
-
-  &::after {
-    content: '';
-    position: absolute;
-    left: 0; right: 0; top: 50%;
-    height: 2px;
-    background: #2a2a2a;
-    transform: translateY(-50%);
-    transition: background 0.15s;
-  }
-  &:hover::after { background: #7c6fff; }
-}
-
-.soul-lower {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 60px;
-  overflow: hidden;
-  padding: 0 6px 6px;
-  box-sizing: border-box;
-
-  .memory-editor {
-    min-height: 0;
-    flex: 1;
-  }
-}
+// .soul-panel / .soul-upper / .soul-add-btn / .soul-rename-btn /
+// .soul-rename-input / .soul-filename / .soul-divider / .soul-lower
+// moved to src/styles.scss (global) — exclusive to
+// components/soul-panel now (Phase 2). .soul-create-form under
+// .soul-upper was dead already (no matching template usage even
+// before this extraction) — not moved, not cleaned up either.
 
 // ── Session skill-generate button ────────────────────────
 

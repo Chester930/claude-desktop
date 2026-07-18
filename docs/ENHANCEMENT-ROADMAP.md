@@ -467,10 +467,61 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     Skills 分頁（跨分頁）、最愛切換、開啟 Agent 編輯器；`activate`
     （啟動 Agent）沒有另外寫測試，因為跟已驗證過的
     `favorite`/`edit`/`jumpToSkill` 是同一種簡單事件轉發寫法。
-  - ⬜ 待拆：mcp/soul 這兩個分頁。從先前的踩點看 mcp 分頁牽涉 Docker
-    設定子 UI，可能是右側面板四個分頁裡最大最複雜的一個，建議先拆
-    soul（推測較單純，只有一個「聊天記錄」+ 內容編輯，沒有卡片列表）
-    再拆 mcp。
+  - ✅ **Soul 分頁**（`SoulPanelComponent`）：卡片列表 + 下方編輯器的
+    雙區塊版面，`souls`/`selectedSoulId` 兩個 signal 同時被 Agent 分頁
+    的 `getAgentSoulContent` 讀取，是跨分頁共用狀態，維持在 `App`
+    用 `@Input` 往下傳，不搬進元件。`soulSplitRatio`（上下區塊高度
+    比例，由全域 `mousemove`/`mouseup` 監聽器拖曳調整）也留在 `App`——
+    拖曳邏輯本身跟切分頁無關，是全域行為。
+    - 過程中抓到兩個真的產品 bug（不是測試問題），都是靠 Playwright
+      搭配 Angular dev-mode `ng.getComponent()` 直接讀 live component
+      state 才定位到：
+      1. **高頻文字狀態不能整包用 `@Input`/`@Output` 來回傳遞**。原本
+         把編輯器草稿內容（`soulDraft`）設計成 `@Input()
+         soulDraft`/`@Output() draftChange`，在快速輸入下會出現
+         stale-echo race——子元件的 `[ngModel]="soulDraft"` 被父層
+         回傳的舊值蓋掉，Save/Discard 按鈕在使用者明明已經編輯過的
+         情況下仍顯示 disabled。修法：草稿文字（`localDraft`）完全
+         留在元件本地狀態，只靠 `ngOnChanges` 監聽
+         `selectedSoulId`（不是 `souls` 陣列）變化時重置——只在切換
+         選取的靈魂檔案時重置，避免打字打到一半被 `souls` 陣列的
+         其他變動打斷。`soulDraftSaved`（純布林、每次編輯 session
+         只會 true→false 一次）維持 `@Input`，因為它是 idempotent，
+         不會有 race。
+      2. **`@Output()` 不能取跟原生 DOM 事件同名的名字**。原本
+         `@Output() select`/`@Output() wheel` 分別對應「選取某個靈魂
+         卡片」跟「滾輪捲動清單」，但 `select`/`wheel` 本身是真的、
+         會冒泡的原生 DOM 事件——在下方 textarea 裡按 Ctrl+A
+         全選文字時觸發的原生 `select` 事件冒泡到
+         `<app-soul-panel>` host element，被 `(select)="..."`
+         這個 Angular Output binding 誤接住，導致
+         `App.selectedSoulId` 被寫入一個原生 `Event` 物件而不是
+         靈魂檔案的 id 字串（畫面上會看到 `[object Event].md`）。
+         修法：兩個 Output 分別改名為 `pickSoul`/`soulWheel`，避開
+         跟原生事件同名。
+    - 抓到這個 bug 之後回頭對所有已抽出的元件做了一輪
+      `grep -rn "@Output() "` 掃描，檢查是否有其他同名衝突（比對
+      click/change/input/submit/focus/blur/keydown/keyup/drag/
+      drop/touch*/scroll/resize/load/error/toggle/close 等常見原生
+      事件名稱）——只有 soul-panel 這兩個，另外在更早抽出、已合併的
+      `RecentWorkDirsComponent` 發現同款 `@Output() select`（該元件
+      目前模板裡沒有可選取文字的子元素，理論上不會被觸發，但屬於同一
+      個已證實為真的 bug pattern，順手一併改名為 `pickDir` 並同步更新
+      `general-settings.html` 的呼叫端，防患於未然）。
+    CSS：`.soul-panel`/`.soul-upper`（含 `.soul-hint`）/
+    `.soul-add-btn`/`.soul-rename-btn`/`.soul-rename-input`/
+    `.soul-filename`/`.soul-divider`/`.soul-lower`/`.lower-empty-hint`/
+    `.edit-lower-header`/`.unsaved-dot`/`.edit-lower-actions` 從
+    `app.scss` 整段搬到 `styles.scss`；`.memory-editor` 因為還被
+    `App` 剩餘模板（agent 編輯器裡的 soul 內容欄）直接使用，原始定義
+    留在 `app.scss`，`styles.scss` 加一份字面值複製（SCSS 變數轉字面
+    hex 色碼）。另外發現一個全域 `@keyframes blink` 沒有被 Angular
+    的 emulated view encapsulation 限定作用域，為避免跟其他元件未來
+    可能新增的動畫撞名，改名為 `skill-panel-blink`。
+    手動 e2e 涵蓋選取卡片、編輯草稿、儲存（清除 unsaved 標記）、
+    捨棄（還原上次儲存內容）、原地重新命名、刪除、新增全部走過。
+  - ⬜ 待拆：mcp 分頁。從先前的踩點看牽涉 Docker 設定子 UI，可能是
+    右側面板四個分頁裡最大最複雜的一個，留到最後拆。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
 抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立
