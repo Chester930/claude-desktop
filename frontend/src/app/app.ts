@@ -17,6 +17,7 @@ import { EngineSettingsComponent } from './components/engine-settings/engine-set
 import { SchedulePanelComponent } from './components/schedule-panel/schedule-panel';
 import { TeamPanelComponent } from './components/team-panel/team-panel';
 import { SkillPanelComponent } from './components/skill-panel/skill-panel';
+import { AgentPanelComponent } from './components/agent-panel/agent-panel';
 import { SettingsService, AppSettings } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -57,7 +58,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent, SkillPanelComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent, SkillPanelComponent, AgentPanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -2027,10 +2028,7 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
-  getAgentSoulContent(soulId: string): string {
-    const s = this.souls().find(x => x.id === soulId);
-    return s ? s.content : '';
-  }
+  // getAgentSoulContent: extracted into components/agent-panel (Phase 2)
 
   deleteAgent(id: string) {
     this.claude.deleteAgent(id).subscribe({

@@ -424,12 +424,53 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     （過程中發現 `openSkillEditor` 會先打一次 `GET /api/skills/:id`
     才開 modal，不是純本地操作，一開始漏 mock 這個 API 導致 modal
     開不起來，補上後才過）。
-  - ⬜ 待拆：agents/mcp/soul 這幾個分頁。agents 分頁的結構應該跟
-    skills 很像（同樣有 `expandedAgentId`/`expandedTranslation` 這組
-    「跨分頁共用的展開狀態」，也有 activate/fav/edit 動作按鈕），
-    可以直接參考 skills 這次「@Input 唯讀快照 + Set 查表 +
-    @Output 轉發」的做法；mcp 分頁從先前的踩點看起來牽涉 Docker
-    設定子 UI，可能是這四個裡最大最複雜的一個，建議排最後。
+  - ✅ **Agents 分頁**（`AgentPanelComponent`）：結構跟 skills 幾乎一樣
+    （果然如預期），但實際盤點後發現比 skills 更單純一些：
+    - `sortedAgents()` 依賴 `rightPanelFilter()`，留在 `App`，結果用
+      `@Input() agents: Agent[]` 傳下去。
+    - `expandedAgentId`/`expandedTranslation` 一樣不能變成本地
+      signal——盤點時發現一個新的跨分頁寫入來源：`window:keydown`
+      全域 Escape 鍵監聽器（`onGlobalKey`）會同時重置
+      `expandedAgentId`/`expandedSkillId`/`expandedMcpId` 三個，跟
+      分頁切換無關，是全域快捷鍵，一定要留在 `App`。用
+      `@Input`/`@Output` 處理，跟 skills 同一招。
+    - **比 skills 簡化的地方**：原本猜測 `getPermSkills(agentId)`/
+      `getPermMcps(agentId)` 需要跟 skills 的
+      `linkedSkillIds`/`frontmatterSkillIds` 一樣包成 `Set` 傳下去，
+      但盤點後發現這兩個方法其實就是
+      `this.agents().find(x => x.id === id)?.skills ?? []`——單純讀
+      agent 物件自己的欄位。既然元件已經透過 `@Input() agents` 拿到
+      完整的 agent 物件了，模板裡直接用 `a.skills ?? []` /
+      `a.mcp ?? []` 取代方法呼叫即可，不需要額外的 computed 或
+      Set——比 skills 少了三個新 computed。
+    - `activateAgent`（啟動 Agent，套用 Soul/MCP/Memory、建立新對話
+      分頁）、`toggleFavorite`、`openAgentEditor`、
+      `toggleSkillPermForAgent`/`toggleMcpPermForAgent`、
+      `jumpToSkillDetail`/`jumpToMcpDetail`（跳到別分頁）都不能搬，
+      改 `@Output`（`activate`/`favorite`/`edit`/`removeSkillPerm`/
+      `removeMcpPerm`/`jumpToSkill`/`jumpToMcp`）。
+    - `getAgentSoulContent(soulId)`：純讀 `souls()` signal 找對應
+      content，只在展開的詳情卡才會用到（低頻率查詢），直接把
+      `souls: SoulProfile[]` 整包當 `@Input` 傳，元件自己
+      `.find()`，不用像 skill 的三個布林檢查那樣包 Set——這個是
+      「單次查找」不是「逐項在迴圈裡查」，包 Set 反而多此一舉。這也
+      讓 `App` 裡原本的 `getAgentSoulContent` 方法變成死碼，順手移除
+      （跟 `isElectron` 一樣，是這次搬移直接造成的死碼）。
+    CSS：**這次沒有新增任何全域樣式**——agent-panel 用到的每一個
+    class（`.card-header-row`/`.agent-action-btns`/
+    `.agent-activate-btn`/`.agent-fav-btn`/`.agent-edit-btn`/
+    `.agent-mapping-summary`/`.mapping-chip`/`.card-detail-content` 一
+    整組/`.translate-btn`/`.translating`/`.del-btn`/`.empty-guide*`/
+    `.sticky-create-btn-wrap`/`.btn-secondary`）都已經在 teams/skills
+    那兩輪搬過了，盤點後確認一個字都不用改 `styles.scss`/`app.scss`。
+    手動 e2e 涵蓋卡片渲染（含 mapping chip）、展開+翻譯、跳轉到
+    Skills 分頁（跨分頁）、最愛切換、開啟 Agent 編輯器；`activate`
+    （啟動 Agent）沒有另外寫測試，因為跟已驗證過的
+    `favorite`/`edit`/`jumpToSkill` 是同一種簡單事件轉發寫法。
+  - ⬜ 待拆：mcp/soul 這兩個分頁。從先前的踩點看 mcp 分頁牽涉 Docker
+    設定子 UI，可能是右側面板四個分頁裡最大最複雜的一個，建議先拆
+    soul（推測較單純，只有一個「聊天記錄」+ 內容編輯，沒有卡片列表）
+    再拆 mcp。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
 抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立
