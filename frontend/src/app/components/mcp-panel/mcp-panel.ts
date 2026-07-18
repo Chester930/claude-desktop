@@ -22,6 +22,9 @@ export class McpPanelComponent implements OnInit, OnDestroy {
   @Input() requiredMcpNames: Set<string> = new Set();
   @Input() linkedMcpNames: Set<string> = new Set();
   @Input() sessionMcpNames: Set<string> = new Set();
+  // Servers manually force-classified into 本地 API (App.managedMcpNames) —
+  // isMcpLocal() checks this before falling back to mcpType/URL detection.
+  @Input() managedMcpNames: Set<string> = new Set();
   @Input() selectedAgentLabel = '';
 
   @Output() addServerDef = new EventEmitter<void>();
@@ -29,6 +32,7 @@ export class McpPanelComponent implements OnInit, OnDestroy {
   @Output() deleteServerDef = new EventEmitter<string>();
   @Output() toggleExpand = new EventEmitter<string>();
   @Output() toggleInTab = new EventEmitter<string>();
+  @Output() toggleManaged = new EventEmitter<string>();
   @Output() dividerMousedown = new EventEmitter<MouseEvent>();
   @Output() start = new EventEmitter<string>();
   @Output() stop = new EventEmitter<string>();

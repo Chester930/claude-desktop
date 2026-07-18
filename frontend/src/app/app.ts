@@ -268,12 +268,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
 
   externalMcpServers = computed(() => this.sortedMcpServers().filter(m => !this.isMcpLocal(m)));
   localMcpServers = computed(() => this.sortedMcpServers().filter(m => this.isMcpLocal(m)));
-  dockerMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'docker' || m.dockerized));
-  stdioMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'stdio'));
-  localHttpMcpServers = computed(() => this.localMcpServers().filter(m => m.mcpType === 'local-http'));
-
-  // Keep selfMcpServers as alias for backward-compat with agent/skill link display
-  selfMcpServers = this.localMcpServers;
 
   // components/mcp-panel (Phase 2) needs per-card O(1) membership checks in
   // its @for loops — same reasoning as skill-panel's precomputed Sets:
@@ -291,6 +285,14 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     return new Set(all.filter(m => this.isMcpLinkedToActiveAgent(m.name)).map(m => m.name));
   });
   sessionMcpNames = computed(() => new Set(this.activeTabField('sessionMcps')));
+  // Manual "force this into 本地 API" override — isMcpLocal() checks
+  // membership before falling back to mcpType/URL auto-detection, for
+  // servers that auto-detection misses (e.g. an actually-local server
+  // whose URL doesn't match the docker://\/localhost\/127.0.0.1 patterns).
+  // Precomputed Set for the same per-card O(1)-lookup reason as the three
+  // above; toggleManagedMcp() below stays a plain method since it mutates
+  // rather than reads.
+  managedMcpNameSet = computed(() => new Set(this.managedMcpNames()));
 
   toggleManagedMcp(name: string) {
     this.managedMcpNames.update(arr =>
@@ -300,15 +302,6 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   isMcpRunning(status: string) { return status?.toLowerCase().includes('connected'); }
-
-  getMcpColor(name: string, status: string): string {
-    const running = this.isMcpRunning(status);
-    const inUse = this.isMcpLinkedToActiveAgent(name);
-    if (!running && inUse) return '#ef4444'; // 未啟動 + 使用中 → 紅
-    if (!running) return '';        // 未啟動 + 未使用 → 無色
-    if (!inUse) return '#f59e0b'; // 啟動 + 未使用  → 黃
-    return '#10b981';                         // 啟動 + 使用中  → 綠
-  }
 
   // getMcpLampClass / getMcpLampTitle: extracted into components/mcp-panel
   // (Phase 2) as local pure methods (same 4-state logic, "inUse" now comes

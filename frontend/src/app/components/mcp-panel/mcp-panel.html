@@ -67,6 +67,10 @@
           }
           <!-- hover 才顯示 -->
           <div class="mcc-actions" (click)="$event.stopPropagation()">
+            <button class="bind-btn" (click)="toggleManaged.emit(m.name)"
+              title="自動判斷成外部 API，但你知道它其實是本機服務？點這裡強制歸類到本地 API">
+              📌
+            </button>
             <button class="bind-btn" [class.active]="sessionMcpNames.has(m.name)"
               (click)="toggleInTab.emit(m.name)"
               [title]="sessionMcpNames.has(m.name) ? '從此對話移除' : '加入此對話'">
@@ -148,6 +152,12 @@
               (click)="toggleMcpLog(m.name)"
               [class.active]="mcpLogOpen() === m.name"
               title="日誌">📋</button>
+            @if (managedMcpNames.has(m.name)) {
+              <button class="bind-btn active" (click)="toggleManaged.emit(m.name)"
+                title="這是手動強制歸類到本地 API 的，點這裡取消，恢復自動判斷">
+                📌
+              </button>
+            }
             <button class="bind-btn" [class.active]="sessionMcpNames.has(m.name)"
               (click)="toggleInTab.emit(m.name)"
               [title]="sessionMcpNames.has(m.name) ? '從此對話移除' : '加入此對話'">
