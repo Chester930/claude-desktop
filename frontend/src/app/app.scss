@@ -913,18 +913,12 @@ body {
   &:hover { border-color: $accent2; color: $accent2; }
 }
 
-.auth-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: #10b981;
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
-  flex-shrink: 0;
-  transition: all 0.2s ease-in-out;
-}
+// .auth-dot moved to src/styles.scss (global) — exclusive to
+// components/skill-panel now (Phase 2).
 
-
+// .linked-section .link-item hover override: still used directly by App
+// elsewhere too (agents tab shares the same detail-expansion pattern),
+// original stays; global copy added to src/styles.scss.
 .linked-section {
   .link-item {
     transition: all 0.15s;
@@ -2293,13 +2287,11 @@ body {
   &.restart { color: #f59e0b; &:hover { border-color: #f59e0b; } }
 }
 
-.binding-btns {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
+// .binding-btns moved to src/styles.scss (global) — exclusive to
+// components/skill-panel now (Phase 2).
 
+// .bind-btn: still used directly by App elsewhere too, original stays;
+// global copy added to src/styles.scss for components/skill-panel.
 .bind-btn {
   background: none;
   border: 1px solid #333;
@@ -4052,19 +4044,8 @@ body[style*="ns-resize"] .mcp-divider-grip {
 }
 
 
-.agent-skill-badge {
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 8px;
-  background: rgba(212,168,83,0.15);
-  border: 1px solid rgba(212,168,83,0.3);
-  color: $accent;
-  white-space: nowrap;
-  flex-shrink: 0;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+// .agent-skill-badge moved to src/styles.scss (global) — exclusive to
+// components/skill-panel now (Phase 2).
 
 .mcp-agent-hint {
   font-size: 9px;

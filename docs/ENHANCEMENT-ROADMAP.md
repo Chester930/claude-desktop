@@ -378,10 +378,58 @@ reducer；工具呼叫進度不再依賴文字前綴約定。
     Team Editor modal）——`(chat)` 沒有另外寫測試，因為它跟已驗證
     過兩次的 `(favorite)`/`(edit)` 是完全相同的事件轉發寫法，風險
     判斷上不需要重複驗證。
-  - ⬜ 待拆：skills/agents/mcp/soul 這幾個分頁，同一套模式繼續套用；
-    Teams 已經證明「plain presentational 元件 + 多個 @Output 往上轉發」
-    這個新模式可行，agents 分頁的結構很可能跟 teams 很像（也有
-    activate/fav/edit 三個動作按鈕），可以直接參考這次的做法。
+  - ✅ **Skills 分頁**（`SkillPanelComponent`）：目前為止耦合最深的一個
+    ——不是完全自包含，也不是單純「presentational + @Output」，是
+    兩者的混合：
+    - `sortedSkills()` 依賴 `rightPanelFilter()` **和**
+      `selectedAgent()`（目前選中的 agent），排序邏輯留在 `App`，結果
+      用 `@Input() skills: Skill[]` 傳下去（跟 teams 一樣）。
+    - `isSkillLinkedToActiveAgent`/`isSkillInActiveAgentFrontmatter`/
+      `isSkillInTab` 這三個方法在原本的 template 裡是「每個 skill 卡
+      呼叫一次」，若直接當 `@Output`/function `@Input` 傳會很醜。改用
+      新模式：`App` 新增三個 `computed()`（`linkedSkillIds`/
+      `frontmatterSkillIds`/`tabSkillIds`，都是 `Set<string>`），
+      元件收 `@Input() linkedSkillIds: Set<string>` 等三個唯讀快照，
+      模板裡改成 `.has(s.id)` 查表，不再呼叫方法。這是首次為了拆分
+      新增 computed（不是單純移動既有的），純衍生自既有 signal，行為
+      應該不變。
+    - `expandedTranslation`/`translateExpanded` 發現**橫跨 agents 和
+      skills 兩個分頁共用**（agents 分頁原 1292-1302 行也在用同一份
+      翻譯狀態）——不是 teams 那種「純本地」也不是「純跨頁唯讀」，是
+      「跨分頁但可寫」，所以留在 `App`，`@Input() expandedTranslation`
+      +`@Output() translate` 雙向處理。
+    - `expandedSkillId` 也一樣不能像 teams 的 `expandedTeams` 那樣搬成
+      本地 signal——agents 分頁有個「跳到某個 Skill 詳情」的連結
+      （`jumpToSkillDetail`，原 1312 行）會直接寫入這個 signal，是
+      跨分頁寫入，所以留在 `App`，用 `@Input`/`@Output` 處理。
+    - `getUsedMcps`/`SKILL_MCPS_MAP`（靜態查表）複製一份到元件裡
+      （`App` 自己在 `sortedMcpServers` 內部還要用，不能拿掉），跟
+      `ENGINE_LABEL` 是同一個處理方式。
+    - `openSkillEditor`/`jumpToMcpDetail`（跳到別的分頁）不能搬，改
+      `@Output`（`edit`/`jumpToMcp`）。
+    CSS：`.card-detail-content`/`.detail-desc`/`.detail-actions`/
+    `.linked-section`/`.linked-title`/`.link-item`（巢狀在
+    `.panel-card` 底下）、`.bind-btn`/`.agent-mapping-summary`/
+    `.mapping-chip`/`.translate-btn`/`.translating` 都跟 agents 分頁
+    共用，原定義不動、`src/styles.scss` 加全域拷貝；
+    `.binding-btns`/`.agent-skill-badge`/`.auth-dot` 盤點後確認只剩
+    skill-panel 在用，整塊搬。`@keyframes blink` 動畫改名成
+    `skill-panel-blink`——Angular 的 emulated encapsulation **不**
+    幫 `@keyframes` 加隔離屬性，如果全域 `styles.scss` 跟
+    `app.scss` 各自定義同名 keyframe，理論上有互相蓋掉的風險，改名
+    避免這個問題，不是這次才發現的既有 bug，是預防性處理。
+    手動 e2e 涵蓋卡片渲染（含 mapping chip）、展開/收合、翻譯（含
+    還原原文）、跳轉到 MCP 分頁（`jumpToMcp` 觸發跨分頁切換）、
+    加入/移出目前對話（`bind-btn` 切換）、開啟 Skill 編輯器
+    （過程中發現 `openSkillEditor` 會先打一次 `GET /api/skills/:id`
+    才開 modal，不是純本地操作，一開始漏 mock 這個 API 導致 modal
+    開不起來，補上後才過）。
+  - ⬜ 待拆：agents/mcp/soul 這幾個分頁。agents 分頁的結構應該跟
+    skills 很像（同樣有 `expandedAgentId`/`expandedTranslation` 這組
+    「跨分頁共用的展開狀態」，也有 activate/fav/edit 動作按鈕），
+    可以直接參考 skills 這次「@Input 唯讀快照 + Set 查表 +
+    @Output 轉發」的做法；mcp 分頁從先前的踩點看起來牽涉 Docker
+    設定子 UI，可能是這四個裡最大最複雜的一個，建議排最後。
 
 **驗收**：初始 bundle 顯著下降（目標 < 2MB raw，且驗證是靠真元件
 抽取達成而非 `@defer` 包裝）；所有 e2e 綠；每個抽取增量各自可獨立

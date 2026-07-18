@@ -16,6 +16,7 @@ import { GeneralSettingsComponent } from './components/general-settings/general-
 import { EngineSettingsComponent } from './components/engine-settings/engine-settings';
 import { SchedulePanelComponent } from './components/schedule-panel/schedule-panel';
 import { TeamPanelComponent } from './components/team-panel/team-panel';
+import { SkillPanelComponent } from './components/skill-panel/skill-panel';
 import { SettingsService, AppSettings } from './settings.service';
 import {
   ClaudeService, Agent, Skill, Team, TeamMember, TeamRun, TeamRunStep, Session, ChatMessage, ChatTab, FileItem, SoulProfile, Profile, McpServerDef, EngineAvailability, ResourceSyncStatus, CodexUsage
@@ -56,7 +57,7 @@ export interface McpServer {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent],
+  imports: [CommonModule, FormsModule, DatePipe, DecimalPipe, MarkdownPipe, DiagnosticsPanelComponent, AgencyImportPanelComponent, TelegramSettingsComponent, MemoryEditorComponent, ProviderSettingsComponent, SttSettingsComponent, QuickPromptsEditComponent, GeneralSettingsComponent, EngineSettingsComponent, SchedulePanelComponent, TeamPanelComponent, SkillPanelComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss'
 })
@@ -188,6 +189,18 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       return a.name.localeCompare(b.name);
     });
   });
+
+  // Precomputed for components/skill-panel (Phase 2): avoids passing
+  // isSkillLinkedToActiveAgent/isSkillInActiveAgentFrontmatter/isSkillInTab
+  // as function @Inputs — the component checks membership instead.
+  linkedSkillIds = computed(() => new Set(this.selectedAgent() ? this.getLinkedSkills(this.selectedAgent()) : []));
+  frontmatterSkillIds = computed(() => {
+    const agentId = this.selectedAgent();
+    if (!agentId) return new Set<string>();
+    const agent = this.agents().find(a => a.id === agentId.replace(/^@/, ''));
+    return new Set(agent?.skills ?? []);
+  });
+  tabSkillIds = computed(() => new Set(this.activeTabField('sessionSkills')));
 
   sortedMcpServers = computed(() => {
     const q = this.rightPanelFilter().toLowerCase();
