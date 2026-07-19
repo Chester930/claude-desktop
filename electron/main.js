@@ -106,7 +106,11 @@ function startBackend() {
 }
 
 // ── 等待後端就緒 ──────────────────────────────────────────
-async function waitForBackend(port = 8765, maxMs = 20000) {
+// PyInstaller onefile 模式每次啟動都要把整包（含 faster-whisper/
+// ctranslate2/av 等語音套件，解壓後將近 1GB）重新解壓縮到暫存目錄，
+// 實測在一般機器上要 45~60 秒才會就緒。20 秒的舊上限經常在後端其實
+// 正常啟動中的情況下就先跳「啟動逾時」把 App 關掉，改成 120 秒。
+async function waitForBackend(port = 8765, maxMs = 120000) {
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     try {
