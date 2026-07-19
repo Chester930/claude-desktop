@@ -464,13 +464,23 @@ def _save_mcp_servers(servers: dict) -> None:
     _safe_write_text(MCP_SERVERS_FILE, json.dumps(servers, ensure_ascii=False, indent=2))
 
 def _analyze_mcp_entry(name: str) -> dict:
-    """Read ~/.claude.json and return type + metadata for one MCP."""
+    """Read ~/.claude.json and return type + metadata for one MCP.
+
+    `claude mcp add` 的預設 scope 是 "local"，設定會寫進
+    projects[<cwd>].mcpServers，不是頂層的 mcpServers（那個只有明確用
+    `-s user` 加的項目才會出現）。這個 app 呼叫 CLI 一律用 Path.home()
+    當 cwd（見 handle_cli），查詢要用同一把 key 才對得上；沒對上的話
+    docker/stdio 偵測會整個落空，被誤判成 external。local scope 優先於
+    user scope，跟 Claude CLI 本身「更精確的 scope 蓋掉較廣的」邏輯一致。
+    """
     config_path = CLAUDE_HOME.parent / ".claude.json"
     entry: dict = {}
     if config_path.exists():
         try:
             raw = json.loads(config_path.read_text(encoding="utf-8"))
-            entry = raw.get("mcpServers", {}).get(name, {})
+            project_key = str(Path.home())
+            local_entry = raw.get("projects", {}).get(project_key, {}).get("mcpServers", {}).get(name)
+            entry = local_entry if local_entry is not None else raw.get("mcpServers", {}).get(name, {})
         except Exception:
             pass
 

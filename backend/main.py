@@ -3150,14 +3150,23 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
 
 
 def _get_mcp_command(name: str) -> list[str] | None:
-    """Parse ~/.claude.json to find the stdio command for an MCP server."""
+    """Parse ~/.claude.json to find the stdio command for an MCP server.
+
+    同 _analyze_mcp_entry：`claude mcp add` 預設 scope 是 "local"，設定
+    寫進 projects[<cwd>].mcpServers，不是頂層 mcpServers。這裡也要用
+    同一把 project_key（Path.home()，跟 handle_cli 的 cwd 一致）優先查，
+    沒有這段的話，用預設 scope 加的 MCP 永遠會被回報「no command
+    configured」，start/restart 完全叫不動。
+    """
     config_path = CLAUDE_HOME.parent / ".claude.json"
     if not config_path.exists():
         return None
     try:
         cfg = json.loads(config_path.read_text(encoding="utf-8"))
-        servers = cfg.get("mcpServers", {})
-        entry = servers.get(name, {})
+        project_key = str(Path.home())
+        entry = cfg.get("projects", {}).get(project_key, {}).get("mcpServers", {}).get(name)
+        if entry is None:
+            entry = cfg.get("mcpServers", {}).get(name, {})
         cmd = entry.get("command")
         args = entry.get("args", [])
         if cmd:
