@@ -498,6 +498,9 @@ export class ClaudeService {
   getMcpInfo(name: string): Observable<any> {
     return this.http.get<any>(`${this.api}/mcp/${encodeURIComponent(name)}/info`);
   }
+  getCodexMcpStatus(): Observable<Record<string, { enabled: boolean; connected: boolean; checked: boolean; transportType: string }>> {
+    return this.http.get<Record<string, { enabled: boolean; connected: boolean; checked: boolean; transportType: string }>>(`${this.api}/mcp/codex-status`);
+  }
   getLocalMcpConfig(): Observable<Record<string, any>> {
     return this.http.get<Record<string, any>>(`${this.api}/mcp-local-config`);
   }

@@ -64,6 +64,35 @@ export class McpPanelComponent implements OnInit, OnDestroy {
   isMcpRpcSending = false;
   mcpPendingAuth = signal<any>(null);
 
+  // Codex 這邊的 MCP 即時連線狀態——`codex mcp list` 本身只回報設定是否
+  // enabled，不像 `claude mcp list` 會主動做健康檢查，所以後端另外對每個
+  // Codex 註冊的 stdio server 做一次真實的 MCP initialize 握手（見
+  // /api/mcp/codex-status），這裡把結果存起來供樣板顯示燈號。因為要真的
+  // 短暫啟動每個伺服器測試，比 Claude 那邊查表慢，改成手動刷新，不在
+  // ngOnInit 自動打。
+  codexMcpStatus = signal<Record<string, { enabled: boolean; connected: boolean; checked: boolean; transportType: string }>>({});
+  codexMcpLoading = signal(false);
+
+  refreshCodexMcp() {
+    this.codexMcpLoading.set(true);
+    this.claude.getCodexMcpStatus().subscribe({
+      next: (status) => { this.codexMcpStatus.set(status); this.codexMcpLoading.set(false); },
+      error: (e) => {
+        this.codexMcpLoading.set(false);
+        this.toast.emit({ text: `Codex MCP 狀態查詢失敗: ${e.message ?? e}`, type: 'error' });
+      },
+    });
+  }
+
+  /** 這個名稱是否也在 Claude 那邊註冊過（外部/本地清單或 App 管理定義）。
+   * 用一般方法而非 computed()：@Input 是一般欄位不是 signal，computed()
+   * 包住它們只會在建立當下算一次，不會隨父層更新的輸入重新求值。 */
+  isInClaudeList(name: string): boolean {
+    return this.externalMcpServers.some(m => m.name === name)
+      || this.localMcpServers.some(m => m.name === name)
+      || name in this.mcpServerDefs;
+  }
+
   ngOnInit() {
     this.claude.getLocalMcpConfig().subscribe(cfg => this.localMcpConfigs.set(cfg));
   }
