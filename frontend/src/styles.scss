@@ -1,5 +1,21 @@
 html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0d0d0d; }
 
+/* 細滾軸（必須是 global：app.scss 裡同樣的規則只作用在 App 自己的樣板，
+   extracted 元件（如 mcp-panel）內部的捲動區域接觸不到，會退回瀏覽器
+   預設又粗又白的捲軸，跟深色主題格格不入）───────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 3px; }
+
+/* <select> 下拉選單展開後的選項清單是瀏覽器原生彈出視窗，不會繼承頁面的
+   深色樣式——沒有明確在 <option> 上宣告 background/color 的話，Windows
+   上會是白底配 CSS 設的淺色文字，幾乎看不到字。全域統一補上深色樣式，
+   避免每個用到 <select> 的地方都要各自修一次。 ─────────────────── */
+select option {
+  background: #1a1a1a;
+  color: #e0e0e0;
+}
+
 /* ── Shared buttons (must be global: used by App and by extracted */
 /* standalone feature components, which don't inherit App's emulated- */
 /* encapsulated app.scss styles) ────────────────────────────────── */
