@@ -39,8 +39,7 @@
       "frontend/dist/**/*",
       "backend/claude-backend.exe",
       "backend/claude-backend",
-      "backend/presets/**/*",
-      "node_modules/**/*"
+      "backend/presets/**/*"
     ],
     "win": {
       "icon": "electron/icon.ico",
