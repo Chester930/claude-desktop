@@ -3149,6 +3149,94 @@ async def handle_mcp_action(request: web.Request) -> web.Response:
     })
 
 
+async def _codex_mcp_list() -> list[dict]:
+    """Query Codex's own MCP registry (separate from ~/.claude.json —
+    Codex keeps its own config, `codex mcp add` never touches Claude's)."""
+    if not CODEX_BIN:
+        return []
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CODEX_BIN, "mcp", "list", "--json",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            cwd=str(Path.home()),
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+        return json.loads(out.decode("utf-8", errors="replace"))
+    except Exception:
+        return []
+
+
+async def _mcp_handshake_check(command: str, args: list[str], env: dict, timeout: float = 8.0) -> bool:
+    """Briefly spawn a stdio MCP server and confirm it answers `initialize`
+    with a valid result — `codex mcp list` only reports config state
+    ("enabled": true/false), not whether the server actually starts and
+    speaks MCP, so Claude's "✔ Connected" health check has no Codex
+    equivalent unless we do this ourselves."""
+    proc = None
+    try:
+        full_env = {**os.environ, **(env or {})}
+        proc = await asyncio.create_subprocess_exec(
+            command, *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=full_env,
+        )
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "agent-desktop-healthcheck", "version": "1.0"},
+            },
+        }) + "\n"
+        proc.stdin.write(req.encode())
+        await proc.stdin.drain()
+
+        async def _read_response():
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    return False
+                try:
+                    msg = json.loads(line.decode("utf-8", errors="replace"))
+                except Exception:
+                    continue
+                if msg.get("id") == 1 and ("result" in msg or "error" in msg):
+                    return "result" in msg
+        return await asyncio.wait_for(_read_response(), timeout=timeout)
+    except Exception:
+        return False
+    finally:
+        if proc:
+            safe_kill_process(proc)
+
+
+async def handle_codex_mcp_status(request: web.Request) -> web.Response:
+    """Codex's equivalent of `claude mcp list`'s live health check — Codex's
+    own CLI doesn't provide one, so each stdio entry gets a real (but brief)
+    MCP handshake instead of just reporting config-enabled state."""
+    entries = await _codex_mcp_list()
+
+    async def _check(entry: dict):
+        name = entry.get("name", "")
+        enabled = entry.get("enabled", True)
+        transport = entry.get("transport") or {}
+        ttype = transport.get("type", "stdio")
+        if not enabled or ttype != "stdio" or not transport.get("command"):
+            return name, {
+                "enabled": enabled, "connected": False, "checked": False,
+                "transportType": ttype,
+            }
+        connected = await _mcp_handshake_check(
+            transport["command"], transport.get("args", []), transport.get("env", {}),
+        )
+        return name, {"enabled": True, "connected": connected, "checked": True, "transportType": ttype}
+
+    results = await asyncio.gather(*[_check(e) for e in entries])
+    return web.json_response({name: info for name, info in results})
+
+
 def _get_mcp_command(name: str) -> list[str] | None:
     """Parse ~/.claude.json to find the stdio command for an MCP server.
 
@@ -3811,6 +3899,7 @@ def build_app() -> web.Application:
         ("POST",   "/api/mcp/{name}/{action}",  handle_mcp_action),
         ("GET",    "/api/mcp/{name}/logs",     handle_mcp_logs),
         ("GET",    "/api/mcp/{name}/info",     handle_mcp_info),
+        ("GET",    "/api/mcp/codex-status",    handle_codex_mcp_status),
         ("GET",    "/api/mcp-local-config",    handle_local_mcp_config_get),
         ("PUT",    "/api/mcp-local-config/{name}", handle_local_mcp_config_put),
         # P3

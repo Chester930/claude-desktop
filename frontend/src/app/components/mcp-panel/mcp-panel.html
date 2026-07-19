@@ -41,6 +41,44 @@
     </div>
   }
 
+  <!-- Codex 這邊的 MCP 即時連線狀態——codex mcp list 只回報設定是否
+       enabled，不像 claude mcp list 會主動健康檢查，這裡改由後端對每個
+       Codex 註冊的 stdio server 做一次真實 MCP initialize 握手，比較慢
+       所以改成手動觸發，不隨頁面自動載入。 -->
+  <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
+    <div class="mcp-section-title">
+      <span class="mcp-section-icon">🤖</span>
+      <span>Codex MCP（即時連線）</span>
+      <span class="mcp-section-count">{{ objectKeys(codexMcpStatus()).length }}</span>
+      <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="refreshCodexMcp()" [disabled]="codexMcpLoading()">
+        {{ codexMcpLoading() ? '檢查中…' : '↻ 檢查連線' }}
+      </button>
+    </div>
+    <div class="panel-list">
+      @if (codexMcpLoading()) {
+        <div class="mcp-empty">正在對每個 Codex MCP server 做連線握手測試，請稍候…</div>
+      } @else if (objectKeys(codexMcpStatus()).length === 0) {
+        <div class="mcp-empty">尚未查詢，點「↻ 檢查連線」開始（會逐一實際啟動每個 server 測試，需要幾秒）</div>
+      } @else {
+        @for (name of objectKeys(codexMcpStatus()); track name) {
+          <div class="mcp-card-compact">
+            <div class="mcc-row">
+              <span class="mcp-status-lamp"
+                [ngClass]="codexMcpStatus()[name].connected ? 'lamp-green' : (codexMcpStatus()[name].checked ? 'lamp-red' : 'lamp-off')"
+                [title]="codexMcpStatus()[name].checked
+                  ? (codexMcpStatus()[name].connected ? '✔ 連線正常（已完成 MCP 握手驗證）' : '✗ 連線失敗（啟動或握手逾時）')
+                  : (codexMcpStatus()[name].enabled ? '已啟用但非 stdio 類型，無法用握手測試驗證' : '已在 Codex 停用')"></span>
+              <span class="mcc-name">{{ name }}</span>
+              @if (isInClaudeList(name)) {
+                <span class="mcp-agent-hint" title="這個名稱在 Claude 那邊（外部/本地 API 或 App 管理）也有註冊">Claude 也有</span>
+              }
+            </div>
+          </div>
+        }
+      }
+    </div>
+  </div>
+
   <!-- ══════════════════════════════════════════════════
        上半：外部 API（高度由分隔線拖曳控制）
   ════════════════════════════════════════════════════ -->
