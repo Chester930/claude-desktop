@@ -48,10 +48,18 @@ from routes.teams import (
     _team_runs, _team_events, _team_queues,
     _tr_emit, _agent_run_capture, _cleanup_old_runs,
     handle_team_run_get, handle_team_run_stream,
-    _is_safe_id,
+    _is_safe_id, _kill_team_run_processes,
 )
 
 MAX_NEGOTIATION_ROUNDS = 2
+
+# 比照 teams.py::_execute_team_run 的 300 秒逾時熔斷（見該檔案 349-388 行的
+# 說明：早期版本 `except Exception: pass` 把整個規劃流程的例外吃掉，run 的
+# status 永遠停在 "running"，SSE 也永遠不會收到終止事件，前端進度會無限期
+# 卡住）。深度組隊比一般 team run 多了 Step A/B/C 三次額外的 LLM 呼叫，外加
+# Step D 每個成員最多 2 輪、每輪 2 次呼叫的協商迴圈（雖然跨成員平行跑，但
+# 單一成員的協商迴圈仍是序列的），給比一般 team run 更寬裕的時限。
+PLAN_TEAM_TIMEOUT = 600
 
 
 def _dirs():
@@ -302,10 +310,19 @@ async def _execute_plan_team_run(run_id: str, task: str, model: str, cwd: str,
         run_id, -1, leader_id, compose_prompt, model, cwd, permission_mode, agent_engine_default,
     )
     compose_data = _extract_json(compose_raw) or {}
-    members = [
-        m for m in (compose_data.get("members") or [])
-        if isinstance(m, dict) and m.get("agent") in valid_ids and _is_safe_id(m.get("agent", ""))
-    ]
+    members = []
+    seen_agents: set[str] = set()
+    for m in (compose_data.get("members") or []):
+        if not isinstance(m, dict):
+            continue
+        agent_id = m.get("agent", "")
+        # 模型偶爾會把同一個 agent 列兩次（例如給了兩個不同角色描述）——
+        # Step E 之後會用 agent id 當檔名/YAML member key，重複的話後面
+        # 會悄悄蓋掉前面協商定案的 Task，這裡先去重，只保留第一次出現的。
+        if agent_id not in valid_ids or not _is_safe_id(agent_id) or agent_id in seen_agents:
+            continue
+        seen_agents.add(agent_id)
+        members.append(m)
     if not members:
         members = [{"agent": leader_id, "role": "獨立完成整個任務"}]
     _tr_emit(run_id, {
@@ -371,6 +388,41 @@ async def _execute_plan_team_run(run_id: str, task: str, model: str, cwd: str,
     _cleanup_old_runs()
 
 
+async def _execute_plan_team_run_guarded(run_id: str, task: str, model: str, cwd: str,
+                                          engine_name: str, permission_mode: str, agent_engine_default: str) -> None:
+    """比照 teams.py::_execute_team_run 的逾時＋例外防護，直接呼叫
+    _execute_plan_team_run 沒有這層保護的話，任何未預期例外（subprocess
+    啟動失敗、Project 資料夾寫入權限錯誤等）都會讓 run 卡在 "running" 狀態
+    永遠出不來，SSE 也不會收到終止事件——見 teams.py 367-374 行對同一個
+    問題的說明（那邊已經修過一次）。"""
+    try:
+        await asyncio.wait_for(
+            _execute_plan_team_run(run_id, task, model, cwd, engine_name, permission_mode, agent_engine_default),
+            timeout=PLAN_TEAM_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        run = _team_runs.get(run_id)
+        if run and run.get("status") == "running":
+            run["status"] = "cancelled"
+            run["_finished_at"] = time.time()
+            run["summary"] = f"### [系統熔斷] 規劃時間超過 {PLAN_TEAM_TIMEOUT} 秒，已自動超時中斷。"
+            _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+            from message_bus import global_bus
+            global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
+            _kill_team_run_processes(run_id)
+    except Exception as e:
+        _log(f"[PlanTeamRun {run_id}] 規劃時發生未預期例外：{e!r}")
+        run = _team_runs.get(run_id)
+        if run and run.get("status") == "running":
+            run["status"] = "error"
+            run["_finished_at"] = time.time()
+            run["summary"] = f"### [規劃錯誤] {e}"
+            _tr_emit(run_id, {"type": "done", "summary": run["summary"]})
+            from message_bus import global_bus
+            global_bus.publish("team:run_done", {"run_id": run_id, "summary": run["summary"]})
+            _kill_team_run_processes(run_id)
+
+
 async def handle_plan_team_post(request: web.Request) -> web.Response:
     data = await request.json()
     task = data.get("task", "").strip()
@@ -399,7 +451,7 @@ async def handle_plan_team_post(request: web.Request) -> web.Response:
     _team_events[run_id] = []
     _team_queues[run_id] = []
 
-    asyncio.create_task(_execute_plan_team_run(
+    asyncio.create_task(_execute_plan_team_run_guarded(
         run_id, task, model, cwd, engine_name, permission_mode, agent_engine_default,
     ))
     return web.json_response({"ok": True, "run_id": run_id})

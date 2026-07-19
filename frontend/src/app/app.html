@@ -2144,6 +2144,12 @@
                 }
               </div>
               <div class="editor-input" style="white-space:pre-wrap; font-size:12px; max-height:160px; overflow-y:auto;">{{ m.task_doc }}</div>
+              @if (!m.consensus && m.last_feedback) {
+                <div style="font-size:11px; color:#f59e0b;">
+                  對方最後一輪的回饋：
+                  <div class="editor-input" style="white-space:pre-wrap; font-size:12px; max-height:100px; overflow-y:auto; margin-top:4px;">{{ m.last_feedback }}</div>
+                </div>
+              }
             </div>
           }
           @if (deepPlanResult()?.project_path) {

@@ -216,3 +216,64 @@ async def test_no_agents_registered_errors_cleanly(monkeypatch, tmp_path):
 
     assert run["status"] == "error"
     assert "尚未建立任何 Agent" in run["summary"]
+
+
+async def test_duplicate_compose_members_are_deduped(isolated_dirs, monkeypatch, tmp_path):
+    """Leader 的 compose 回應把同一個 agent 列兩次時（不同角色描述），只
+    保留第一次出現的——否則 Step E 寫 tasks/<agent>.md 時後面會悄悄蓋掉
+    前面協商定案的 Task。"""
+    fake_run_turn = _fake_run_turn_factory({
+        PLAN_MARKER: "# Plan",
+        LEADER_MARKER: json.dumps({"leader": "leader-agent", "reason": "r"}, ensure_ascii=False),
+        COMPOSE_MARKER: json.dumps({
+            "members": [
+                {"agent": "member-agent", "role": "角色一"},
+                {"agent": "member-agent", "role": "角色二"},
+            ],
+            "reasoning": "r",
+        }, ensure_ascii=False),
+        PROPOSE_MARKER: "## Task",
+        REPLY_MARKER: "✅ 確認理解",
+    })
+    monkeypatch.setattr(claude_engine, "run_turn", fake_run_turn)
+
+    run = await _run_and_wait("run6", "做一件事", "", str(tmp_path))
+
+    assert run["status"] == "done"
+    assert len(run["members"]) == 1
+    assert run["members"][0]["agent"] == "member-agent"
+
+
+async def test_unhandled_exception_marks_run_error_not_stuck_running(isolated_dirs, monkeypatch, tmp_path):
+    """比照 teams.py::_execute_team_run 已經修過一次的同一種 bug：Step
+    C/D（_agent_run_capture）拋出的未預期例外，如果沒有外層防護，會讓 run
+    卡在 status="running" 永遠出不來，SSE 也不會收到終止事件。這裡驗證
+    _execute_plan_team_run_guarded 有把它接住、轉成 status="error"。"""
+    async def _fake_run_turn_boom_at_compose(**kwargs):
+        prompt = kwargs.get("prompt", "")
+        if PLAN_MARKER in prompt:
+            return RunResult(output="# Plan")
+        if LEADER_MARKER in prompt:
+            return RunResult(output=json.dumps({"leader": "leader-agent", "reason": "r"}, ensure_ascii=False))
+        if COMPOSE_MARKER in prompt:
+            raise RuntimeError("boom-at-compose")
+        raise AssertionError(f"no fake response configured for prompt: {prompt[:200]}")
+
+    monkeypatch.setattr(claude_engine, "run_turn", _fake_run_turn_boom_at_compose)
+
+    run_id = "run7"
+    tp._team_runs[run_id] = {
+        "id": run_id, "kind": "planning", "task": "做一件事", "cwd": str(tmp_path),
+        "status": "running", "steps": [], "summary": "",
+        "leader": "", "reused_team_id": "", "team_id": "",
+        "plan_doc": "", "members": [], "project_path": "",
+    }
+    tp._team_events[run_id] = []
+    tp._team_queues[run_id] = []
+
+    await tp._execute_plan_team_run_guarded(run_id, "做一件事", "", str(tmp_path), "claude", "acceptEdits", "claude")
+
+    run = tp._team_runs[run_id]
+    assert run["status"] == "error"
+    assert "boom-at-compose" in run["summary"]
+    assert run.get("_finished_at")
