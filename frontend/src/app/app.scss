@@ -1993,6 +1993,42 @@ body {
   }
 }
 
+// ── 輸入框狀態列「？」說明彈窗 ─────────────────────────
+.input-help-wrap { position: relative; }
+.input-help-btn {
+  font-weight: 700;
+  padding: 4px 9px !important;
+}
+.input-help-overlay { position: fixed; inset: 0; z-index: 300; }
+.input-help-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  max-height: 70vh;
+  overflow-y: auto;
+  z-index: 301;
+  background: #1e1e2e;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  box-shadow: 0 -8px 32px rgba(0,0,0,0.6);
+  padding: 12px 14px;
+}
+.ihp-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #d4a853;
+  margin: 12px 0 6px;
+  &:first-child { margin-top: 0; }
+}
+.ihp-item {
+  font-size: 12px;
+  color: #ccc;
+  line-height: 1.6;
+  margin-bottom: 4px;
+  b { color: #fff; }
+}
+
 // ── T04 Drag & drop ───────────────────────────────────
 .drag-over { border-color: #7c6fff !important; }
 .drag-overlay {

@@ -1238,6 +1238,9 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
     const v = this.PERM_OPTIONS[idx]; this.permissionMode.set(v); this.settings.save({ permissionMode: v });
   }
 
+  // 輸入框底部狀態列的「？」說明彈窗
+  inputHelpOpen = signal(false);
+
   // T04 — drag & drop
   isDragOver = signal(false);
 
