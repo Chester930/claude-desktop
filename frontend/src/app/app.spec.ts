@@ -34,6 +34,7 @@ describe('App', () => {
             skills: { missing_in_codex: [], outdated: [], conflicts: [] },
           }
         : path.endsWith('/config') ? { engineMode: 'both' }
+        : path.endsWith('/codex/models') ? []
         : path.endsWith('/usage/codex') ? null
         : path.endsWith('/usage') ? { five_hour: {}, seven_day: {} }
         : {};
