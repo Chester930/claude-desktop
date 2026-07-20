@@ -4129,7 +4129,10 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   codexModels = signal<{ slug: string; display_name: string; description: string }[]>([]);
   loadCodexModels() {
     this.claude.getCodexModels().subscribe({
-      next: models => this.codexModels.set(models),
+      // 防禦一下回應形狀——activeCodexModelOptions() 會直接 .map() 這個
+      // 值，不是陣列的話會整個 computed 拋例外、把畫面弄壞，不只是「清單
+      // 是空的」那種無害退化。
+      next: models => this.codexModels.set(Array.isArray(models) ? models : []),
       error: () => {},   // 拿不到就維持空陣列，cycleModel() 對 Codex 會保持不可切換、顯示「使用預設」
     });
   }
