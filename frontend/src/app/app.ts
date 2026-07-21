@@ -1472,22 +1472,32 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
   });
 
   // Built-in slash commands
+  // 命名注意：Claude Code／Codex CLI 各自都有原生的互動式 REPL 指令（例如
+  // /compact、/status、/review），但底層呼叫兩邊 CLI 一律是一次性的
+  // 非互動模式（claude -p ...、codex exec ...），沒有 REPL 可以接住這些
+  // 指令——所以下面這些指令一律是這個 App 自己在前端重做的功能，不是把
+  // 文字轉送給 CLI 執行。凡是跟兩邊 CLI 都有、且行為明顯不同的原生指令
+  // 同名（原本的 compact／review），刻意改名避免造成「以為跟 CLI 原生
+  // 行為一樣」的誤解；跟兩邊 CLI 只是剛好同名但這裡就是 GUI 對應功能的
+  // （model／usage／plan／status），維持原名。
   readonly BUILTIN_CMDS = [
     { id: '__new', name: 'new', description: '開始新對話' },
     { id: '__clear', name: 'clear', description: '清除目前訊息' },
     { id: '__undo', name: 'undo', description: '撤銷最後一次對話（移除最後一組問答）' },
     { id: '__retry', name: 'retry', description: '重試上一則訊息' },
-    { id: '__compact', name: 'compact', description: '壓縮對話以節省 token' },
+    { id: '__summarize', name: 'summarize', description: '請 AI 摘要目前對話重點（App 內建提示詞，不是 CLI 原生的 context 壓縮）' },
     { id: '__model', name: 'model', description: '切換 AI 模型' },
     { id: '__usage', name: 'usage', description: '顯示 token 用量' },
     { id: '__debug', name: 'debug', description: '切換 debug 模式' },
-    { id: '__status', name: 'status', description: '顯示 Claude 狀態' },
-    { id: '__review', name: 'review', description: '程式碼審查（Code Review）' },
-    { id: '__plan', name: 'plan', description: '規劃實作步驟' },
+    { id: '__status', name: 'status', description: '顯示目前引擎、模型、權限模式狀態' },
+    { id: '__askreview', name: 'ask-review', description: '請 AI 做程式碼審查（App 內建提示詞，不是 Codex 原生的 /review 工作目錄分析）' },
+    { id: '__plan', name: 'plan', description: '規劃實作步驟，並切換成該引擎的規劃／唯讀權限模式' },
     { id: '__tdd', name: 'tdd', description: '測試驅動開發流程' },
     { id: '__explain', name: 'explain', description: '解釋目前的程式碼或問題' },
     { id: '__git', name: 'git', description: '顯示 Git 狀態與最近提交' },
     { id: '__search', name: 'search', description: '搜尋對話歷史' },
+    { id: '__mcp', name: 'mcp', description: '切到右側 MCP 面板' },
+    { id: '__permissions', name: 'permissions', description: '顯示目前權限模式與可選項目' },
     { id: '__shortcuts', name: 'shortcuts', description: '顯示所有鍵盤快捷鍵' },
   ];
 
@@ -3925,16 +3935,35 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
       case '__debug':
         this.debugMode.update(v => !v);
         this.messages.update(m => [...m, { role: 'system', text: `🐛 Debug 模式：${this.debugMode() ? '開啟' : '關閉'}` }]); break;
-      case '__status':
-        this.claude.getStatus().subscribe(s =>
-          this.messages.update(m => [...m, { role: 'system', text: `⚡ Claude：${s.claude_bin}` }])
-        ); break;
-      case '__review':
+      case '__status': {
+        const engine = this.effectiveEngine();
+        const engineLabel = engine === 'codex' ? 'Codex' : 'Claude';
+        const permLabel = this.activePermLabels()[this.permissionMode()] || this.permissionMode();
+        const statusText = `⚡ 引擎：${engineLabel}／模型：${this.activeModelLabel()}／權限模式：${permLabel}`;
+        if (engine === 'codex') {
+          this.messages.update(m => [...m, { role: 'system', text: statusText }]);
+        } else {
+          this.claude.getStatus().subscribe(s =>
+            this.messages.update(m => [...m, { role: 'system', text: `${statusText}／Claude bin：${s.claude_bin}` }])
+          );
+        }
+        break;
+      }
+      case '__askreview':
         this.inputText = '幫我 Code Review 目前的程式碼，關注：可讀性、安全性、效能問題，並提供具體改善建議。';
         this.inputRef?.nativeElement?.focus(); break;
-      case '__plan':
+      case '__plan': {
+        // Claude 的規劃模式是 permission_mode 'plan'；Codex 沒有對等的
+        // permission_mode 名稱，用限制寫入的 'read-only' 沙盒模式近似
+        // 同樣「只分析、不動手」的效果。這是真的切換 CLI 下一輪呼叫會帶的
+        // --permission-mode／--sandbox 旗標，不是單純塞文字進輸入框。
+        const planMode = this.effectiveEngine() === 'codex' ? 'read-only' : 'plan';
+        if (this.activePermOptions().includes(planMode as any)) {
+          this.permissionMode.set(planMode);
+        }
         this.inputText = '請幫我規劃以下功能的實作步驟，並考量架構影響、風險點與測試策略：\n';
         this.inputRef?.nativeElement?.focus(); break;
+      }
       case '__tdd':
         this.inputText = '請以 TDD 方式協助我實作以下功能。先寫測試，再實作，確保測試覆蓋率 ≥80%：\n';
         this.inputRef?.nativeElement?.focus(); break;
@@ -3946,6 +3975,17 @@ export class App implements OnInit, OnDestroy, AfterViewChecked {
         this.inputRef?.nativeElement?.focus(); break;
       case '__search':
         document.querySelector<HTMLInputElement>('.session-search-input')?.focus(); break;
+      case '__mcp':
+        this.rightOpen.set(true);
+        this.activeTab.set('mcp'); break;
+      case '__permissions': {
+        const opts = this.activePermOptions();
+        const labels = this.activePermLabels();
+        const current = this.permissionMode();
+        const list = opts.map(o => o === current ? `**${labels[o] || o}**（目前）` : (labels[o] || o)).join('、');
+        this.messages.update(m => [...m, { role: 'system', text: `🔒 權限模式（${this.effectiveEngine() === 'codex' ? 'Codex' : 'Claude'}）：${list}` }]);
+        break;
+      }
       case '__shortcuts':
         this.messages.update(m => [...m, {
           role: 'system', text:

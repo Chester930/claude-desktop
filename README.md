@@ -335,7 +335,13 @@ docker compose restart frontend
 
 ### 內建 `/` 指令
 
-在輸入框打 `/` 會列出以下內建指令（跟 skills 混在同一個選單裡）：
+在輸入框打 `/` 會列出以下內建指令（跟 skills 混在同一個選單裡）。**這些都是
+App 自己在前端做的功能，不是轉送給 Claude Code／Codex CLI 執行**——兩邊 CLI
+底層一律用一次性的非互動模式呼叫（`claude -p`／`codex exec`），沒有 REPL
+可以接住 CLI 自己原生的 `/compact`、`/review` 等指令。凡是跟兩邊 CLI 原生
+指令同名、但行為明顯比較弱的（原本的 compact／review），已改名成
+`/summarize`／`/ask-review` 避免誤會；`/status`、`/plan` 則是真的會依目前
+使用的引擎（Claude／Codex）切換顯示內容與權限模式：
 
 | 指令 | 功能 |
 |------|------|
@@ -343,17 +349,19 @@ docker compose restart frontend
 | `/clear` | 清除目前訊息 |
 | `/undo` | 撤銷最後一次對話（移除最後一組問答） |
 | `/retry` | 重試上一則訊息 |
-| `/compact` | 壓縮對話以節省 token |
+| `/summarize` | 請 AI 摘要目前對話重點（App 提示詞，非 CLI 原生 context 壓縮） |
 | `/model` | 切換 AI 模型 |
 | `/usage` | 顯示 token 用量 |
 | `/debug` | 切換 debug 模式 |
-| `/status` | 顯示 Claude 狀態 |
-| `/review` | Code Review |
-| `/plan` | 規劃實作步驟 |
+| `/status` | 顯示目前引擎、模型、權限模式（依 Claude／Codex 不同） |
+| `/ask-review` | 請 AI 做程式碼審查（App 提示詞，非 Codex 原生 `/review`） |
+| `/plan` | 規劃實作步驟，並切換成該引擎的規劃／唯讀權限模式（Claude 是 `plan`，Codex 是 `read-only`） |
 | `/tdd` | TDD 流程 |
 | `/explain` | 解釋目前的程式碼或問題 |
 | `/git` | 顯示 Git 狀態與最近提交 |
 | `/search` | 搜尋對話歷史 |
+| `/mcp` | 切到右側 MCP 面板 |
+| `/permissions` | 顯示目前權限模式與可選項目 |
 | `/shortcuts` | 顯示所有鍵盤快捷鍵 |
 
 ---
