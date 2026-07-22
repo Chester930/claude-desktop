@@ -496,10 +496,20 @@ function checkForUpdates() {
   }
   try {
     const { autoUpdater } = require('electron-updater');
+    // 不要一「查到有更新」就自動下載——預設的 autoDownload 會讓使用者點「檢查
+    // 更新」之後，中間毫無提示地在背景下載完，第一個跳出來的畫面直接是「已下載
+    // 完成，要不要重啟安裝」，體感上像是被跳過確認、突然被要求裝更新。改成先問
+    // 一次「要下載嗎」，同意了才真的開始下載。
+    autoUpdater.autoDownload = false;
     if (!updaterEventsRegistered) {
       updaterEventsRegistered = true;
-      autoUpdater.on('update-available', () => {
+      autoUpdater.on('update-available', (info) => {
         if (mainWindow) mainWindow.webContents.send('update-available');
+        dialog.showMessageBox({
+          type: 'info',
+          message: `發現新版本 v${info.version}，是否立即下載？`,
+          buttons: ['下載', '稍後'],
+        }).then(({ response }) => { if (response === 0) autoUpdater.downloadUpdate(); });
       });
       autoUpdater.on('download-progress', (prog) => {
         const pct = Math.round(prog.percent ?? 0);

@@ -1,6 +1,6 @@
 {
   "name": "agent-desktop",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Agent Desktop - 可切換 Claude Code／Codex CLI 的多引擎 Agent 協作平台",
   "main": "electron/main.js",
   "scripts": {
@@ -46,11 +46,10 @@
       "target": [{ "target": "nsis", "arch": ["x64"] }]
     },
     "nsis": {
-      "oneClick":                          false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut":             true,
-      "createStartMenuShortcut":           true,
-      "shortcutName":                      "Agent 桌面版"
+      "oneClick":               true,
+      "createDesktopShortcut":  true,
+      "createStartMenuShortcut": true,
+      "shortcutName":           "Agent 桌面版"
     },
     "mac": {
       "icon": "electron/icon.icns",
