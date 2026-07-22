@@ -902,6 +902,25 @@ select option {
   top: 0;
   background: #0d0d0d;
   z-index: 2;
+
+  &.collapsible {
+    cursor: pointer;
+    user-select: none;
+    &:hover { color: #ccc; background: #141414; }
+  }
+}
+.mcp-section-chevron {
+  font-size: 9px;
+  width: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  transition: color 0.15s;
+  .collapsible:hover & { color: #aaa; }
+}
+.panel-list.section-collapsed {
+  display: none;
 }
 .mcp-section-icon { font-size: 13px; }
 .mcp-section-count {

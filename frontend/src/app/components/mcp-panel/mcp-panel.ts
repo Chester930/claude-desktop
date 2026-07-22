@@ -73,6 +73,23 @@ export class McpPanelComponent implements OnInit, OnDestroy {
   codexMcpStatus = signal<Record<string, { enabled: boolean; connected: boolean; checked: boolean; transportType: string }>>({});
   codexMcpLoading = signal(false);
 
+  // 各區塊折疊狀態（持久化到 localStorage）
+  collapsedSections = signal<Record<string, boolean>>(
+    JSON.parse(localStorage.getItem('mcp_collapsed_sections') || '{}')
+  );
+
+  toggleSection(key: string) {
+    this.collapsedSections.update(s => {
+      const next = { ...s, [key]: !s[key] };
+      localStorage.setItem('mcp_collapsed_sections', JSON.stringify(next));
+      return next;
+    });
+  }
+
+  isSectionCollapsed(key: string): boolean {
+    return !!this.collapsedSections()[key];
+  }
+
   refreshCodexMcp() {
     this.codexMcpLoading.set(true);
     this.claude.getCodexMcpStatus().subscribe({

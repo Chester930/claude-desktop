@@ -16,12 +16,13 @@
        那邊看得到什麼）是不同的資料來源。 -->
   @if (objectKeys(mcpServerDefs).length > 0) {
     <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
-      <div class="mcp-section-title">
+      <div class="mcp-section-title collapsible" (click)="toggleSection('appManaged')">
+        <span class="mcp-section-chevron">{{ isSectionCollapsed('appManaged') ? '▶' : '▼' }}</span>
         <span class="mcp-section-icon">🔗</span>
         <span>App 管理（雙引擎同步）</span>
         <span class="mcp-section-count">{{ objectKeys(mcpServerDefs).length }}</span>
       </div>
-      <div class="panel-list">
+      <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('appManaged')">
         @for (name of objectKeys(mcpServerDefs); track name) {
           <div class="mcp-card-compact">
             <div class="mcc-row">
@@ -47,15 +48,16 @@
        尚未採納」偵測，這是 MCP 版本。 -->
   @if (importableMcp().length > 0) {
     <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
-      <div class="mcp-section-title">
+      <div class="mcp-section-title collapsible" (click)="toggleSection('importable')">
+        <span class="mcp-section-chevron">{{ isSectionCollapsed('importable') ? '▶' : '▼' }}</span>
         <span class="mcp-section-icon">📥</span>
         <span>可認領的 MCP</span>
         <span class="mcp-section-count">{{ importableMcp().length }}</span>
-        <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="refreshImportableMcp()" [disabled]="importableMcpLoading()">
+        <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="$event.stopPropagation(); refreshImportableMcp()" [disabled]="importableMcpLoading()">
           {{ importableMcpLoading() ? '查詢中…' : '↻ 重新查詢' }}
         </button>
       </div>
-      <div class="panel-list">
+      <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('importable')">
         @for (item of importableMcp(); track item.name) {
           <div class="mcp-card-compact">
             <div class="mcc-row">
@@ -80,15 +82,16 @@
        Codex 註冊的 stdio server 做一次真實 MCP initialize 握手，比較慢
        所以改成手動觸發，不隨頁面自動載入。 -->
   <div class="mcp-section" style="border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;">
-    <div class="mcp-section-title">
+    <div class="mcp-section-title collapsible" (click)="toggleSection('codexStatus')">
+      <span class="mcp-section-chevron">{{ isSectionCollapsed('codexStatus') ? '▶' : '▼' }}</span>
       <span class="mcp-section-icon">🤖</span>
       <span>Codex MCP（即時連線）</span>
       <span class="mcp-section-count">{{ objectKeys(codexMcpStatus()).length }}</span>
-      <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="refreshCodexMcp()" [disabled]="codexMcpLoading()">
+      <button class="btn-secondary btn-xs" style="margin-left:auto;" (click)="$event.stopPropagation(); refreshCodexMcp()" [disabled]="codexMcpLoading()">
         {{ codexMcpLoading() ? '檢查中…' : '↻ 檢查連線' }}
       </button>
     </div>
-    <div class="panel-list">
+    <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('codexStatus')">
       @if (codexMcpLoading()) {
         <div class="mcp-empty">正在對每個 Codex MCP server 做連線握手測試，請稍候…</div>
       } @else if (objectKeys(codexMcpStatus()).length === 0) {
@@ -118,12 +121,13 @@
   ════════════════════════════════════════════════════ -->
   <div class="mcp-pane mcp-pane-top" [style.height.%]="mcpSplitPct">
   <div class="mcp-section mcp-section-external" style="height:100%;overflow-y:auto;">
-    <div class="mcp-section-title">
+    <div class="mcp-section-title collapsible" (click)="toggleSection('external')">
+      <span class="mcp-section-chevron">{{ isSectionCollapsed('external') ? '▶' : '▼' }}</span>
       <span class="mcp-section-icon">🌐</span>
       <span>外部 API</span>
       <span class="mcp-section-count">{{ externalMcpServers.length }}</span>
     </div>
-    <div class="panel-list">
+    <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('external')">
     @for (m of externalMcpServers; track m.id) {
       <div class="mcp-card-compact"
         [class.expanded]="expandedMcpId === m.id"
@@ -190,13 +194,14 @@
   ════════════════════════════════════════════════════ -->
   <div class="mcp-pane mcp-pane-bottom">
   <div class="mcp-section mcp-section-local" style="height:100%;overflow-y:auto;">
-    <div class="mcp-section-title">
+    <div class="mcp-section-title collapsible" (click)="toggleSection('local')">
+      <span class="mcp-section-chevron">{{ isSectionCollapsed('local') ? '▶' : '▼' }}</span>
       <span class="mcp-section-icon">🖥</span>
       <span>本地 API</span>
       <span class="mcp-section-count">{{ localMcpServers.length }}</span>
       <span class="mcp-section-hint">啟動 / 關閉 / 重啟</span>
     </div>
-    <div class="panel-list">
+    <div class="panel-list" [class.section-collapsed]="isSectionCollapsed('local')">
     @for (m of localMcpServers; track m.id) {
       <!-- ── 本地 API 卡片（compact） ── -->
       <div class="mcp-card-compact"
