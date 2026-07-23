@@ -244,16 +244,14 @@
           <button class="icon-btn" (click)="closeSettings()">✕</button>
         </div>
         <div class="modal-scroll-wrap">
-        <div class="modal-body">
-          <!-- Phase 2 拆分：獨立元件 + @defer 延遲載入 -->
-          @defer (on immediate) {
-            <app-general-settings [settingsForm]="settingsForm"
-              [resolvedClaudeHome]="resolvedClaudeHome()"
-              [dropdownAgents]="dropdownAgents()" />
-          } @placeholder {
-            <small style="color:#888;">載入中…</small>
-          }
-        </div>
+        <!-- Phase 2 拆分：獨立元件 + @defer 延遲載入 -->
+        @defer (on immediate) {
+          <app-general-settings [settingsForm]="settingsForm"
+            [resolvedClaudeHome]="resolvedClaudeHome()"
+            [dropdownAgents]="dropdownAgents()" />
+        } @placeholder {
+          <div style="margin:0 20px;font-size:11px;color:#888;">載入中…</div>
+        }
 
         <!-- #16 Multi-provider settings（Phase 2 拆分：獨立元件 + @defer 延遲載入） -->
         @defer (on immediate) {
